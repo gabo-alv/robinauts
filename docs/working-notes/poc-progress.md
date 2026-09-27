@@ -1529,8 +1529,8 @@ For a reader with no memory of it. Kept short; rewritten as the steps land.
   light/dark/system toggle applied as `data-theme` on `<html>` (the
   remembered one applied in `main.tsx`, before the first paint), the
   permanent banner of the local development mode, and an `AgentPicker` over
-  `GET /api/agents` — hidden with one agent, disabled with a reason when
-  there are none, remembered otherwise, and asked for by the shell rather
+  `GET /api/agents` — always shown, disabled with a reason when there are
+  none, remembered otherwise, and asked for by the shell rather
   than by the picker, which "New chat" remounts. `src/ErrorBoundary.tsx` keeps a
   render that throws from leaving a blank page — **outside everything**,
   the sign-in page included, since that is the only page somebody who is
