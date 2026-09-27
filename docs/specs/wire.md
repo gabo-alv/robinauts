@@ -54,7 +54,7 @@ checks as every other write.
 
 | method and path | body | answers |
 |---|---|---|
-| `POST /api/turns` | `{"agent_id": str, "text": str}` | the stream of the run answering the first question of a **new** conversation |
+| `POST /api/turns` | `{"agent_id": str, "model_id": str\|null, "text": str}` | the stream of the run answering the first question of a **new** conversation |
 | `POST /api/conversations/{id}/turns` | `{"text": str, "parent_id": uuid\|null}` **or** `{"regenerate": uuid}` | the stream of the run that turn began |
 | `GET /api/runs/{run_id}/events?after=<position>` | — | the stream of that run from `after`; `Last-Event-ID` says the same thing, and is what is read when `after` is absent |
 
@@ -62,6 +62,13 @@ checks as every other write.
   so is a field the body does not know. `parent_id` is the message the new one
   hangs under — nothing for a conversation's first question, the parent of the
   message being replaced for an edit.
+- `model_id` is the model a new conversation runs on, one of those
+  `GET /api/models` lists; left out or `null`, it is the agent's default
+  ([agents.md](agents.md)). An agent or a model the deployment has not got is
+  404. A turn in a conversation that exists names no model — it runs on the
+  conversation's, which `PUT /api/conversations/{id}/model` changes — so a
+  `model_id` there is a field that body does not know (422). A conversation
+  whose model the deployment no longer offers refuses the turn with 404.
 - A conversation with a run going refuses a second turn (409). A run that is
   not there and one in somebody else's conversation answer the same 404, and
   **before the stream begins**: a refusal is a status.
@@ -147,7 +154,12 @@ checks as every other write.
 
 - Conversations, projects, sharing, session, audit: a plain JSON API,
   described by OpenAPI. The OpenAPI document is committed as a snapshot,
-  and the frontend's typed client is generated from it.
+  and the frontend's typed client is generated from it. The agents and the
+  models a conversation can be started with are `GET /api/agents` and
+  `GET /api/models`; a conversation's model is changed with
+  `PUT /api/conversations/{id}/model`, which refuses a model the deployment
+  does not offer as an invalid body (422) and is allowed while a run is going
+  — the run keeps the model it started with.
 
 ## Details likely to change
 

@@ -12,9 +12,9 @@ FastAPI would otherwise describe the 422 of a route with parameters in a
 shape of **its** own -- a body the client would fail to read.
 
 Its own module because both route modules want it and neither is the other's:
-``agent_routes`` is about the deployment's agents and ``conversation_routes``
-about one person's conversations, and a shared table is not a reason for one
-to import the other.
+``agent_routes`` is about the deployment's agents and models and
+``conversation_routes`` about one person's conversations, and a shared table is
+not a reason for one to import the other.
 """
 
 from __future__ import annotations
@@ -102,5 +102,6 @@ DELETING = refusals(
 """A write, and the one refusal only deleting has: a conversation still
 answering (``STILL_ANSWERING``)."""
 
-LISTING_AGENTS = refusals(NO_SESSION, NOT_OURS)
-"""A read that names nothing at all: only who is asking can be wrong."""
+LISTING_OFFERED = refusals(NO_SESSION, NOT_OURS)
+"""A read that names nothing at all -- what the deployment offers, its agents
+and its models: only who is asking can be wrong."""

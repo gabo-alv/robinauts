@@ -433,6 +433,19 @@ class Turns:
         return tuple(self._agents.values())
 
     @property
+    def models(self) -> tuple[ModelConfig, ...]:
+        """The models a conversation of this deployment may run on, in configuration order.
+
+        What the model picker is drawn from, and exactly what ``set_model``
+        and a new chat accept, for the reason ``agents`` gives for being a
+        tuple rather than the mapping. Each record names its provider and the
+        vendor's model, which is the operator's and not a picker's, so
+        whoever shows these sends the fields it means to send
+        (``robinauts.api.schemas.ModelSummary``).
+        """
+        return tuple(self._models.values())
+
+    @property
     def executing(self) -> frozenset[uuid.UUID]:
         """The runs this process is executing or has claimed to execute.
 

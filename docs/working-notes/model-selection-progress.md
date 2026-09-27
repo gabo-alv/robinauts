@@ -28,6 +28,13 @@ selection adds to it.
   the owner, then writes. `_produce` hands the engine `run.model`: the agent
   port is `run_turn(agent, history, *, model)` and both engines look it up
   with `ModelsConfig.model_by_id` (`model_for` is gone).
+- API: `GET /api/models` (`{items: [{id, title}]}`, configuration order,
+  beside `/api/agents` in `api/agent_routes.py`); `PUT
+  /api/conversations/{id}/model` with `{"model_id"}`, answering the
+  `ConversationSummary` like the rename, 422 `NOT_OFFERED` for a model not
+  offered (checked before the conversation, so it says nothing about it);
+  `NewChatRequest.model_id` (absent or null is the agent's default, unknown
+  is 404); `ConversationSummary.model`; `AgentSummary.model`.
 
 ## Steps
 
@@ -95,3 +102,25 @@ Postgres 2950 passed (before the docstring and one-test fixes).
 Not done / to watch: nothing in the API reaches `model_id` or `set_model`
 yet (step 4). `_produce` does not re-check `run.model` against `Turns`'
 models; an engine's `model_by_id` fails such a turn.
+
+### Step 4 — API   (feature/model-selection-4-api)
+
+Summary: the two routes, the three schema fields and `model_id` on a new
+chat, the error mapping (404 for an unknown model on the turn routes, 422
+on the PUT), the OpenAPI snapshot and `wire.md`. The frontend changed only
+in two typed test fixtures. No UI.
+
+Review: 1 round.
+- High: 0
+- Medium: 0
+- Low: 3 (1/2) — left: a badly shaped `model_id` on `POST /api/turns` is a
+  422 that names no field, as a badly shaped `agent_id` already is; and the
+  step 5 note below.
+
+Checks: lint; unit suite 2763 passed; frontend check (374 tests, tsc,
+eslint, build) passed; full suite against a throwaway Postgres 2967 passed
+(before the docstring fix and one unit test).
+Not done / to watch: for step 5, a turn in a conversation whose model was
+removed is the same 404 as a missing conversation while opening it is 200;
+the frontend explains it by comparing the conversation's `model` with
+`GET /api/models`. Step 5 still starts by bringing 3e02925 across.

@@ -54,6 +54,7 @@ from robinauts.domain import (
     Engine,
     Message,
     MessagePart,
+    ModelConfig,
     Provenance,
     ReasoningPart,
     Run,
@@ -252,11 +253,18 @@ class ConversationSummary(BaseModel):
 
     No owner: it is the person asking, on every route there is
     (``docs/specs/privacy.md``).
+
+    ``model`` is the id of the model its next turn runs on -- the one its
+    author picked, or its agent's default when it began -- and may be one the
+    deployment no longer offers, which is what a picker shows so that it can
+    be changed (``docs/specs/agents.md``). What produced an answer already
+    given is on the answer (``ProvenanceView``).
     """
 
     id: uuid.UUID
     title: str
     agent: str
+    model: str
     created_at: datetime
     updated_at: datetime
 
@@ -266,6 +274,7 @@ class ConversationSummary(BaseModel):
             id=conversation.id,
             title=conversation.title,
             agent=conversation.agent,
+            model=conversation.model,
             created_at=utc(conversation.created_at),
             updated_at=utc(conversation.updated_at),
         )
@@ -388,27 +397,59 @@ class RunView(BaseModel):
 class AgentSummary(BaseModel):
     """One agent, as the picker on an empty chat offers it.
 
-    Three fields, and deliberately no more: **no system prompt** -- it is the
+    Four fields, and deliberately no more: **no system prompt** -- it is the
     operator's, it is not a message and it never leaves the process
-    (``docs/specs/conversations.md``) -- and no vendor, endpoint or key. The
-    model is not here either: which model an agent runs is the operator's
-    choice and shows on the answers it produced (``ProvenanceView``), where it
-    is a fact about what happened rather than something to pick by.
+    (``docs/specs/conversations.md``) -- and no vendor, endpoint or key.
+
+    ``model`` is the agent's **default**: the platform's id of the model a new
+    conversation with it starts on unless its author picks another
+    (``ModelSummary``). It was once left out, as the operator's choice and
+    nothing to pick by; now that a person picks the model, the picker has to
+    know which one to select when the agent is chosen.
     """
 
     id: str
     title: str
     engine: Engine
+    model: str
 
     @classmethod
     def of(cls, definition: AgentDefinition) -> AgentSummary:
-        return cls(id=definition.id, title=definition.title, engine=definition.engine)
+        return cls(
+            id=definition.id,
+            title=definition.title,
+            engine=definition.engine,
+            model=definition.model,
+        )
 
 
 class AgentListResponse(BaseModel):
     """Every agent this deployment is configured with, in configuration order."""
 
     items: list[AgentSummary]
+
+
+class ModelSummary(BaseModel):
+    """One model, as the picker offers it: the id to ask for, and what to call it.
+
+    Two fields, and deliberately no more: the provider it is reached through
+    and the vendor's name for it are the operator's, and so is how long a call
+    to it may take (``domain.ModelConfig``). The id is the platform's own,
+    the one a conversation and an answer's provenance carry.
+    """
+
+    id: str
+    title: str
+
+    @classmethod
+    def of(cls, model: ModelConfig) -> ModelSummary:
+        return cls(id=model.id, title=model.title)
+
+
+class ModelListResponse(BaseModel):
+    """Every model a conversation of this deployment may run on, in configuration order."""
+
+    items: list[ModelSummary]
 
 
 class RenameRequest(BaseModel):
@@ -427,8 +468,22 @@ class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS)
 
 
+class SetModelRequest(BaseModel):
+    """The model a conversation's next turn is to run on.
+
+    Its id, as ``GET /api/models`` lists it. The bound is a configured id's
+    (``domain.MAX_CONFIG_ID_CHARS``), said here so that it is in the document;
+    whether the deployment offers that model is the application's to say
+    (``application.Turns.set_model``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(min_length=1, max_length=MAX_CONFIG_ID_CHARS)
+
+
 class NewChatRequest(BaseModel):
-    """A turn that **begins** a conversation: the agent, and the first question.
+    """A turn that **begins** a conversation: the agent, its model, and the first question.
 
     ``agent_id`` is required, and the route decides nothing about it: the
     application takes either the agent to begin a conversation with or the
@@ -438,10 +493,15 @@ class NewChatRequest(BaseModel):
     a deployment with one agent sends that one
     (``docs/specs/agents.md``).
 
-    Both bounds are the record's own -- ``domain.MAX_CONFIG_ID_CHARS`` for an
-    agent's id, ``domain.MAX_MESSAGE_CHARS`` for a message (every part of one,
-    full) -- so a client can hold itself to them, and neither field is a length
-    somebody else chooses. What a length cannot say -- the shape of a
+    ``model_id`` is optional: left out, or ``null``, the conversation starts on
+    the agent's default (``AgentSummary.model``); named, on that model, which
+    has to be one ``GET /api/models`` lists -- one that is not is 404, like an
+    agent that is not there.
+
+    Every bound is the record's own -- ``domain.MAX_CONFIG_ID_CHARS`` for an
+    agent's or a model's id, ``domain.MAX_MESSAGE_CHARS`` for a message (every
+    part of one, full) -- so a client can hold itself to them, and no field is
+    a length somebody else chooses. What a length cannot say -- the shape of a
     configured id, and that a message has something in it once what no store
     could hold has been taken out of it -- is decided below, and what it says
     is the rule.
@@ -450,6 +510,7 @@ class NewChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1, max_length=MAX_CONFIG_ID_CHARS)
+    model_id: str | None = Field(default=None, min_length=1, max_length=MAX_CONFIG_ID_CHARS)
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
 
 
@@ -468,7 +529,10 @@ class TurnRequest(BaseModel):
 
     No ``agent_id``: a conversation is begun with an agent and stays with it
     (``docs/specs/conversations.md``), and the application refuses an agent and
-    a conversation named together.
+    a conversation named together. No ``model_id`` either: a turn runs on the
+    conversation's model, which is changed by
+    ``PUT /api/conversations/{id}/model`` and never by a turn, so one sent here
+    is a field this body does not know.
     """
 
     model_config = ConfigDict(extra="forbid")

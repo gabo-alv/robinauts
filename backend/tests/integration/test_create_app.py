@@ -529,12 +529,19 @@ async def test_an_agent_in_the_configuration_is_offered_to_whoever_signed_in(
                 back = await redirect_from(begun.headers["location"])
                 await client.get(f"/auth/callback/standin?{urlsplit(back).query}")
                 agents = await client.get("/api/agents")
+                models = await client.get("/api/models")
 
     # A picker is for people who signed in, like everything else here.
     assert anonymous.status_code == 401
     assert agents.json() == {
-        "items": [{"id": "assistant", "title": "Assistant", "engine": "langgraph"}]
+        "items": [
+            {"id": "assistant", "title": "Assistant", "engine": "langgraph", "model": "sonnet"}
+        ]
     }
+    # No title in the file: the model is called by its id, and the vendor's
+    # name for it stays the operator's.
+    assert models.json() == {"items": [{"id": "sonnet", "title": "sonnet"}]}
+    assert "claude-sonnet-5" not in models.text
 
 
 def test_an_unset_model_key_stops_the_server_before_it_binds_a_port(
@@ -594,7 +601,9 @@ async def test_the_local_development_mode_serves_the_agents_of_its_own_file(
 
     assert whoever.json()["local_development"] is True
     assert agents.json() == {
-        "items": [{"id": "assistant", "title": "Assistant", "engine": "langgraph"}]
+        "items": [
+            {"id": "assistant", "title": "Assistant", "engine": "langgraph", "model": "sonnet"}
+        ]
     }
 
 
