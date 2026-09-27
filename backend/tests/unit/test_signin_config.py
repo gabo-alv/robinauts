@@ -279,7 +279,7 @@ def test_the_allow_list_is_an_array_of_tables() -> None:
 
 
 def test_an_entry_names_a_provider_that_is_configured() -> None:
-    assert "not one of [providers]" in one_problem(allow=[{"provider": "google", "everyone": True}])
+    assert "not one of [providers]" in one_problem(allow=[{"provider": "google", "subject": "1"}])
     assert "not one of [providers]" in one_problem(allow=[{"everyone": True}])
 
 
@@ -301,6 +301,16 @@ def test_everyone_is_written_as_a_flag() -> None:
     )
     assert "everyone = true" in one_problem(allow=[{"provider": "okta", "everyone": "yes"}])
     assert "everyone = true" in one_problem(allow=[{"provider": "okta", "everyone": False}])
+
+
+def test_everyone_is_refused_for_google() -> None:
+    # At Okta everyone is the company's tenant; at Google it is the world.
+    problem = one_problem(
+        providers={"google": dict(GOOGLE_TABLE)},
+        allow=[{"provider": "google", "everyone": True}],
+    )
+    assert "everyone is refused for Google" in problem
+    assert "hosted_domain" in problem
 
 
 @pytest.mark.parametrize("value", ["", 1, True, ["a"]])
@@ -326,14 +336,18 @@ def test_email_domain_is_refused_for_google() -> None:
     ],
 )
 def test_google_is_google_however_its_issuer_is_spelt(issuer: str) -> None:
-    # Each spelling refuses email_domain and accepts hosted_domain: the two
-    # rules that say the configuration knows this is Google. (The bare host,
-    # which Google also uses for ``iss``, is not a configurable issuer: a
-    # configured one is an https URL.)
+    # Each spelling refuses email_domain and everyone and accepts
+    # hosted_domain: the rules that say the configuration knows this is
+    # Google. (The bare host, which Google also uses for ``iss``, is not a
+    # configurable issuer: a configured one is an https URL.)
     table = {**GOOGLE_TABLE, "issuer": issuer}
     assert "email_domain is refused for Google" in one_problem(
         providers={"google": table},
         allow=[{"provider": "google", "email_domain": "example.com"}],
+    )
+    assert "everyone is refused for Google" in one_problem(
+        providers={"google": table},
+        allow=[{"provider": "google", "everyone": True}],
     )
     config = parse_sign_in_config(
         data(
@@ -393,6 +407,12 @@ def test_a_provider_with_problems_of_its_own_still_has_its_entries_judged() -> N
     )
     assert any(problem.startswith("providers.google.client_id:") for problem in found)
     assert any("email_domain is refused for Google" in problem for problem in found)
+    found = problems(
+        providers={"google": {**GOOGLE_TABLE, "client_id": ""}},
+        allow=[{"provider": "google", "everyone": True}],
+    )
+    assert any(problem.startswith("providers.google.client_id:") for problem in found)
+    assert any("everyone is refused for Google" in problem for problem in found)
 
 
 # --- an entry that could never match is a rule the operator believes in ----

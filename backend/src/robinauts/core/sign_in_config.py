@@ -306,6 +306,13 @@ def _allow(
             f"Workspace, or email for one person"
         )
         return None
+    if matcher is Matcher.EVERYONE and is_google_issuer(issuer):
+        problems.append(
+            f"{where}: everyone is refused for Google, where it would admit every "
+            f"Google account in the world: use hosted_domain for a Workspace, or "
+            f"email for one person"
+        )
+        return None
     if matcher is Matcher.HOSTED_DOMAIN and not is_google_issuer(issuer):
         problems.append(
             f"{where}: hosted_domain is Google's hd claim, and means nothing from "

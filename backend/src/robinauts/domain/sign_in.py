@@ -76,8 +76,8 @@ def is_google_issuer(issuer: object) -> bool:
     Google. Everyone who asks asks this one function, because the answer
     decides whether Google's rules hold: that ``hd`` is read, that
     ``email_verified`` is believed only with ``hd`` or at Gmail, and that
-    ``email_domain`` is refused. A spelling that slipped through as "not
-    Google" would quietly drop all three.
+    ``email_domain`` and ``everyone`` are refused. A spelling that slipped
+    through as "not Google" would quietly drop all of them.
 
     Anything else -- another host, a host with Google's name in the path or in
     the userinfo, something that is not a URL at all -- is not Google.
@@ -103,7 +103,12 @@ class Matcher(StrEnum):
     """
 
     EVERYONE = "everyone"
-    """Anyone the provider authenticates."""
+    """Anyone the provider authenticates -- not for Google.
+
+    At a company's own provider that is everyone in the company's tenant. At
+    Google it is every Google account in the world, which is never meant:
+    ``HOSTED_DOMAIN`` names a Workspace, and ``EMAIL`` one person.
+    """
     SUBJECT = "subject"
     """One account, by the provider's own identifier for it."""
     EMAIL = "email"

@@ -741,7 +741,7 @@ def test_no_provider_may_be_configured_with_the_reserved_id() -> None:
                         "client_secret_env": "ROBINAUTS_SECRET",
                     }
                 },
-                "allow": [{"provider": LOCAL_PROVIDER, "everyone": True}],
+                "allow": [{"provider": LOCAL_PROVIDER, "hosted_domain": "example.com"}],
             }
         )
 
@@ -754,7 +754,9 @@ def test_no_provider_may_be_configured_with_the_reserved_id() -> None:
             client_secret_env="ROBINAUTS_SECRET",
         )
 
-    assert any(LOCAL_PROVIDER in problem for problem in refused_file.value.problems)
+    # The reserved id is the file's one problem: the entry is one Google takes.
+    (problem,) = refused_file.value.problems
+    assert LOCAL_PROVIDER in problem
 
 
 @asyncio_test

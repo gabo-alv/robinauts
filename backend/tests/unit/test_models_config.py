@@ -189,7 +189,7 @@ def test_the_sign_in_tables_of_the_same_file_are_not_unknown_keys() -> None:
             public_url="https://robinauts.example.com",
             session_hours=12,
             providers={"google": {"title": "Google"}},
-            allow=[{"provider": "google", "everyone": True}],
+            allow=[{"provider": "google", "hosted_domain": "example.com"}],
         )
     )
 

@@ -26,9 +26,9 @@ def identity(**changes: object) -> Identity:
 
 
 def test_an_entry_never_matches_another_providers_identity() -> None:
-    entry = AllowEntry("google", Matcher.EVERYONE)
-    assert not matches(entry, identity(provider="okta"))
-    assert matches(AllowEntry("okta", Matcher.EVERYONE), identity())
+    entry = AllowEntry("okta", Matcher.EVERYONE)
+    assert not matches(entry, identity(provider="local"))
+    assert matches(entry, identity())
 
 
 # --- everyone --------------------------------------------------------------
@@ -125,7 +125,7 @@ def test_an_empty_allow_list_lets_nobody_in() -> None:
 
 def test_one_entry_of_several_is_enough() -> None:
     allow = [
-        AllowEntry("google", Matcher.EVERYONE),
+        AllowEntry("local", Matcher.EVERYONE),
         AllowEntry("okta", Matcher.GROUP, "robinauts-users"),
         AllowEntry("okta", Matcher.SUBJECT, "00u1"),
     ]

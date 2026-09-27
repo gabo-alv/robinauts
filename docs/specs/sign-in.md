@@ -35,12 +35,17 @@ An allow list. Each entry names a provider and one matcher:
 
 | matcher | meaning |
 |---|---|
-| `everyone` | anyone the provider authenticates |
+| `everyone` | anyone the provider authenticates — not for Google |
 | `subject` | one account, by the provider's subject id |
 | `email` | a verified email, case-insensitive |
 | `email_domain` | verified emails of a domain — not for Google |
 | `hosted_domain` | Google's `hd` claim — Google only |
 | `group` | a value of the provider's groups claim |
+
+At a company's own provider `everyone` is everyone in its tenant; at
+Google it would be every Google account in the world, so it is refused
+there, as `email_domain` is. A Workspace uses `hosted_domain`, and one
+person `email`.
 
 With providers configured and no allow entry, start-up fails.
 
