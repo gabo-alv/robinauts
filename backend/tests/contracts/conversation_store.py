@@ -32,11 +32,10 @@ What this asks of an implementation:
 
 - **it is called concurrently** and must stay correct when it is: a pool, or
   a connection per call.
-- **a message and the conversation move together.** ``append_message`` stores
-  the document and advances ``updated_at`` and the active leaf in one
-  indivisible step. Two ``UPDATE``s, or an ``UPDATE`` that writes back a row
-  it read a moment ago, lose whatever else was written in between -- a rename,
-  most obviously.
+- **a message and the conversation move together.** ``append_message``
+  stores the document and advances ``updated_at`` in one indivisible step.
+  Two ``UPDATE``s, or an ``UPDATE`` that writes back a row it read a moment
+  ago, lose whatever else was written in between -- a rename, most obviously.
 - **the listing has a total order.** ``updated_at`` descending is not enough:
   two conversations updated in one millisecond would swap between two pages,
   so the id breaks the tie and the keyset carries both halves.
@@ -249,7 +248,7 @@ class ConversationStoreContract:
                 with pytest.raises(InvalidValueError):
                     await store.conversations_of(OWNER, limit=limit)
 
-    # Renaming, the active leaf, and the time.
+    # Renaming, and the time.
 
     @asyncio_test
     async def test_renaming_gives_the_title_and_dates_the_conversation(self) -> None:
@@ -297,7 +296,6 @@ class ConversationStoreContract:
         async with self.opened() as store:
             assert await store.rename_conversation(CONVERSATION, "Mine", now=at(30)) is None
             assert await store.touch_conversation(CONVERSATION, now=at(30)) is None
-            assert await store.set_active_leaf(CONVERSATION, uuid.uuid4()) is None
             assert await store.conversation_by_id(CONVERSATION) is None
 
     @asyncio_test
@@ -310,40 +308,6 @@ class ConversationStoreContract:
 
             assert written == replace(kept, updated_at=at(30))
             assert await store.conversation_by_id(CONVERSATION) == written
-
-    @asyncio_test
-    async def test_moving_between_branches_does_not_reorder_the_panel(self) -> None:
-        # Navigation writes nothing, so it must not date the conversation:
-        # opening an old conversation and looking at a branch of it would
-        # otherwise push it to the top of a list ordered by when things were
-        # last written.
-        async with self.opened() as store:
-            await store.add_conversation(conversation())
-            first = question()
-            second = answer(first, seconds=2)
-            await _appended(store, first, at(1))
-            await _appended(store, second, at(2))
-
-            written = await store.set_active_leaf(CONVERSATION, first.id)
-
-            assert written is not None
-            assert (written.active_leaf_id, written.updated_at) == (first.id, at(2))
-            assert await store.conversation_by_id(CONVERSATION) == written
-
-    @asyncio_test
-    async def test_a_leaf_that_is_no_message_of_this_conversation_is_not_found(self) -> None:
-        async with self.opened() as store:
-            await store.add_conversation(conversation())
-            await store.add_conversation(conversation(id=OTHER_CONVERSATION))
-            elsewhere = question(conversation_id=OTHER_CONVERSATION)
-            await _appended(store, elsewhere, at(1))
-
-            for named in (elsewhere.id, uuid.uuid4()):
-                with pytest.raises(MessageNotFoundError):
-                    await store.set_active_leaf(CONVERSATION, named)
-
-            found = await store.conversation_by_id(CONVERSATION)
-            assert found is not None and found.active_leaf_id is None
 
     @asyncio_test
     async def test_a_naive_time_names_no_instant_and_is_refused(self) -> None:
@@ -375,9 +339,7 @@ class ConversationStoreContract:
             assert list(await store.messages_of(CONVERSATION)) == [document]
 
     @asyncio_test
-    async def test_appending_dates_the_conversation_and_opens_it_on_the_message(self) -> None:
-        # The leaf moves deliberately: what was just written is where its
-        # author is, and where the conversation opens next.
+    async def test_appending_dates_the_conversation(self) -> None:
         async with self.opened() as store:
             await store.add_conversation(conversation())
             first = question()
@@ -386,7 +348,7 @@ class ConversationStoreContract:
 
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
-            assert (found.updated_at, found.active_leaf_id) == (at(7), first.id)
+            assert found.updated_at == at(7)
 
     @asyncio_test
     async def test_appending_to_a_conversation_that_is_not_there_is_refused(self) -> None:
@@ -499,7 +461,6 @@ class ConversationStoreContract:
             snapshot = await store.conversation_snapshot(CONVERSATION)
 
             assert snapshot.conversation is not None
-            assert snapshot.conversation.active_leaf_id == first.id
             assert [document["id"] for document in snapshot.messages] == [str(first.id)]
             assert (snapshot.active_run, snapshot.events) == (None, ())
 
@@ -545,7 +506,7 @@ class ConversationStoreContract:
     async def test_a_rename_and_an_append_at_once_keep_both(self) -> None:
         # The one a store built out of "read the row, write the row back"
         # loses: whichever of the two wrote second overwrites what the first
-        # had just written, and the title or the leaf disappears.
+        # had just written, and the title or the time disappears.
         async with self.opened() as store:
             await store.add_conversation(conversation())
             first = question()
@@ -558,11 +519,11 @@ class ConversationStoreContract:
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
             assert found.title == "Renamed"
-            assert found.active_leaf_id == first.id
+            assert found.updated_at in {at(5), at(6)}
             assert len(await store.messages_of(CONVERSATION)) == 1
 
     @asyncio_test
-    async def test_messages_appended_at_once_are_all_there_and_the_leaf_is_one_of_them(
+    async def test_messages_appended_at_once_are_all_there_and_one_of_them_dates_it(
         self,
     ) -> None:
         async with self.opened() as store:
@@ -582,31 +543,8 @@ class ConversationStoreContract:
             assert len(documents) == len(together) + 1
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
-            # The two fields move together: the conversation is dated by the
-            # very append whose message it opens on, not by another's.
-            assert (found.active_leaf_id, found.updated_at) in {
-                (message.id, at(n + 1)) for n, message in enumerate(together)
-            }
-
-    @asyncio_test
-    async def test_a_rename_and_a_branch_change_at_once_keep_both(self) -> None:
-        # The same meeting on one row as the rename beside an append: a store
-        # that reads the conversation and writes it back loses one of them.
-        async with self.opened() as store:
-            await store.add_conversation(conversation())
-            first = question()
-            second = answer(first, seconds=2)
-            await _appended(store, first, at(1))
-            await _appended(store, second, at(2))
-
-            await asyncio.gather(
-                store.rename_conversation(CONVERSATION, "Renamed", now=at(5)),
-                store.set_active_leaf(CONVERSATION, first.id),
-            )
-
-            found = await store.conversation_by_id(CONVERSATION)
-            assert found is not None
-            assert (found.title, found.active_leaf_id) == ("Renamed", first.id)
+            # Dated by one of the appends, whichever wrote last.
+            assert found.updated_at in {at(n + 1) for n in range(len(together))}
 
     @asyncio_test
     async def test_two_conversations_written_to_at_once_do_not_mix(self) -> None:

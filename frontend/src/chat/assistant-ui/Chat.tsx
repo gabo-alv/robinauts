@@ -6,7 +6,7 @@
  *
  * Everything drawn here is assistant-ui's copied components
  * (`./vendor/README.md`) -- the message list, the box, the action bar with
- * edit, regenerate and copy, the branch picker, the collapsed block of
+ * edit, regenerate and copy, the collapsed block of
  * thinking -- and everything they are given is ours (`./runtime.tsx`). What
  * is written in this file is only what is between the two: the two things
  * about a conversation the Thread has no place for.

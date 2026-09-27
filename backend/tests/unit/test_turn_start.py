@@ -84,7 +84,6 @@ async def test_a_new_chat_stores_the_conversation_the_question_and_the_run_at_on
     assert stored is not None
     assert stored.owner_id == AUTHOR.id
     assert stored.agent == AGENT
-    assert stored.active_leaf_id == begun_turn.message.id
     assert [message.text for message in await stored_messages(wiring.store, stored.id)] == [
         "What is a robinaut?"
     ]
@@ -219,7 +218,8 @@ async def test_an_edit_is_a_sibling_under_the_parent_it_names() -> None:
     )
 
     # Beside the message it replaces, under the same parent: nothing is
-    # overwritten and the earlier branch is still there.
+    # overwritten, and the earlier turn is kept in the store, off the path a
+    # reader is shown.
     assert edited.message.parent_id == followed.message.parent_id
     stored = await stored_messages(wiring.store, first.conversation_id)
     assert followed.message.id in {message.id for message in stored}

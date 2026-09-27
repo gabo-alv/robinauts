@@ -44,13 +44,13 @@ from robinauts.domain import (
     InvalidValueError,
     Message,
     MessageCompleted,
-    MessageNotFoundError,
     MessageStarted,
     RunAlreadyActiveError,
     RunEnded,
     RunEvent,
     RunStarted,
     RunState,
+    StoredDataError,
     TextDelta,
     TurnEvent,
     User,
@@ -158,16 +158,16 @@ async def test_an_empty_conversation_opens_on_nothing() -> None:
 
     opened = await wiring.service.open(AUTHOR, CONVERSATION)
 
-    assert opened.leaf is None
-    assert opened.tree.messages == ()
+    assert opened.messages == ()
     assert (opened.run_id, opened.resume) == (None, None)
 
 
 @asyncio_test
-async def test_a_branched_conversation_opens_on_the_branch_its_author_was_last_on() -> None:
+async def test_a_conversation_opens_on_the_path_to_its_newest_message_and_nothing_else() -> None:
     # Two roots -- the first question was edited -- and two answers to the
-    # second question. The author is on that question, so it opens at the end
-    # of the branch below it whose last message is the newest.
+    # second question. What opens is the one thread a reader sees: the newest
+    # root's path down to the newest answer. The edited-away question and the
+    # regenerated-away answer are in the store and nowhere in what is opened.
     wiring = wired()
     first = question("First, edited", seconds=0)
     again = question("First, again", seconds=1)
@@ -176,14 +176,11 @@ async def test_a_branched_conversation_opens_on_the_branch_its_author_was_last_o
     one = answer(second, "One answer", seconds=4)
     other = answer(second, "The newer answer", seconds=5)
     await wiring.written(first, again, early, second, one, other)
-    await wiring.store.set_active_leaf(CONVERSATION, second.id)
 
     opened = await wiring.service.open(AUTHOR, CONVERSATION)
 
-    assert opened.leaf is not None and opened.leaf.id == other.id
-    assert len(opened.tree.messages) == 6
-    assert [kept.id for kept in opened.tree.children_of(None)] == [first.id, again.id]
-    assert [kept.id for kept in opened.tree.path_to(other.id)] == [
+    assert len(await wiring.store.messages_of(CONVERSATION)) == 6
+    assert [kept.id for kept in opened.messages] == [
         again.id,
         early.id,
         second.id,
@@ -215,6 +212,86 @@ async def test_opening_a_conversation_with_a_run_in_flight_says_where_to_attach(
     # will hang under it: nothing is replayed that is already in the tree.
     assert opened.resume.after == FIRST_POSITION + 3
     assert opened.resume.follows == done.id
+
+
+@asyncio_test
+async def test_opening_during_a_regeneration_shows_the_thread_up_to_its_question() -> None:
+    # Q1 A1 Q2 A2, and A1 is being regenerated. The run has written nothing
+    # yet, so A2 is still the newest leaf -- but A1, Q2 and A2 are what the
+    # run is putting aside, and the new answer will arrive under Q1.
+    wiring = wired()
+    first = question("One?", seconds=0)
+    said = answer(first, "1", seconds=1)
+    second = question("Two?", parent=said, seconds=2)
+    replied = answer(second, "2", seconds=3)
+    await wiring.written(first, said, second, replied)
+    coming = uuid.uuid4()
+    await wiring.answering(
+        first,
+        RunStarted(run_id=RUN, conversation_id=CONVERSATION),
+        MessageStarted(run_id=RUN, message_id=coming, parent_id=first.id),
+        TextDelta(run_id=RUN, message_id=coming, text="1, "),
+    )
+
+    opened = await wiring.service.open(AUTHOR, CONVERSATION)
+
+    assert [kept.id for kept in opened.messages] == [first.id]
+    assert opened.resume is not None
+    assert opened.resume.follows == first.id
+
+
+@asyncio_test
+async def test_opening_during_a_regeneration_that_has_completed_an_answer_shows_it() -> None:
+    wiring = wired()
+    first = question("One?", seconds=0)
+    said = answer(first, "1", seconds=1)
+    second = question("Two?", parent=said, seconds=2)
+    replied = answer(second, "2", seconds=3)
+    again = answer(first, "1, again", seconds=10)
+    await wiring.written(first, said, second, replied, again)
+    await wiring.answering(
+        first,
+        RunStarted(run_id=RUN, conversation_id=CONVERSATION),
+        MessageStarted(run_id=RUN, message_id=again.id, parent_id=first.id),
+        MessageCompleted(run_id=RUN, message=again),
+    )
+
+    opened = await wiring.service.open(AUTHOR, CONVERSATION)
+
+    assert [kept.id for kept in opened.messages] == [first.id, again.id]
+
+
+@asyncio_test
+async def test_opening_during_an_ordinary_turn_shows_the_question_being_answered() -> None:
+    wiring = wired()
+    first = question("One?", seconds=0)
+    said = answer(first, "1", seconds=1)
+    second = question("Two?", parent=said, seconds=2)
+    await wiring.written(first, said, second)
+    await wiring.answering(second, RunStarted(run_id=RUN, conversation_id=CONVERSATION))
+
+    opened = await wiring.service.open(AUTHOR, CONVERSATION)
+
+    assert [kept.id for kept in opened.messages] == [first.id, said.id, second.id]
+    assert opened.resume is not None
+    assert opened.resume.follows == second.id
+
+
+@asyncio_test
+async def test_a_run_whose_completed_message_is_not_stored_is_a_fault_of_ours() -> None:
+    # A store writes a message and its announcement together; a snapshot in
+    # which one is missing is our rows, not a 404 for whoever opened it.
+    wiring = wired()
+    asked = question(seconds=0)
+    await wiring.written(asked)
+    await wiring.answering(
+        asked,
+        RunStarted(run_id=RUN, conversation_id=CONVERSATION),
+        MessageCompleted(run_id=RUN, message=answer(asked, "never stored", seconds=1)),
+    )
+
+    with pytest.raises(StoredDataError):
+        await wiring.service.open(AUTHOR, CONVERSATION)
 
 
 @asyncio_test
@@ -311,50 +388,6 @@ async def test_a_title_that_is_not_one_line_of_text_is_refused() -> None:
     assert found is not None and found.title == "What is a robinaut?"
 
 
-# --- moving between branches -------------------------------------------------
-
-
-@asyncio_test
-async def test_selecting_a_branch_moves_the_author_without_reordering_the_panel() -> None:
-    wiring = wired()
-    asked = question(seconds=0)
-    replied = answer(asked, seconds=1)
-    await wiring.written(asked, replied)
-
-    moved = await wiring.service.select_branch(AUTHOR, CONVERSATION, asked.id)
-
-    assert moved.active_leaf_id == asked.id
-    # Navigation writes nothing, so nothing climbs to the top of the list.
-    assert moved.updated_at == replied.created_at
-    assert await wiring.store.conversation_by_id(CONVERSATION) == moved
-
-
-@asyncio_test
-async def test_a_branch_that_is_no_message_of_this_conversation_is_not_found() -> None:
-    wiring = wired()
-    asked = question(seconds=0)
-    await wiring.written(asked)
-    elsewhere = question(conversation_id=OTHER_CONVERSATION)
-    await wiring.store.add_conversation(conversation(id=OTHER_CONVERSATION))
-    await wiring.store.append_message(elsewhere, message_to_data(elsewhere), now=at(1))
-
-    for named in (elsewhere.id, uuid.uuid4()):
-        with pytest.raises(MessageNotFoundError):
-            await wiring.service.select_branch(AUTHOR, CONVERSATION, named)
-
-    found = await wiring.store.conversation_by_id(CONVERSATION)
-    assert found is not None and found.active_leaf_id == asked.id
-
-
-@asyncio_test
-async def test_a_branch_named_by_something_that_is_no_id_is_refused() -> None:
-    wiring = wired()
-    await wiring.written()
-
-    with pytest.raises(InvalidValueError):
-        await wiring.service.select_branch(AUTHOR, CONVERSATION, str(CONVERSATION))  # type: ignore[arg-type]
-
-
 # --- deleting ----------------------------------------------------------------
 
 
@@ -446,7 +479,6 @@ Operation = Callable[[Conversations, User, uuid.UUID], Awaitable[object]]
 OPERATIONS: dict[str, Operation] = {
     "open": lambda service, user, which: service.open(user, which),
     "rename": lambda service, user, which: service.rename(user, which, "Renamed"),
-    "select_branch": lambda service, user, which: service.select_branch(user, which, uuid.uuid4()),
     "delete": lambda service, user, which: service.delete(user, which),
 }
 """Every operation that names a conversation. Listing names none: it asks for

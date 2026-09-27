@@ -35,7 +35,7 @@ function after(...actions: ChatAction[]): ChatState {
 /** One AG-UI event, as the action that carries it. */
 const sent = (event: AguiEvent): ChatAction => ({ kind: "event", event });
 
-const asked = { kind: "asked", id: "q", parentId: null, text: "why?" } as const;
+const asked = { kind: "asked", id: "q", after: null, text: "why?" } as const;
 const started = {
   kind: "started",
   runId: RUN,
@@ -69,10 +69,9 @@ test("a whole turn, from the run starting to the run finishing", () => {
   ]);
   // The deltas are one text part, in the order they arrived.
   expect(parts(state, ANSWER)).toEqual([["text", "Because it is."]]);
-  expect(state.messages[1]?.parentId).toBe("q");
+  expect(state.messages.map((each) => each.id)).toEqual(["q", ANSWER]);
   expect(state.runId).toBeNull();
   expect(state.sending).toBe(false);
-  expect(state.leafId).toBe(ANSWER);
   expect(state.ended).toBeNull();
 });
 
@@ -140,10 +139,8 @@ test("the three no-ops a re-attach relies on", () => {
     {
       kind: "opened",
       conversationId: CONVERSATION,
-      messages: [message(ANSWER, "m1", "assistant", "whole")],
-      leafId: ANSWER,
+      messages: [message(ANSWER, "assistant", "whole")],
       runId: null,
-      resume: null,
       endedBadly: null,
     },
     sent({ type: "TEXT_MESSAGE_START", messageId: ANSWER, role: "assistant" }),
@@ -273,50 +270,133 @@ test("a cancellation is not a failure", () => {
   expect(state.ended).toBe("This answer was stopped before it was finished.");
 });
 
-test("opening a conversation is the whole tree, with the branch it reads on", () => {
-  const first = message("m1", null, "user", "why?");
-  const answer = message("m2", "m1", "assistant", "because");
-  const beside = message("m3", "m1", "assistant", "or because");
+test("opening a conversation is the thread, in the order it was sent", () => {
   const state = after({
     kind: "opened",
     conversationId: CONVERSATION,
-    messages: [first, answer, beside],
-    leafId: "m3",
+    messages: [
+      message("m1", "user", "why?"),
+      message("m2", "assistant", "because"),
+      message("m3", "user", "and then?"),
+    ],
     runId: null,
-    resume: null,
     endedBadly: null,
   });
   expect(state.messages.map((each) => each.id)).toEqual(["m1", "m2", "m3"]);
-  expect(state.messages.map((each) => each.parentId)).toEqual([
-    null,
-    "m1",
-    "m1",
-  ]);
-  expect(state.leafId).toBe("m3");
-  // Nothing is in flight, so the next message hangs under the branch's end.
-  expect(state.follows).toBe("m3");
+  expect(state.runId).toBeNull();
 });
 
-test("a conversation with a run going hangs the next answer where it says", () => {
-  const state = after({
+test("opening during a regeneration shows the new answer in place of the old", () => {
+  // The thread was m1 m2 m3 m4, and m2 is being regenerated. The server
+  // sends the thread up to what the run is extending -- `resume.follows`,
+  // here m1 -- so what streams in is appended where the old answer was, and
+  // not after m4 (`docs/specs/wire.md`).
+  const showing = after({
     kind: "opened",
     conversationId: CONVERSATION,
-    messages: [message("m1", null, "user", "why?")],
-    leafId: "m1",
-    runId: RUN,
-    resume: { after: 4, follows: "m1" },
+    messages: [
+      message("m1", "user", "why?"),
+      message("m2", "assistant", "because"),
+      message("m3", "user", "and then?"),
+      message("m4", "assistant", "then this"),
+    ],
+    runId: null,
     endedBadly: null,
   });
-  expect(state.runId).toBe(RUN);
-  expect(state.follows).toBe("m1");
+  const state = [
+    {
+      kind: "opened",
+      conversationId: CONVERSATION,
+      messages: [message("m1", "user", "why?")],
+      runId: RUN,
+      endedBadly: null,
+    } as const,
+    sent({ type: "TEXT_MESSAGE_START", messageId: ANSWER, role: "assistant" }),
+    sent({ type: "TEXT_MESSAGE_CONTENT", messageId: ANSWER, delta: "since" }),
+    sent({ type: "TEXT_MESSAGE_END", messageId: ANSWER }),
+    sent({ type: "RUN_FINISHED", runId: RUN, cancelled: false }),
+  ].reduce<ChatState>(reduce, showing);
+  expect(state.messages.map((each) => each.id)).toEqual(["m1", ANSWER]);
+  expect(parts(state, ANSWER)).toEqual([["text", "since"]]);
+  expect(state.runId).toBeNull();
 });
 
-test("a refusal never leaves an answer hanging under a message it took away", () => {
-  // The shape that took the interface down. A stop whose request failed used
-  // to forget the run while its stream carried on writing an answer under
-  // the question this chat had put on the screen; the next turn was refused
-  // (409), and the refusal took *every* unsent message off -- orphaning that
-  // answer, which assistant-ui refuses with an exception.
+test("an edit cuts the thread after the edited message's parent", () => {
+  const opened = after({
+    kind: "opened",
+    conversationId: CONVERSATION,
+    messages: [
+      message("m1", "user", "why?"),
+      message("m2", "assistant", "because"),
+      message("m3", "user", "and then?"),
+      message("m4", "assistant", "then this"),
+    ],
+    runId: null,
+    endedBadly: null,
+  });
+  // Editing `m3`, whose parent is `m2`: `m3` and everything after it go.
+  const edited = reduce(opened, {
+    kind: "asked",
+    id: "unsent:edit",
+    after: "m2",
+    text: "and at night?",
+  });
+  expect(edited.messages.map((each) => each.id)).toEqual([
+    "m1",
+    "m2",
+    "unsent:edit",
+  ]);
+  // Editing the first message: nothing before it, so nothing is kept.
+  const root = reduce(opened, {
+    kind: "asked",
+    id: "unsent:root",
+    after: null,
+    text: "why, really?",
+  });
+  expect(root.messages.map((each) => each.id)).toEqual(["unsent:root"]);
+  // A regeneration cuts the answer off and everything after it.
+  const again = reduce(opened, { kind: "again", after: "m1" });
+  expect(again.messages.map((each) => each.id)).toEqual(["m1"]);
+  expect(again.sending).toBe(true);
+});
+
+test("a refused turn puts the thread back exactly as it was", () => {
+  const opened = after({
+    kind: "opened",
+    conversationId: CONVERSATION,
+    messages: [
+      message("m1", "user", "why?"),
+      message("m2", "assistant", "because"),
+      message("m3", "user", "and then?"),
+    ],
+    runId: null,
+    endedBadly: null,
+  });
+  const was = opened.messages;
+  // An edit that cut the thread: the cut is undone with the question.
+  const edited = reduce(
+    reduce(opened, {
+      kind: "asked",
+      id: "unsent:edit",
+      after: "m2",
+      text: "and at night?",
+    }),
+    { kind: "refused", detail: "no" },
+  );
+  expect(edited.messages).toBe(was);
+  expect(edited.sending).toBe(false);
+  expect(edited.ended).toBe("no");
+  // A regeneration that cut the answer off: the answer is back.
+  const again = reduce(reduce(opened, { kind: "again", after: "m1" }), {
+    kind: "refused",
+    detail: "no",
+  });
+  expect(again.messages).toBe(was);
+  // A turn refused on an empty chat goes back to nothing.
+  const first = reduce(reduce(EMPTY, asked), { kind: "refused", detail: "no" });
+  expect(first.messages).toEqual([]);
+  // A refusal while an earlier answer is still arriving takes only the
+  // refused question off: the shape that once took the interface down.
   const answering = after(
     asked,
     started,
@@ -327,121 +407,31 @@ test("a refusal never leaves an answer hanging under a message it took away", ()
   const second = reduce(forgotten, {
     kind: "asked",
     id: "unsent:second",
-    parentId: ANSWER,
+    after: ANSWER,
     text: "impatient",
   });
   const refused = reduce(second, { kind: "refused", detail: "no" });
-
-  // The second question comes off; the first, and the answer under it, stay.
   expect(refused.messages.map((each) => each.id)).toEqual(["q", ANSWER]);
-  expect(refused.messages[1]?.parentId).toBe("q");
-  expect(refused.leafId).toBe(ANSWER);
-  // Every parent named is a message that is there.
-  for (const item of asRepository(refused.messages, refused.leafId).messages) {
-    expect(
-      item.parentId === null ||
-        refused.messages.some((each) => each.id === item.parentId),
-    ).toBe(true);
-  }
-
-  // A turn refused before anything hung under its question: that one comes
-  // off, and the branch goes back to where it was.
-  const only = reduce(after(asked), { kind: "refused", detail: "no" });
-  expect(only.messages).toEqual([]);
-  expect(only.leafId).toBeNull();
-
-  // **A turn refused on an empty chat.** `before` saved a `follows` of
-  // `null`, which is a value and not an absence: the branch goes back to
-  // nothing, which is what an empty chat is.
-  const first = reduce(
-    reduce(EMPTY, {
-      kind: "asked",
-      id: "unsent:one",
-      parentId: null,
-      text: "hello",
-    }),
-    { kind: "refused", detail: "no" },
-  );
-  expect(first.messages).toEqual([]);
-  expect(first.leafId).toBeNull();
-  expect(first.follows).toBeNull();
-
-  // And one refused in a conversation whose run had nothing to hang under,
-  // where `resume.follows` was `null` too.
-  const watching = after({
-    kind: "opened",
-    conversationId: CONVERSATION,
-    messages: [],
-    leafId: null,
-    runId: RUN,
-    resume: { after: 1, follows: null },
-    endedBadly: null,
-  });
-  expect(watching.follows).toBeNull();
-  const backAgain = reduce(
-    reduce(
-      { ...watching, runId: null, sending: false },
-      { kind: "asked", id: "unsent:two", parentId: null, text: "hello" },
-    ),
-    { kind: "refused", detail: "no" },
-  );
-  expect(backAgain.follows).toBeNull();
-  expect(backAgain.leafId).toBeNull();
-
-  // A regeneration refused adds nothing and takes nothing away.
-  const stored = after({
-    kind: "opened",
-    conversationId: CONVERSATION,
-    messages: [message("m1", null, "user", "why?")],
-    leafId: "m1",
-    runId: null,
-    resume: null,
-    endedBadly: null,
-  });
-  const again = reduce(reduce(stored, { kind: "again", parentId: "m1" }), {
-    kind: "refused",
-    detail: "no",
-  });
-  expect(again.messages.map((each) => each.id)).toEqual(["m1"]);
-  expect(again.leafId).toBe("m1");
+  expect(parts(refused, ANSWER)).toEqual([["text", "half"]]);
 });
 
-test("the tree handed over never names a message it does not hold", () => {
-  // The reducer is written not to produce either of these; what this proves
-  // is that a slip is a line in the console and not the whole interface.
-  const orphan: ChatMessage[] = [
-    {
-      id: "a",
-      parentId: "gone",
-      role: "assistant",
-      parts: [{ kind: "text", text: "hello" }],
-      state: "stored",
-    },
-  ];
-  const said = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  expect(asRepository(orphan, "a").messages).toEqual([]);
-  // A head that is not there falls back to the branch that is.
-  const kept: ChatMessage[] = [
-    {
-      id: "m1",
-      parentId: null,
-      role: "user",
-      parts: [{ kind: "text", text: "why?" }],
-      state: "stored",
-    },
-  ];
-  expect(asRepository(kept, "nowhere").headId).toBe("m1");
-  expect(asRepository([], "nowhere").headId).toBeUndefined();
-  expect(said).toHaveBeenCalled();
-  // **Once per shape.** The tree is rebuilt on every delta, so a slip that
-  // lasts a whole answer would be a thousand identical lines.
-  const already = said.mock.calls.length;
-  for (let again = 0; again < 20; again += 1) {
-    asRepository(orphan, "a");
-    asRepository(kept, "nowhere");
-  }
-  expect(said.mock.calls.length).toBe(already);
-  said.mockRestore();
+test("the thread is handed over as a chain, each message under the one before", () => {
+  const messages: ChatMessage[] = ["m1", "m2", "m3"].map((id) => ({
+    id,
+    role: "user",
+    parts: [{ kind: "text", text: id }],
+    state: "stored",
+  }));
+  const chain = asRepository(messages);
+  expect(chain.messages.map((each) => each.parentId)).toEqual([
+    null,
+    "m1",
+    "m2",
+  ]);
+  expect(chain.headId).toBe("m3");
+  // Nothing at all is no head, rather than a head of `null`.
+  expect(asRepository([]).headId).toBeUndefined();
+  expect(asRepository([]).messages).toEqual([]);
 });
 
 test("a stream that could not be picked up again is said, not hidden", () => {
@@ -502,8 +492,8 @@ test("opening another conversation shows nothing of the one before it", () => {
 
 /** A conversation with one exchange in it, and no run. */
 const TREE = [
-  message("m1", null, "user", "why?"),
-  message("m2", "m1", "assistant", "because"),
+  message("m1", "user", "why?"),
+  message("m2", "assistant", "because"),
 ];
 
 function stub(answer: (call: Call) => Response | undefined) {
@@ -566,7 +556,7 @@ test("a first message begins a conversation and says which one", async () => {
       );
     }
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -599,7 +589,7 @@ test("a conversation with a run in flight is attached to at resume.after", async
   const fetch = stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
       return json(
-        opened(conversation(1), [TREE[0]!], "m1", {
+        opened(conversation(1), [TREE[0]!], {
           run_id: RUN,
           resume: { after: 4, follows: "m1" },
         }),
@@ -630,18 +620,19 @@ test("a conversation with a run in flight is attached to at resume.after", async
   expect(
     (attaching?.[1]?.headers as Record<string, string>)["last-event-id"],
   ).toBe("4");
-  // The message still being produced hangs where the conversation said.
-  expect(result.current.state.messages[1]?.parentId).toBe("m1");
+  // The message still being produced is at the end of the thread.
+  expect(result.current.state.messages[1]?.id).toBe("m2");
 });
 
 test("editing is a new message under the parent of the one it replaces", async () => {
   const posts: Call[] = [];
   // Three deep, so the question being edited has a parent that is not the
-  // root: an edit hangs under the parent of the message it replaces.
-  const deeper = [...TREE, message("m3", "m2", "user", "and then?")];
+  // root: an edit hangs under the parent of the message it replaces, and
+  // the thread on the screen is cut after that parent (`state.ts`).
+  const deeper = [...TREE, message("m3", "user", "and then?")];
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), deeper, "m3"));
+      return json(opened(conversation(1), deeper));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
       posts.push(call);
@@ -659,7 +650,8 @@ test("editing is a new message under the parent of the one it replaces", async (
 
   // The question being replaced is `m3`, whose parent is the answer `m2`:
   // an edit hangs under the parent of the message it replaces, and that is
-  // not usually the root (`docs/specs/conversations.md`).
+  // not usually the root (`docs/specs/conversations.md`). Nothing is sent
+  // for `m3` itself: the server keeps it, off the visible thread.
   await act(async () => {
     result.current.runtime.thread.append({
       role: "user",
@@ -686,14 +678,14 @@ test("editing is a new message under the parent of the one it replaces", async (
 
 test("after a turn that went wrong, asking again replaces the question", async () => {
   // The answer a failed run was producing is in no conversation
-  // (`docs/specs/runs.md`), so the branch ends on the question. The format
+  // (`docs/specs/runs.md`), so the thread ends on the question. The format
   // refuses a question under a question, and asking again is how the turn is
-  // retried: the new one is a sibling of the old.
+  // retried: the new one takes the old one's place.
   const posts: Call[] = [];
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
       return json(
-        opened(conversation(1), [TREE[0]!], "m1", {
+        opened(conversation(1), [TREE[0]!], {
           ended_badly: {
             run_id: RUN,
             state: "failed",
@@ -725,7 +717,7 @@ test("after a turn that went wrong, asking again replaces the question", async (
 test("opening a conversation says what the server says it is", async () => {
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1, "Robins"), TREE, "m2"));
+      return json(opened(conversation(1, "Robins"), TREE));
     }
     return undefined;
   });
@@ -744,7 +736,7 @@ test("regenerating names the answer to produce again, and sends no message", asy
   const posts: Call[] = [];
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
       posts.push(call);
@@ -774,7 +766,7 @@ test("cancelling posts to the run and waits for the stream to say so", async () 
   const cancels: Call[] = [];
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`)
       return response;
@@ -828,7 +820,7 @@ test("cancelling posts to the run and waits for the stream to say so", async () 
 test("a turn a conversation that is answering refuses is said plainly", async () => {
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
       return refusal(
@@ -912,8 +904,8 @@ test("a stream that is lost reads the store and watches the run again", async ()
         ),
     ],
     [`/api/conversations/${CONVERSATION}`]: [
-      () => json(opened(conversation(1), [TREE[0]!], "m1", ANSWERING)),
-      () => json(opened(conversation(1), TREE, "m2")),
+      () => json(opened(conversation(1), [TREE[0]!], ANSWERING)),
+      () => json(opened(conversation(1), TREE)),
     ],
   });
   const { result } = chatting();
@@ -943,7 +935,7 @@ test("a second loss is said rather than retried for ever", async () => {
     "/api/turns": [() => streamOf()],
     [`/api/runs/${RUN}/events`]: [() => refusal(404, "NotFoundError", "no")],
     [`/api/conversations/${CONVERSATION}`]: [
-      () => json(opened(conversation(1), [TREE[0]!], "m1", ANSWERING)),
+      () => json(opened(conversation(1), [TREE[0]!], ANSWERING)),
     ],
   });
   const { result } = chatting();
@@ -972,7 +964,7 @@ test("leaving a conversation stops a turn whose request is still in the air", as
   let arrived: (given: Response) => void = () => undefined;
   const fetch = stub((call) => {
     if (call.url.startsWith("/api/conversations/")) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -1028,7 +1020,7 @@ test("a first turn that lands after the person moved on does not take them back"
   const posts: Call[] = [];
   const fetch = stub((call) => {
     if (call.url === `/api/conversations/${other}`) {
-      return json(opened(conversation(2, "Elsewhere"), TREE, "m2"));
+      return json(opened(conversation(2, "Elsewhere"), TREE));
     }
     if (call.url === `/api/conversations/${other}/turns`) {
       posts.push(call);
@@ -1105,16 +1097,16 @@ test("a read that finds a run in flight watches it, whichever read it is", async
         ),
     ],
     [`/api/conversations/${CONVERSATION}`]: [
-      () => json(opened(conversation(1), TREE, "m2")),
+      () => json(opened(conversation(1), TREE)),
       // The read that ends the turn: somebody else is answering now.
       () =>
         json(
-          opened(conversation(1), TREE, "m2", {
+          opened(conversation(1), TREE, {
             run_id: OTHER_RUN,
             resume: { after: 1, follows: "m2" },
           }),
         ),
-      () => json(opened(conversation(1), TREE, "m2")),
+      () => json(opened(conversation(1), TREE)),
     ],
     [`/api/runs/${OTHER_RUN}/events`]: [
       () =>
@@ -1153,15 +1145,16 @@ test("a read that finds a run in flight watches it, whichever read it is", async
 });
 
 test("stopping before the first token leaves the box empty", async () => {
-  // assistant-ui's own stop takes the trailing question out of its
-  // repository and puts its text into the box, taking it back only if the
-  // store has published that message again by the next macrotask.
+  // assistant-ui's own stop would take the trailing question out of its
+  // repository and put its text into the box -- but only for a host that
+  // offers `setMessages`, which this one does not (`runtime.tsx`). The
+  // backend stored that question when the turn began, so it stays.
   const { response, write, close } = writable({
     headers: streamHeaders(RUN, CONVERSATION),
   });
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url.endsWith("/cancel")) return json({ id: RUN });
     if (call.url === `/api/conversations/${CONVERSATION}/turns`)
@@ -1202,15 +1195,15 @@ test("stopping before the first token leaves the box empty", async () => {
   });
 });
 
-test("a refused retry leaves the question it was retrying on the branch", async () => {
-  // The branch ends on a question nobody answered, so the retry hangs under
-  // that question's *parent* (`under`). A refusal must put the branch back
-  // where it was and not where the refused message hung.
+test("a refused retry leaves the question it was retrying on the thread", async () => {
+  // The thread ends on a question nobody answered, so the retry goes after
+  // that question's *parent* (`under`) and takes its place on the screen. A
+  // refusal must put the question back.
   inTurn({
     [`/api/conversations/${CONVERSATION}`]: [
       () =>
         json(
-          opened(conversation(1), [TREE[0]!], "m1", {
+          opened(conversation(1), [TREE[0]!], {
             ended_badly: {
               run_id: RUN,
               state: "failed",
@@ -1231,10 +1224,8 @@ test("a refused retry leaves the question it was retrying on the branch", async 
     await result.current.runtime.thread.append("why, really?");
   });
   // The question that went unanswered is a message the conversation really
-  // has: it is still there, and still the end of the branch.
+  // has: it is still there, and still the end of the thread.
   expect(result.current.state.messages.map((each) => each.id)).toEqual(["m1"]);
-  expect(result.current.state.leafId).toBe("m1");
-  expect(result.current.state.follows).toBe("m1");
 });
 
 test("a stop that does not reach the server leaves the answer alone", async () => {
@@ -1243,7 +1234,7 @@ test("a stop that does not reach the server leaves the answer alone", async () =
   });
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url.endsWith("/cancel")) {
       return refusal(500, "InternalError", "something went wrong");
@@ -1283,111 +1274,12 @@ test("a stop that does not reach the server leaves the answer alone", async () =
   });
 });
 
-test("a box holding only whitespace is one the library restored into", async () => {
-  // `restoreDraft` refuses only when the box holds something that is not all
-  // whitespace, so this is a stop that *did* put the question back -- and
-  // one this has to take away again, or the question is in the thread and in
-  // the box at once.
-  const { response, write, close } = writable({
-    headers: streamHeaders(RUN, CONVERSATION),
-  });
-  stub((call) => {
-    if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
-    }
-    if (call.url.endsWith("/cancel")) return json({ id: RUN });
-    if (call.url === `/api/conversations/${CONVERSATION}/turns`)
-      return response;
-    return undefined;
-  });
-  const { result } = chatting({ conversationId: CONVERSATION });
-  await waitFor(() => {
-    expect(result.current.state.messages).toHaveLength(2);
-  });
-  await act(async () => {
-    void result.current.runtime.thread.append("and then?");
-    await settle();
-  });
-  await act(async () => {
-    result.current.runtime.thread.composer.setText("   ");
-    await settle();
-  });
-  await act(async () => {
-    result.current.runtime.thread.cancelRun();
-    await settle();
-  });
-  expect(result.current.runtime.thread.composer.getState().text).toBe("");
-  // And the question is where it belongs: in the thread, once.
-  expect(
-    result.current.state.messages.filter(
-      (each) => each.role === "user" && each.parts[0]?.text === "and then?",
-    ),
-  ).toHaveLength(1);
-  write(
-    event(
-      "RUN_FINISHED",
-      { threadId: CONVERSATION, runId: RUN, outcome: { type: "cancelled" } },
-      2,
-    ),
-  );
-  close();
-  await waitFor(() => {
-    expect(result.current.state.runId).toBeNull();
-  });
-});
-
-test("a draft somebody had already typed is never cleared by a stop", async () => {
-  const { response, write, close } = writable({
-    headers: streamHeaders(RUN, CONVERSATION),
-  });
-  stub((call) => {
-    if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
-    }
-    if (call.url.endsWith("/cancel")) return json({ id: RUN });
-    if (call.url === `/api/conversations/${CONVERSATION}/turns`)
-      return response;
-    return undefined;
-  });
-  const { result } = chatting({ conversationId: CONVERSATION });
-  await waitFor(() => {
-    expect(result.current.state.messages).toHaveLength(2);
-  });
-  await act(async () => {
-    void result.current.runtime.thread.append("and then?");
-    await settle();
-  });
-  // Something typed while the answer was on its way.
-  await act(async () => {
-    result.current.runtime.thread.composer.setText("a thought of my own");
-    await settle();
-  });
-  await act(async () => {
-    result.current.runtime.thread.cancelRun();
-    await settle();
-  });
-  expect(result.current.runtime.thread.composer.getState().text).toBe(
-    "a thought of my own",
-  );
-  write(
-    event(
-      "RUN_FINISHED",
-      { threadId: CONVERSATION, runId: RUN, outcome: { type: "cancelled" } },
-      2,
-    ),
-  );
-  close();
-  await waitFor(() => {
-    expect(result.current.state.runId).toBeNull();
-  });
-});
-
 test("a turn the backend refuses takes its question back off the screen", async () => {
   // The 409 a conversation that is already answering makes: another tab
   // started a run between this one's reading and its send.
   inTurn({
     [`/api/conversations/${CONVERSATION}`]: [
-      () => json(opened(conversation(1), TREE, "m2")),
+      () => json(opened(conversation(1), TREE)),
     ],
     [`/api/conversations/${CONVERSATION}/turns`]: [
       () =>
@@ -1402,10 +1294,12 @@ test("a turn the backend refuses takes its question back off the screen", async 
     await result.current.runtime.thread.append("and then?");
   });
   expect(result.current.state.ended).toContain("still answering");
-  // Not left on the screen as though it were in the conversation, and the
-  // branch is back where it was.
-  expect(result.current.state.messages).toHaveLength(2);
-  expect(result.current.state.leafId).toBe("m2");
+  // Not left on the screen as though it were in the conversation: the
+  // thread is back as it was.
+  expect(result.current.state.messages.map((each) => each.id)).toEqual([
+    "m1",
+    "m2",
+  ]);
   expect(result.current.state.sending).toBe(false);
   expect(result.current.state.runId).toBeNull();
 });
@@ -1418,7 +1312,7 @@ test("a second turn while one is in flight is said, not swallowed", async () => 
   });
   const fetch = stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`)
       return response;
@@ -1482,7 +1376,7 @@ test("a second turn while one is in flight is not sent at all", async () => {
   let posted = 0;
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
       posted += 1;
@@ -1549,7 +1443,7 @@ test("nothing is running until the run exists", async () => {
   const cancels: Call[] = [];
   const fetch = stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url.endsWith("/cancel")) {
       cancels.push(call);
@@ -1600,7 +1494,7 @@ test("an edit under a question the server has never seen is not sent", async () 
   const posts: Call[] = [];
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
       posts.push(call);
@@ -1630,13 +1524,12 @@ test("the tree is converted once per message, however many deltas arrive", () =>
   // A delta rebuilds the repository, and a conversation is as long as it is.
   const messages = Array.from({ length: 4 }, (_, index) => ({
     id: `m${index}`,
-    parentId: index === 0 ? null : `m${index - 1}`,
     role: "user" as const,
     parts: [{ kind: "text" as const, text: "hello" }],
     state: "stored" as const,
   }));
-  const first = asRepository(messages, "m3");
-  const again = asRepository(messages, "m3");
+  const first = asRepository(messages);
+  const again = asRepository(messages);
   expect(again.messages.map((each) => each.message)).toEqual(
     first.messages.map((each) => each.message),
   );
@@ -1649,7 +1542,7 @@ test("the tree is converted once per message, however many deltas arrive", () =>
   // converted again.
   const touched = [...messages];
   touched[2] = { ...messages[2]!, parts: [{ kind: "text", text: "changed" }] };
-  const third = asRepository(touched, "m3");
+  const third = asRepository(touched);
   expect(third.messages[1]?.message).toBe(first.messages[1]?.message);
   expect(third.messages[2]?.message).not.toBe(first.messages[2]?.message);
 });
@@ -1665,101 +1558,43 @@ test("a conversation that is not here is one answer for two reasons", async () =
   expect(result.current.state.sending).toBe(false);
 });
 
-test("switching branch moves the author's position on the server", async () => {
-  const writes: Call[] = [];
-  stub((call) => {
-    if (call.method === "PUT") {
-      writes.push(call);
-      return json(conversation(1));
-    }
-    if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(
-        opened(
-          conversation(1),
-          [...TREE, message("m3", "m1", "assistant", "or because")],
-          "m2",
-        ),
-      );
-    }
-    return undefined;
-  });
-  const { result } = chatting({ conversationId: CONVERSATION });
-  await waitFor(() => {
-    expect(result.current.state.messages).toHaveLength(3);
-  });
-  // The tree really has two answers under the one question, which is what a
-  // branch picker is.
-  const answer = result.current.runtime.thread.getMessageById("m2");
-  expect(answer.getState().branchCount).toBe(2);
-
-  await act(async () => {
-    answer.switchToBranch({ position: "next" });
-    await settle();
-  });
-  expect(result.current.state.leafId).toBe("m3");
-  expect(writes[0]?.url).toBe(`/api/conversations/${CONVERSATION}/leaf`);
-  expect(writes[0]?.body).toEqual({ message_id: "m3" });
-});
-
 test("a read that says the same thing hands back the same messages", () => {
   // Identity is what the chat converts for assistant-ui by, so a read that
   // ends a turn must not rebuild a whole conversation over one answer.
   const stored = [
-    message("m1", null, "user", "why?"),
-    message("m2", "m1", "assistant", "because"),
+    message("m1", "user", "why?"),
+    message("m2", "assistant", "because"),
   ];
   const first = after({
     kind: "opened",
     conversationId: CONVERSATION,
     messages: stored,
-    leafId: "m2",
     runId: null,
-    resume: null,
     endedBadly: null,
   });
   const again = reduce(first, {
     kind: "opened",
     conversationId: CONVERSATION,
     // The same conversation with one more answer, as a turn leaves it.
-    messages: [...stored, message("m3", "m2", "user", "and then?")],
-    leafId: "m3",
+    messages: [...stored, message("m3", "user", "and then?")],
     runId: null,
-    resume: null,
     endedBadly: null,
   });
   expect(again.messages[0]).toBe(first.messages[0]);
   expect(again.messages[1]).toBe(first.messages[1]);
   expect(again.messages[2]?.id).toBe("m3");
   // Which is what keeps the conversions, and `createdAt` with them.
-  expect(asRepository(again.messages, "m3").messages[0]?.message).toBe(
-    asRepository(first.messages, "m2").messages[0]?.message,
+  expect(asRepository(again.messages).messages[0]?.message).toBe(
+    asRepository(first.messages).messages[0]?.message,
   );
   // A message the store now says something else about is rebuilt.
   const edited = reduce(first, {
     kind: "opened",
     conversationId: CONVERSATION,
-    messages: [stored[0]!, message("m2", "m1", "assistant", "because of this")],
-    leafId: "m2",
+    messages: [stored[0]!, message("m2", "assistant", "because of this")],
     runId: null,
-    resume: null,
     endedBadly: null,
   });
   expect(edited.messages[0]).toBe(first.messages[0]);
   expect(edited.messages[1]).not.toBe(first.messages[1]);
-});
-
-test("handing the state over again is the same messages in a new array", () => {
-  // What the runtime is given back when it has rewritten its own repository
-  // -- a branch it resolved to nothing or to a message the server has never
-  // seen, the message it takes out of the thread when a run is stopped. A new
-  // object is "all of it, again"; the messages keep their identity, so
-  // nothing is converted twice (`asRepository`).
-  const some = after(asked, started);
-  const back = reduce(some, { kind: "resync" });
-  expect(back.messages).toEqual(some.messages);
-  expect(back.messages).not.toBe(some.messages);
-  expect(back.messages[0]).toBe(some.messages[0]);
-  expect(asRepository(back.messages, back.leafId).messages[0]?.message).toBe(
-    asRepository(some.messages, some.leafId).messages[0]?.message,
-  );
 });

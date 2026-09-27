@@ -14,7 +14,7 @@ string in JSON, and ``utc`` is what makes one instant have one spelling
 whatever time zone a store's session was in.
 
 **A field that is always sent is required, and nullable where it can be
-empty**: ``leaf_id``, ``next_cursor``, ``resume`` and the rest are declared
+empty**: ``run_id``, ``next_cursor``, ``resume`` and the rest are declared
 ``X | None`` with **no default**, so a generated client types them ``T | null``
 and not "may be absent". There is one shape for every answer, and a client
 that has read one field has read them all. (``SessionResponse`` and
@@ -203,15 +203,14 @@ class ProvenanceView(BaseModel):
 
 
 class MessageView(BaseModel):
-    """One message of a conversation, with what places it in the tree.
+    """One message of the thread a conversation shows.
 
-    ``parent_id`` is what makes this a tree and not a list: it is ``None`` for
-    a root, and a client walks it upwards to have a branch. **Reasoning is not
-    here**: see ``of``.
+    No ``parent_id``: what is sent is one path, in order, and where each
+    message hangs is the message before it. **Reasoning is not here**: see
+    ``of``.
     """
 
     id: uuid.UUID
-    parent_id: uuid.UUID | None
     role: SentRole
     channel: Channel
     created_at: datetime
@@ -234,7 +233,6 @@ class MessageView(BaseModel):
         """
         return cls(
             id=message.id,
-            parent_id=message.parent_id,
             role=message.role.value,
             channel=message.channel,
             created_at=utc(message.created_at),
@@ -253,8 +251,7 @@ class ConversationSummary(BaseModel):
     """A conversation as the panel lists it and as a write answers with it.
 
     No owner: it is the person asking, on every route there is
-    (``docs/specs/privacy.md``). ``active_leaf_id`` is the position its author
-    is at, which is what ``PUT /api/conversations/{id}/leaf`` moves.
+    (``docs/specs/privacy.md``).
     """
 
     id: uuid.UUID
@@ -262,7 +259,6 @@ class ConversationSummary(BaseModel):
     agent: str
     created_at: datetime
     updated_at: datetime
-    active_leaf_id: uuid.UUID | None
 
     @classmethod
     def of(cls, conversation: Conversation) -> ConversationSummary:
@@ -272,7 +268,6 @@ class ConversationSummary(BaseModel):
             agent=conversation.agent,
             created_at=utc(conversation.created_at),
             updated_at=utc(conversation.updated_at),
-            active_leaf_id=conversation.active_leaf_id,
         )
 
 
@@ -329,12 +324,13 @@ class EndedBadlyView(BaseModel):
 class OpenedConversationResponse(BaseModel):
     """A conversation opened: one moment of it, with everything drawing it needs.
 
-    ``messages`` is **every message of the tree**, oldest first with ties
-    broken by id, so the branches beside the one being shown are there to
-    switch to without a second request. Each carries its ``parent_id``, and
-    ``leaf_id`` is the message the conversation opens on
-    (``docs/specs/conversations.md``): the branch is the walk from that id up
-    the parents, which the client does and the server does not send twice.
+    ``messages`` is **the one thread the conversation shows**, oldest first:
+    the path from its root to its newest message, and nothing an edit or a
+    regeneration put aside (``docs/specs/conversations.md``). A client draws
+    it as a list; there is no other branch to switch to. With a run in
+    flight it ends at ``resume.follows``, the message the run's next one
+    hangs under, so what streams in is appended to it -- a regeneration
+    that has completed nothing yet has put the old answer aside already.
 
     ``run_id`` and ``resume`` are there when a run is in flight, and
     ``ended_badly`` instead when the last one ended badly. Never both: what
@@ -343,7 +339,6 @@ class OpenedConversationResponse(BaseModel):
 
     conversation: ConversationSummary
     messages: list[MessageView]
-    leaf_id: uuid.UUID | None
     run_id: uuid.UUID | None
     resume: ResumeView | None
     ended_badly: EndedBadlyView | None
@@ -352,8 +347,7 @@ class OpenedConversationResponse(BaseModel):
     def of(cls, opened: OpenedConversation) -> OpenedConversationResponse:
         return cls(
             conversation=ConversationSummary.of(opened.conversation),
-            messages=[MessageView.of(message) for message in opened.tree.messages],
-            leaf_id=None if opened.leaf is None else opened.leaf.id,
+            messages=[MessageView.of(message) for message in opened.messages],
             run_id=opened.run_id,
             resume=(
                 None
@@ -431,19 +425,6 @@ class RenameRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS)
-
-
-class SelectLeafRequest(BaseModel):
-    """The message its author is now on; any message of the conversation.
-
-    Not only the end of a branch: what is recorded is a position, and opening
-    the conversation resolves it to the branch below it
-    (``docs/specs/conversations.md``).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    message_id: uuid.UUID
 
 
 class NewChatRequest(BaseModel):

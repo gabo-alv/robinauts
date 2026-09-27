@@ -17,7 +17,9 @@ delivery channel uses ([channels.md](channels.md)).
 - Loading a conversation returns its messages and, when a run is active,
   that run's id and the position to attach after (`resume_point`,
   [runs.md](runs.md)) — so a UI that has just loaded every complete message
-  attaches without being shown any of them twice.
+  attaches without being shown any of them twice. With a run active, the
+  messages end at `resume.follows`, which is what the run's next message
+  hangs under: a UI appends what streams in to the end of the list.
 - A POST to a conversation that has an active run is refused. A run is
   cancelled by an explicit request.
 - The request names the conversation and **either** a new user message with

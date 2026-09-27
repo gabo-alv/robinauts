@@ -103,7 +103,6 @@ NEW_TITLE = "What a robinaut is"
 
 WRITES: tuple[tuple[str, str, dict[str, object] | None], ...] = (
     ("PATCH", "", {"title": NEW_TITLE}),
-    ("PUT", "/leaf", {"message_id": str(NOWHERE)}),
     ("DELETE", "", None),
     ("POST", f"/runs/{NOWHERE}/cancel", None),
 )
@@ -137,23 +136,14 @@ class Served:
     wiring: Wiring
     user: User
 
-    async def written(
-        self, *messages: Message, leaf: Message | None = None, **changes: object
-    ) -> Conversation:
-        """A conversation of that person's, with those messages appended in order.
-
-        Appending moves the active leaf onto what was appended, as a completed
-        message does (``ports.ConversationStore.append_message``), so ``leaf``
-        is how a test puts its author back on another branch.
-        """
+    async def written(self, *messages: Message, **changes: object) -> Conversation:
+        """A conversation of that person's, with those messages appended in order."""
         kept = conversation(owner_id=self.user.id, **changes)
         await self.wiring.store.add_conversation(kept)
         for message in messages:
             await self.wiring.store.append_message(
                 message, message_to_data(message), now=message.created_at
             )
-        if leaf is not None:
-            await self.wiring.store.set_active_leaf(kept.id, leaf.id)
         return kept
 
     async def stored(self, conversation_id: uuid.UUID) -> Conversation | None:
@@ -361,32 +351,35 @@ def test_the_page_bound_is_the_one_the_application_enforces() -> None:
 
 
 @asyncio_test
-async def test_opening_a_conversation_sends_the_whole_tree_and_the_leaf_it_opens_on() -> None:
-    """Every branch, once, with what places each message in the tree."""
+async def test_opening_a_conversation_sends_the_thread_it_shows_and_nothing_put_aside() -> None:
+    """After an edit: the path to the newest message, as a list, and no parents.
+
+    The edited-away question and the answer under it stay in the store and
+    are nowhere in the response.
+    """
     asked = question("What is a robinaut?", seconds=1)
     said = answer(asked, ANSWER, seconds=2)
-    edited = question("What is a robinaut, briefly?", seconds=3)
+    followed = question("And why?", parent=said, seconds=3)
+    replied = answer(followed, "Because.", seconds=4)
+    edited = question("And why not?", parent=said, seconds=5)
 
     async with served() as it:
-        kept = await it.written(asked, said, edited, leaf=said)
+        kept = await it.written(asked, said, followed, replied, edited)
 
         opened = await it.client.get(f"/api/conversations/{kept.id}")
+        stored = await it.wiring.store.messages_of(kept.id)
 
     body = opened.json()
     assert opened.status_code == 200
     assert body["conversation"]["id"] == str(kept.id)
-    assert body["leaf_id"] == str(said.id)
     assert [message["id"] for message in body["messages"]] == [
         str(asked.id),
         str(said.id),
         str(edited.id),
     ]
-    # The tree, as parents: the client walks these to have a branch.
-    assert [message["parent_id"] for message in body["messages"]] == [
-        None,
-        str(asked.id),
-        None,
-    ]
+    assert len(stored) == 5
+    assert "parent_id" not in body["messages"][0]
+    assert "leaf_id" not in body and "active_leaf_id" not in body["conversation"]
     assert body["messages"][0]["parts"] == [{"kind": "text", "text": "What is a robinaut?"}]
     assert body["messages"][0]["role"] == Role.USER.value
     assert body["messages"][0]["provenance"] is None
@@ -398,6 +391,39 @@ async def test_opening_a_conversation_sends_the_whole_tree_and_the_leaf_it_opens
     }
     assert body["messages"][1]["created_at"] == "2026-09-21T09:00:02Z"
     assert (body["run_id"], body["resume"], body["ended_badly"]) == (None, None, None)
+
+
+@asyncio_test
+async def test_after_a_regeneration_only_the_new_answer_is_sent() -> None:
+    asked = question("What is a robinaut?", seconds=1)
+    said = answer(asked, ANSWER, seconds=2)
+    again = answer(asked, "Someone who plays fair, briefly.", seconds=3)
+
+    async with served() as it:
+        kept = await it.written(asked, said, again)
+
+        opened = await it.client.get(f"/api/conversations/{kept.id}")
+        stored = await it.wiring.store.messages_of(kept.id)
+
+    assert [message["id"] for message in opened.json()["messages"]] == [
+        str(asked.id),
+        str(again.id),
+    ]
+    assert len(stored) == 3
+
+
+@asyncio_test
+async def test_editing_the_first_question_sends_only_the_new_roots_path() -> None:
+    asked = question("What is a robinaut?", seconds=1)
+    said = answer(asked, ANSWER, seconds=2)
+    edited = question("What is a robinaut, briefly?", seconds=3)
+
+    async with served() as it:
+        kept = await it.written(asked, said, edited)
+
+        opened = await it.client.get(f"/api/conversations/{kept.id}")
+
+    assert [message["id"] for message in opened.json()["messages"]] == [str(edited.id)]
 
 
 @asyncio_test
@@ -449,7 +475,7 @@ async def test_an_empty_conversation_opens_on_nothing() -> None:
 
         opened = await it.client.get(f"/api/conversations/{kept.id}")
 
-    assert (opened.json()["messages"], opened.json()["leaf_id"]) == ([], None)
+    assert opened.json()["messages"] == []
 
 
 @asyncio_test
@@ -540,6 +566,48 @@ async def test_a_run_that_has_completed_nothing_is_attached_to_at_its_beginning(
     assert opened.json()["run_id"] == str(started.run.id)
     assert opened.json()["resume"] == {"after": BEGUN, "follows": str(started.message.id)}
     assert [message["id"] for message in opened.json()["messages"]] == [str(started.message.id)]
+
+
+@asyncio_test
+async def test_opening_during_a_regeneration_sends_the_thread_up_to_its_question() -> None:
+    """Regenerating the first answer of two turns: only the first question is sent.
+
+    A regeneration stores nothing until its answer completes, so while it is
+    going the newest message is still the last answer of the old thread. What
+    is sent ends where the run is writing -- ``resume.follows`` -- so that the
+    new answer arriving is shown in place of what it replaces, and not after
+    it (``core.ConversationTree.visible_path``).
+    """
+    asked = question("What is a robinaut?", seconds=1)
+    said = answer(asked, ANSWER, seconds=2)
+    followed = question("And why?", parent=said, seconds=3)
+    replied = answer(followed, "Because.", seconds=4)
+    gate = Gate()
+    steps = says("Someone fair.")
+    steps.insert(-1, gate)
+
+    async with served(*steps) as it:
+        kept = await it.written(asked, said, followed, replied)
+        started = await it.wiring.turns.regenerate(
+            it.user, conversation_id=kept.id, message_id=said.id
+        )
+        submitted(it.wiring, started.run)
+        await gate.reached.wait()
+
+        during = await it.client.get(f"/api/conversations/{kept.id}")
+
+        gate.open()
+        await settled(it.wiring, started.run)
+        after = await it.client.get(f"/api/conversations/{kept.id}")
+
+    body = during.json()
+    assert body["run_id"] == str(started.run.id)
+    assert [message["id"] for message in body["messages"]] == [str(asked.id)]
+    assert body["resume"]["follows"] == str(asked.id)
+    assert [message["parts"][0]["text"] for message in after.json()["messages"]] == [
+        "What is a robinaut?",
+        "Someone fair.",
+    ]
 
 
 @asyncio_test
@@ -732,48 +800,6 @@ async def test_a_title_of_nothing_but_spaces_is_no_title() -> None:
 
 
 @asyncio_test
-async def test_moving_to_another_branch_changes_where_it_opens_and_not_its_place() -> None:
-    asked = question(seconds=1)
-    said = answer(asked, ANSWER, seconds=2)
-    edited = question("Briefly?", seconds=3)
-
-    async with served() as it:
-        kept = await it.written(asked, said, edited)
-        before = await it.stored(kept.id)
-
-        moved = await it.client.put(
-            f"/api/conversations/{kept.id}/leaf",
-            json={"message_id": str(said.id)},
-            headers=WRITE,
-        )
-        opened = await it.client.get(f"/api/conversations/{kept.id}")
-
-    assert moved.status_code == 200
-    assert moved.json()["active_leaf_id"] == str(said.id)
-    assert opened.json()["leaf_id"] == str(said.id)
-    # Moving writes nothing, so the panel's order does not change.
-    assert before is not None
-    assert moved.json()["updated_at"] == before.updated_at.isoformat().replace("+00:00", "Z")
-
-
-@asyncio_test
-async def test_a_message_of_another_conversation_is_no_leaf_of_this_one() -> None:
-    elsewhere = question(conversation_id=NOWHERE, seconds=1)
-
-    async with served() as it:
-        kept = await it.written()
-
-        refused = await it.client.put(
-            f"/api/conversations/{kept.id}/leaf",
-            json={"message_id": str(elsewhere.id)},
-            headers=WRITE,
-        )
-
-    assert refusal(refused)[0] == 404
-    assert refused.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
-
-
-@asyncio_test
 async def test_a_write_sent_as_anything_but_json_is_refused() -> None:
     """The other refusal the request protection answers before a route runs."""
     async with served() as it:
@@ -933,7 +959,6 @@ def test_every_route_with_a_body_reads_it_once() -> None:
         route.path for route in api_routes(create_api().router) if route.body_field is not None
     ] == [
         "/api/conversations/{conversation_id}",
-        "/api/conversations/{conversation_id}/leaf",
         "/api/turns",
         "/api/conversations/{conversation_id}/turns",
     ]

@@ -179,24 +179,6 @@ class MemoryConversationStore(ConversationStore):
             self._conversations[conversation_id] = written
             return written
 
-    async def set_active_leaf(
-        self, conversation_id: uuid.UUID, leaf_id: uuid.UUID
-    ) -> Conversation | None:
-        async with self._locked():
-            found = self._conversations.get(conversation_id)
-            if found is None:
-                return None
-            if leaf_id not in self._messages[conversation_id]:
-                raise MessageNotFoundError(
-                    f"message {leaf_id} is not in conversation {conversation_id}"
-                )
-            await _a_turn()
-            # No `updated_at`: moving between branches writes nothing that
-            # should reorder a panel sorted by when things were last written.
-            written = replace(found, active_leaf_id=leaf_id)
-            self._conversations[conversation_id] = written
-            return written
-
     async def touch_conversation(
         self, conversation_id: uuid.UUID, *, now: datetime
     ) -> Conversation | None:
@@ -443,7 +425,7 @@ class MemoryConversationStore(ConversationStore):
             await _a_turn()
             self._store_message(message, document)
             await _a_turn()
-            self._move_conversation(found, now, message.id)
+            self._date_conversation(found, now)
             await _a_turn()
             self._put_event(event, event_document)
 
@@ -503,7 +485,7 @@ class MemoryConversationStore(ConversationStore):
     def _put_message(
         self, message: Message, document: Document, now: datetime, conversation: Conversation
     ) -> None:
-        """Store the message and move ``conversation`` onto it: the two writes.
+        """Store the message and date ``conversation``: the two writes.
 
         ``conversation`` is the record the operation read, not one read again
         here: a store writes back the row it loaded, and it is the lock around
@@ -511,20 +493,16 @@ class MemoryConversationStore(ConversationStore):
         doing so safe.
         """
         self._store_message(message, document)
-        self._move_conversation(conversation, now, message.id)
+        self._date_conversation(conversation, now)
 
     def _store_message(self, message: Message, document: Document) -> None:
         """The message row alone: the document, and the record beside it."""
         self._documents[message.conversation_id][message.id] = copy.deepcopy(document)
         self._messages[message.conversation_id][message.id] = message
 
-    def _move_conversation(
-        self, conversation: Conversation, now: datetime, leaf_id: uuid.UUID
-    ) -> None:
-        """The conversation row alone: dated, and opened on that message."""
-        self._conversations[conversation.id] = replace(
-            conversation, updated_at=now, active_leaf_id=leaf_id
-        )
+    def _date_conversation(self, conversation: Conversation, now: datetime) -> None:
+        """The conversation row alone: dated."""
+        self._conversations[conversation.id] = replace(conversation, updated_at=now)
 
     def _check_start(
         self, conversation: Conversation | None, asked: Message | None, run: Run

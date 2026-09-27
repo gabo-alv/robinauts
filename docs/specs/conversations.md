@@ -2,13 +2,18 @@
 
 ## Shape
 
-- A conversation is a **tree of messages**: every message has a parent.
-- Editing a user message, or regenerating an answer, adds a sibling
-  branch. The earlier branch is kept and can be revisited. Nothing is
-  overwritten.
+- A conversation is **stored as a tree of messages**: every message has a
+  parent. It is **shown as one thread**: the path from a root to its newest
+  message ("The visible thread", below).
+- Editing a user message, or regenerating an answer, writes the new message
+  beside the old one, under the same parent. Nothing is overwritten. From
+  the user's point of view the old message and everything after it are
+  discarded: they leave the visible thread and never return to it. In
+  storage they stay where they were, with their parents, so that the
+  lineage of edits and regenerations is there for analytics.
 - Editing the first message gives the new message the parent the old one
-  had, which is nothing: a conversation then has more than one root. A
-  root is a branch like any other.
+  had, which is nothing: a conversation then has more than one root, and
+  the visible thread begins at the newest.
 - **A turn is a chain.** A root is a user message. A user message's parent
   is an assistant message, or nothing. An assistant message's parent is a
   user message, another assistant message, or a tool message: one turn may
@@ -167,35 +172,40 @@ from it on every turn ([agents.md](agents.md)).
   like any other fault of ours, saying nothing, and the whole of it goes
   to the log.
 
-## Branches
+## The visible thread
 
 - Opening a conversation reads **one moment of it**: its messages, the run in
   flight if there is one, and that run's events, together. Two reads would
   disagree, and the gap between them is exactly where an answer is — a
   message completed between them is either shown twice or never shown at all,
   with the next announcement hanging under a message the reader has not got.
-- A conversation opens on the branch its author was last on. That is the
-  message they were last on; if that message has since been answered, it
-  is the branch below it **whose own last message is the newest** — the
-  branch written in most recently, not the one begun most recently. A
-  conversation whose last position names nothing — never opened, or a
-  branch since deleted — opens by the same rule over the whole tree.
-- Only the author creates branches and moves between them. Moving is
-  choosing **any message** of the conversation, not only the end of a branch:
-  what is recorded is the position its author is at, and the rule above
-  resolves it to a branch when the conversation is opened.
-- **Moving between branches does not date the conversation.** It writes
-  nothing, so it must not reorder a list sorted by when things were last
-  written: opening an old conversation and looking through its branches would
-  otherwise push it to the top of the panel.
-- **Completing a message does**, and it also moves the author's position onto
-  that message: what was just written is where they are, and where the
-  conversation opens next. The message, the date and the position move
-  together or not at all.
+- **Users see exactly one thread**: the path from a root to the newest
+  leaf, the leaf that sorts last by the message order (`created_at`, then
+  id). Nothing is recorded about where a conversation opens; the tree
+  decides. The rule holds because an edit or a regeneration always writes
+  the newest message, and because a conversation has at most one active
+  run, so an older branch can never gain a newer message.
+- **While a run is in flight, the thread ends where the run is writing**:
+  at the message its next one will hang under — the last message it
+  completed, or the question it answers. A regeneration writes nothing
+  until its first answer completes, so until then the newest leaf is still
+  the answer it replaces, or a later turn, and the thread by the newest
+  leaf would show what the run is putting aside with the new answer
+  arriving after it. For every other turn the two rules agree.
+- **Every message not on that path is discarded** from the user's point of
+  view: soft-deleted by the shape of the tree, with no column saying so. It
+  stays in storage with its parent for analytics and reaches no other
+  reader — not the interface, not a project member, not a share link, not
+  the model's history.
+- There is no branch picker and no moving between branches. Editing or
+  regenerating is the only way the visible thread changes shape, and it
+  changes it by discarding.
+- **Completing a message dates the conversation.** The message and the date
+  move together or not at all.
 - **Every other reader — a project member, someone with a share link —
-  sees the author's current branch only**, live: it follows the author
-  when they continue or switch branch. The other branches stay private to
-  the author.
+  sees the same single thread**, live: it follows the author when they
+  continue, edit or regenerate. What was discarded stays private to the
+  store.
 
 ## Listing
 
@@ -218,7 +228,7 @@ from it on every turn ([agents.md](agents.md)).
 
 ## Forking
 
-- A project member can fork a conversation from any message of the branch
+- A project member can fork a conversation from any message of the thread
   they see.
 - The fork is a new conversation owned by the person forking, in the same
   project. It holds a copy of the path up to that message, attachments
@@ -244,7 +254,8 @@ from it on every turn ([agents.md](agents.md)).
 
 - Start a conversation with an agent; the application opens on an empty
   chat.
-- Edit and regenerate, and move between branches.
+- Edit and regenerate. Either discards what came after the edit point
+  from view; there is no going back to it.
 - Rename, archive and delete.
 - Attach files and images. They are stored in the database; images are
   passed to the model where the model accepts them.

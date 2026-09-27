@@ -99,20 +99,8 @@
         "type": "object"
       },
       "ConversationSummary": {
-        "description": "A conversation as the panel lists it and as a write answers with it.\n\nNo owner: it is the person asking, on every route there is\n(``docs/specs/privacy.md``). ``active_leaf_id`` is the position its author\nis at, which is what ``PUT /api/conversations/{id}/leaf`` moves.",
+        "description": "A conversation as the panel lists it and as a write answers with it.\n\nNo owner: it is the person asking, on every route there is\n(``docs/specs/privacy.md``).",
         "properties": {
-          "active_leaf_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Active Leaf Id"
-          },
           "agent": {
             "title": "Agent",
             "type": "string"
@@ -142,8 +130,7 @@
           "title",
           "agent",
           "created_at",
-          "updated_at",
-          "active_leaf_id"
+          "updated_at"
         ],
         "title": "ConversationSummary",
         "type": "object"
@@ -222,7 +209,7 @@
         "type": "object"
       },
       "MessageView": {
-        "description": "One message of a conversation, with what places it in the tree.\n\n``parent_id`` is what makes this a tree and not a list: it is ``None`` for\na root, and a client walks it upwards to have a branch. **Reasoning is not\nhere**: see ``of``.",
+        "description": "One message of the thread a conversation shows.\n\nNo ``parent_id``: what is sent is one path, in order, and where each\nmessage hangs is the message before it. **Reasoning is not here**: see\n``of``.",
         "properties": {
           "channel": {
             "$ref": "#/components/schemas/Channel"
@@ -236,18 +223,6 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
-          },
-          "parent_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Id"
           },
           "parts": {
             "items": {
@@ -277,7 +252,6 @@
         },
         "required": [
           "id",
-          "parent_id",
           "role",
           "channel",
           "created_at",
@@ -288,7 +262,7 @@
         "type": "object"
       },
       "OpenedConversationResponse": {
-        "description": "A conversation opened: one moment of it, with everything drawing it needs.\n\n``messages`` is **every message of the tree**, oldest first with ties\nbroken by id, so the branches beside the one being shown are there to\nswitch to without a second request. Each carries its ``parent_id``, and\n``leaf_id`` is the message the conversation opens on\n(``docs/specs/conversations.md``): the branch is the walk from that id up\nthe parents, which the client does and the server does not send twice.\n\n``run_id`` and ``resume`` are there when a run is in flight, and\n``ended_badly`` instead when the last one ended badly. Never both: what\nmatters about a run that is going is the run.",
+        "description": "A conversation opened: one moment of it, with everything drawing it needs.\n\n``messages`` is **the one thread the conversation shows**, oldest first:\nthe path from its root to its newest message, and nothing an edit or a\nregeneration put aside (``docs/specs/conversations.md``). A client draws\nit as a list; there is no other branch to switch to. With a run in\nflight it ends at ``resume.follows``, the message the run's next one\nhangs under, so what streams in is appended to it -- a regeneration\nthat has completed nothing yet has put the old answer aside already.\n\n``run_id`` and ``resume`` are there when a run is in flight, and\n``ended_badly`` instead when the last one ended badly. Never both: what\nmatters about a run that is going is the run.",
         "properties": {
           "conversation": {
             "$ref": "#/components/schemas/ConversationSummary"
@@ -302,18 +276,6 @@
                 "type": "null"
               }
             ]
-          },
-          "leaf_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Leaf Id"
           },
           "messages": {
             "items": {
@@ -348,7 +310,6 @@
         "required": [
           "conversation",
           "messages",
-          "leaf_id",
           "run_id",
           "resume",
           "ended_badly"
@@ -504,22 +465,6 @@
           "ended_at"
         ],
         "title": "RunView",
-        "type": "object"
-      },
-      "SelectLeafRequest": {
-        "additionalProperties": false,
-        "description": "The message its author is now on; any message of the conversation.\n\nNot only the end of a branch: what is recorded is a position, and opening\nthe conversation resolves it to the branch below it\n(``docs/specs/conversations.md``).",
-        "properties": {
-          "message_id": {
-            "format": "uuid",
-            "title": "Message Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "message_id"
-        ],
-        "title": "SelectLeafRequest",
         "type": "object"
       },
       "SessionResponse": {
@@ -872,7 +817,7 @@
         ]
       },
       "get": {
-        "description": "One conversation, read at **one moment**: its messages and its run.\n\n``messages`` is the whole tree, oldest first with ties broken by id, and\n``leaf_id`` is the message it opens on -- the branch its author was last\non (``docs/specs/conversations.md``). The branch being shown is the walk\nfrom ``leaf_id`` up the ``parent_id``s, which the client does: sending it\nas well would send every message of it twice. The other branches are there\nto switch between without another request.\n\nWhen a run is in flight, ``run_id`` and ``resume`` say which run and where\nto attach to its stream, so that a client which has just loaded every\ncomplete message is replayed exactly the message still being produced and\nnone it already has (``docs/specs/runs.md``). When no run is in flight and\nthe last one failed, was cancelled or was interrupted, ``ended_badly``\nsays so, so that a reload after an answer went wrong is told rather than\nshown a turn that stops in the middle.\n\nThe three come from one read of the store, because two reads would\ndisagree with each other and the gap between them is exactly where an\nanswer is.",
+        "description": "One conversation, read at **one moment**: its thread and its run.\n\n``messages`` is the one thread the conversation shows, oldest first: the\npath to its newest message, and nothing an edit or a regeneration put\naside (``docs/specs/conversations.md``). What was put aside is kept in\nthe store and never sent.\n\nWhen a run is in flight, ``run_id`` and ``resume`` say which run and where\nto attach to its stream, so that a client which has just loaded every\ncomplete message is replayed exactly the message still being produced and\nnone it already has (``docs/specs/runs.md``). When no run is in flight and\nthe last one failed, was cancelled or was interrupted, ``ended_badly``\nsays so, so that a reload after an answer went wrong is told rather than\nshown a turn that stops in the middle.\n\nThe three come from one read of the store, because two reads would\ndisagree with each other and the gap between them is exactly where an\nanswer is.",
         "operationId": "open_conversation_api_conversations__conversation_id__get",
         "parameters": [
           {
@@ -1061,120 +1006,6 @@
           }
         },
         "summary": "Rename Conversation",
-        "tags": [
-          "conversations"
-        ]
-      }
-    },
-    "/api/conversations/{conversation_id}/leaf": {
-      "put": {
-        "description": "Move the author to another branch; the conversation as it then is.\n\n``message_id`` is **any** message of the conversation, not only the end of\na branch: what is recorded is the position its author is at, and opening\nthe conversation resolves it to the branch below it. One that is no\nmessage of this conversation answers like anything else that is not there.\n\nIt deliberately does **not** date the conversation: moving between\nbranches writes nothing, so it must not push a conversation to the top of\na panel ordered by when things were last written. Only the author moves\nbetween branches, and every other reader sees the branch the author is on\n(``docs/specs/conversations.md``).",
-        "operationId": "select_branch_api_conversations__conversation_id__leaf_put",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SelectLeafRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConversationSummary"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Request Entity Too Large"
-          },
-          "415": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unsupported Media Type"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unprocessable Entity"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "any other refusal, in the same shape: 400, 405, 500"
-          }
-        },
-        "summary": "Select Branch",
         "tags": [
           "conversations"
         ]

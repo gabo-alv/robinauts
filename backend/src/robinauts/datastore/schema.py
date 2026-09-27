@@ -79,7 +79,7 @@ again. The schema as released is version 1, and from then on every change is
 a migration that moves this number (``docs/specs/backend.md``, "Schema").
 """
 
-SCHEMA_SHA256 = "794d6d306d8ae3f03a3cb934f5e3e3f8544c9afb4c3c41e8d11cafecb7832955"
+SCHEMA_SHA256 = "5ead1c16a71a08cd0bf092d8a2ce386176629023241c34bcc496c091ca7f67dd"
 """``schema.sql`` as this build was written against it.
 
 Before the first release every edit to ``schema.sql`` updates this pin and

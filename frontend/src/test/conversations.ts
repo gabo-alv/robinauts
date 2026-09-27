@@ -31,7 +31,6 @@ export function conversation(
     agent: "helper",
     created_at: "2026-09-01T10:00:00Z",
     updated_at: "2026-09-02T10:00:00Z",
-    active_leaf_id: null,
   };
 }
 
@@ -43,17 +42,15 @@ export function page(
   return { items, next_cursor: nextCursor };
 }
 
-/** One message of a conversation's tree. */
+/** One message of a conversation's thread. */
 export function message(
   messageId: string,
-  parentId: string | null,
   role: "user" | "assistant",
   text: string,
   provenance: Message["provenance"] = null,
 ): Message {
   return {
     id: messageId,
-    parent_id: parentId,
     role,
     channel: "web",
     created_at: "2026-09-02T09:30:00Z",
@@ -74,13 +71,11 @@ export function madeBy(
 export function opened(
   summary: Conversation,
   messages: Message[],
-  leafId: string | null,
   rest: Partial<Opened> = {},
 ): Opened {
   return {
     conversation: summary,
     messages,
-    leaf_id: leafId,
     run_id: null,
     resume: null,
     ended_badly: null,

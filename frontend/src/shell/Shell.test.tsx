@@ -333,7 +333,7 @@ const settled = () => new Promise((done) => setTimeout(done, 0));
 /** The routes a conversation being open needs answered. */
 function withConversation(call: Call): Response | undefined {
   if (call.url === `/api/conversations/${id(1)}`) {
-    return json(opened(conversation(1, "Robins"), [], null));
+    return json(opened(conversation(1, "Robins"), []));
   }
   if (call.url.startsWith("/api/conversations?")) {
     return json(page([conversation(1, "Robins")]));
@@ -366,7 +366,7 @@ test("a conversation the panel has not listed still has its title and agent", as
   location.hash = `#/c/${id(1)}`;
   await shell(undefined, (call) => {
     if (call.url === `/api/conversations/${id(1)}`) {
-      return json(opened(conversation(1, "Robins"), [], null));
+      return json(opened(conversation(1, "Robins"), []));
     }
     return undefined;
   });
@@ -413,14 +413,10 @@ test("the chat stands where the placeholder stood, on both routes", async () => 
   await shell(undefined, (call) => {
     if (call.url === `/api/conversations/${id(1)}`) {
       return json(
-        opened(
-          conversation(1, "Robins"),
-          [
-            message("m1", null, "user", "Why do robins sing?"),
-            message("m2", "m1", "assistant", "Because it is quiet."),
-          ],
-          "m2",
-        ),
+        opened(conversation(1, "Robins"), [
+          message("m1", "user", "Why do robins sing?"),
+          message("m2", "assistant", "Because it is quiet."),
+        ]),
       );
     }
     return withConversation(call);
@@ -441,7 +437,7 @@ test("a first message routes to the conversation it created", async () => {
       );
     }
     if (call.url === `/api/conversations/${created}`) {
-      return json(opened(conversation(9, "Robins"), [], null));
+      return json(opened(conversation(9, "Robins"), []));
     }
     if (call.url.startsWith("/api/conversations?")) {
       return json(page([conversation(9, "Robins")]));

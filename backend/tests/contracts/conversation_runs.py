@@ -14,7 +14,7 @@ survives a store built out of a read and a later write:
 - **at most one active run per conversation**. ``start_run`` refuses a second
   in the step that would have inserted it, so two requests arriving together
   leave one run and one refusal rather than two answers writing into one
-  branch.
+  conversation.
 - **a turn begins all at once**. The conversation, its first question and the
   run are one transaction: nothing is half-created and no refusal leaves a
   conversation behind.
@@ -153,7 +153,7 @@ class ConversationRunsContract(ConversationStoreContract):
 
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
-            assert (found.updated_at, found.active_leaf_id) == (at(1), asked.id)
+            assert found.updated_at == at(1)
             assert [document["id"] for document in await store.messages_of(CONVERSATION)] == [
                 str(asked.id)
             ]
@@ -719,7 +719,7 @@ class ConversationRunsContract(ConversationStoreContract):
             assert await store.last_position(RUN) == FIRST_POSITION + 1
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
-            assert (found.updated_at, found.active_leaf_id) == (at(3), replied.id)
+            assert found.updated_at == at(3)
 
     @asyncio_test
     async def test_a_completion_at_the_wrong_position_stores_neither_half(self) -> None:
@@ -1112,7 +1112,7 @@ class ConversationRunsContract(ConversationStoreContract):
 
     @asyncio_test
     async def test_a_rename_and_a_completion_at_once_keep_both(self) -> None:
-        # `complete_message` moves the conversation as `append_message` does,
+        # `complete_message` dates the conversation as `append_message` does,
         # so it meets a rename on the same row in the same way.
         async with self.opened() as store:
             asked = await _begun(store)
@@ -1130,7 +1130,6 @@ class ConversationRunsContract(ConversationStoreContract):
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
             assert found.title == "Renamed"
-            assert found.active_leaf_id == replied.id
 
     @asyncio_test
     async def test_two_conversations_may_start_a_run_at_once(self) -> None:

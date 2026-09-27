@@ -126,7 +126,7 @@ class RunAlreadyActiveError(RobinautsError):
     """The conversation already has a run going, and may have only one.
 
     The person cancels it or waits (``docs/specs/runs.md``); a second run
-    would have two answers writing into one branch.
+    would have two answers writing into one conversation.
     """
 
 

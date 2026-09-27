@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright The Robinauts Authors
 
-"""The tree: which parents are legal, what a branch is, where to open."""
+"""The tree: which parents are legal, and which path of it a reader sees."""
 
 import time
 import uuid
@@ -10,7 +10,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from conversations import CONVERSATION, OTHER_CONVERSATION, answer, conversation, question
+from conversations import CONVERSATION, OTHER_CONVERSATION, answer, question
 from robinauts.core import (
     ConversationTree,
     check_parent,
@@ -109,7 +109,8 @@ def test_a_conversation_nobody_has_written_in_yet_passes() -> None:
     empty = tree([])
     assert empty.messages == ()
     assert empty.leaves() == ()
-    assert empty.default_leaf(conversation()) is None
+    assert empty.visible_leaf() is None
+    assert empty.visible_path() == ()
     assert check_tree([], conversation_id=CONVERSATION) == ()
 
 
@@ -230,14 +231,10 @@ def test_afterwards_a_question_can_only_fail_for_the_requests_reasons() -> None:
     assert built.conversation_id == CONVERSATION
     assert built.messages == (first, said, second, replied)
     assert built.path_to(replied.id) == (first, said, second, replied)
-    assert built.default_leaf(conversation()) == replied
-    assert built.branches_along(replied.id)[-1].message == replied
-    assert built.branches_of(said.id).message == said
+    assert built.visible_leaf() == replied
+    assert built.visible_path() == (first, said, second, replied)
     assert built.turn_start(replied.id) == second
     assert built.parent_for_regenerate(replied.id) == second.id
-    assert built.parent_for_edit(second.id) == said.id
-    assert built.siblings_of(replied.id) == (replied,)
-    assert built.children_of(first.id) == (said,)
     assert built.leaves() == (replied,)
     assert built.message_at(said.id) == said
     assert built.check_attachment(parent_id=replied.id, role=Role.USER) is None
@@ -245,26 +242,14 @@ def test_afterwards_a_question_can_only_fail_for_the_requests_reasons() -> None:
     nobodys = uuid.uuid4()
     for ask in (
         built.path_to,
-        built.branches_along,
-        built.branches_of,
         built.turn_start,
         built.parent_for_regenerate,
-        built.parent_for_edit,
-        built.siblings_of,
         built.message_at,
     ):
         with pytest.raises(MessageNotFoundError):
             ask(nobodys)
     with pytest.raises(MessageNotFoundError):
         built.check_attachment(parent_id=nobodys, role=Role.USER)
-    assert built.default_leaf(conversation(active_leaf_id=nobodys)) == replied
-
-
-def test_a_tree_of_one_conversation_is_not_asked_about_another() -> None:
-    first, said, _, _ = exchange()
-    built = tree_of_stored([first, said], conversation_id=CONVERSATION)
-    with pytest.raises(InvalidMessageTreeError):
-        built.default_leaf(conversation(id=OTHER_CONVERSATION))
 
 
 def test_a_tree_cannot_be_rewritten_from_outside() -> None:
@@ -277,8 +262,6 @@ def test_a_tree_cannot_be_rewritten_from_outside() -> None:
         built.at[said.id] = first  # type: ignore[index]
     with pytest.raises(TypeError):
         built.below[said.id] = (first,)  # type: ignore[index]
-    with pytest.raises(TypeError):
-        built.among[said.id] = 7  # type: ignore[index]
     with pytest.raises(FrozenInstanceError):
         built.messages = ()  # type: ignore[misc]
 
@@ -304,11 +287,9 @@ def test_a_walk_still_ends_if_a_tree_is_doctored_afterwards() -> None:
     object.__setattr__(built, "below", {looped.id: (said,), said.id: (looped,)})
     with pytest.raises(InvalidMessageTreeError, match="does not end"):
         built.path_to(said.id)
-    with pytest.raises(InvalidMessageTreeError, match="walks in circles"):
-        built.default_leaf(conversation(active_leaf_id=said.id))
 
 
-# --- paths, children, siblings, leaves --------------------------------------
+# --- paths and leaves --------------------------------------------------------
 
 
 def test_a_path_runs_from_a_root_down_to_the_leaf() -> None:
@@ -324,47 +305,10 @@ def test_a_path_to_a_message_of_another_branch_is_that_branch_alone() -> None:
     assert tree([first, said, second, replied, other]).path_to(other.id) == (first, said, other)
 
 
-def test_children_are_the_branches_under_a_message_oldest_first() -> None:
-    first, said, second, replied = exchange()
-    again = answer(second, "2, again", seconds=4)
-    built = tree([first, said, second, replied, again])
-    assert built.children_of(second.id) == (replied, again)
-    assert built.children_of(replied.id) == ()
-    assert built.children_of(None) == (first,)
-
-
-def test_siblings_are_the_branches_a_message_is_one_of_itself_included() -> None:
-    first, said, second, replied = exchange()
-    again = answer(second, "2, again", seconds=4)
-    built = tree([first, said, second, replied, again])
-    assert built.siblings_of(replied.id) == (replied, again)
-    assert built.siblings_of(again.id) == (replied, again)
-    assert built.siblings_of(first.id) == (first,)
-
-
 def test_leaves_are_the_ends_of_the_branches() -> None:
     first, said, second, replied = exchange()
     other = question("two, differently", parent=said, seconds=4)
     assert tree([first, said, second, replied, other]).leaves() == (replied, other)
-
-
-# --- the branches beside a path ---------------------------------------------
-
-
-def test_a_path_comes_with_the_branches_beside_each_message() -> None:
-    """What the interface draws: "2 of 3", and what it moves between."""
-    first, said, second, replied = exchange()
-    again = answer(second, "2, again", seconds=4)
-    edited = question("two, better", parent=said, seconds=5)
-    built = tree([first, said, second, replied, again, edited])
-
-    along = built.branches_along(again.id)
-    assert tuple(branch.message for branch in along) == (first, said, second, again)
-    assert [branch.at for branch in along] == [0, 0, 0, 1]
-    assert [branch.how_many for branch in along] == [1, 1, 2, 2]
-    assert along[2].siblings == (second.id, edited.id)
-    assert along[3].siblings == (replied.id, again.id)
-    assert built.branches_of(edited.id).at == 1
 
 
 # --- turns ------------------------------------------------------------------
@@ -381,16 +325,6 @@ def test_the_turn_a_message_belongs_to_is_found_from_anywhere_inside_it() -> Non
 
 
 # --- editing and regenerating -----------------------------------------------
-
-
-def test_an_edit_attaches_beside_the_question_it_edits() -> None:
-    first, said, second, replied = exchange()
-    messages = [first, said, second, replied]
-    built = tree(messages)
-    assert built.parent_for_edit(second.id) == said.id
-    assert built.parent_for_edit(first.id) is None
-    edited = question("two, better", parent=said.id, seconds=4)
-    assert tree([*messages, edited]).siblings_of(second.id) == (second, edited)
 
 
 def test_a_regeneration_attaches_under_the_question_of_the_whole_turn() -> None:
@@ -411,18 +345,16 @@ def test_regenerating_a_turn_of_several_messages_goes_back_to_its_question() -> 
     again = answer(first, "answering again", seconds=3)
     built = tree([*messages, again])
     assert built.path_to(again.id) == (first, again)
-    assert built.siblings_of(said.id) == (said, again)
+    assert built.visible_path() == (first, again)
 
 
-def test_only_a_question_is_edited_and_only_an_answer_regenerated() -> None:
+def test_only_an_answer_is_regenerated() -> None:
     first, said, _, _ = exchange()
     built = tree([first, said])
-    with pytest.raises(InvalidMessageTreeError, match="only a question is edited"):
-        built.parent_for_edit(said.id)
     with pytest.raises(InvalidMessageTreeError, match="only an answer is regenerated"):
         built.parent_for_regenerate(first.id)
     with pytest.raises(MessageNotFoundError):
-        built.parent_for_edit(uuid.uuid4())
+        built.parent_for_regenerate(uuid.uuid4())
 
 
 def test_where_a_new_message_may_attach() -> None:
@@ -448,46 +380,97 @@ def test_a_new_message_may_not_hang_under_another_conversations_message() -> Non
         tree([first, said]).check_attachment(parent_id=elsewhere.id, role=Role.ASSISTANT)
 
 
-# --- the branch a conversation opens on -------------------------------------
+# --- the visible path: what a reader sees -----------------------------------
 
 
-def test_a_conversation_opens_where_its_author_was_last() -> None:
+def test_the_visible_path_runs_from_the_root_to_the_newest_leaf() -> None:
     first, said, second, replied = exchange()
-    other = question("two, differently", parent=said, seconds=4)
-    built = tree([first, said, second, replied, other])
-    assert built.default_leaf(conversation(active_leaf_id=replied.id)) == replied
-    assert built.default_leaf(conversation(active_leaf_id=other.id)) == other
+    built = tree([replied, second, first, said])
+    assert built.visible_leaf() == replied
+    assert built.visible_path() == (first, said, second, replied)
 
 
-def test_an_author_on_a_message_that_has_since_been_answered_opens_on_the_answer() -> None:
+def test_an_edit_puts_the_old_question_and_everything_under_it_off_the_path() -> None:
+    first, said, second, replied = exchange()
+    edited = question("two, better", parent=said, seconds=4)
+    built = tree([first, said, second, replied, edited])
+    assert built.visible_leaf() == edited
+    assert built.visible_path() == (first, said, edited)
+    # Kept in the tree, off the path: soft-deleted by shape, for analytics.
+    assert (second, replied) == (built.message_at(second.id), built.message_at(replied.id))
+
+
+def test_a_regeneration_shows_only_the_new_answer() -> None:
+    first, said, second, replied = exchange()
+    again = answer(second, "2, again", seconds=4)
+    built = tree([first, said, second, replied, again])
+    assert built.visible_path() == (first, said, second, again)
+
+
+def test_editing_the_first_question_shows_only_the_new_roots_path() -> None:
+    first, said, _, _ = exchange()
+    again = question("one, again", seconds=4)
+    assert tree([first, said, again]).visible_path() == (again,)
+
+
+def test_a_run_in_flight_ends_the_thread_at_what_it_is_extending() -> None:
+    """A regeneration writes nothing until its first answer completes, so the
+    newest leaf is still what it is replacing; the thread a reader is sent
+    ends at the message the run's next one hangs under instead."""
     first, said, second, replied = exchange()
     built = tree([first, said, second, replied])
-    assert built.default_leaf(conversation(active_leaf_id=first.id)) == replied
+    # Regenerating the first answer: nothing written yet, the run answers
+    # the first question.
+    assert built.visible_path(extending=first.id) == (first,)
+    # Regenerating the last answer: the same rule, at the end of the thread.
+    assert built.visible_path(extending=second.id) == (first, said, second)
+    # Once the regeneration has completed an answer, it is the newest leaf
+    # and the two rules agree.
+    again = answer(first, "1, again", seconds=4)
+    regenerated = tree([first, said, second, replied, again])
+    assert regenerated.visible_path(extending=again.id) == (first, again)
+    assert regenerated.visible_path() == (first, again)
 
 
-def test_the_branch_it_opens_on_is_the_one_whose_last_message_is_newest() -> None:
-    """Not the one whose first message is: a branch begun early and continued
-    yesterday is where its author is, whatever was started after it."""
+def test_an_ordinary_turn_or_an_edit_in_flight_extends_the_visible_path() -> None:
+    first, said, second, replied = exchange()
+    # A question just asked is the newest leaf, and it is what the run extends.
+    asked = tree([first, said, second])
+    assert asked.visible_path(extending=second.id) == asked.visible_path()
+    # So is an edited question: the old one stays off the path.
+    edited = question("two, better", parent=said, seconds=4)
+    built = tree([first, said, second, replied, edited])
+    assert built.visible_path(extending=edited.id) == (first, said, edited)
+    assert built.visible_path() == (first, said, edited)
+    # And an answer the run has completed, with more of the turn to come.
+    answered = tree([first, said, second, replied])
+    assert answered.visible_path(extending=replied.id) == (first, said, second, replied)
+
+
+def test_a_run_extending_nothing_here_is_refused() -> None:
+    first, said, _, _ = exchange()
+    with pytest.raises(MessageNotFoundError):
+        tree([first, said]).visible_path(extending=uuid.uuid4())
+    with pytest.raises(MessageNotFoundError):
+        tree([]).visible_path(extending=first.id)
+
+
+def test_the_newest_leaf_is_by_time_and_then_by_id() -> None:
+    """Not the leaf of the branch begun last: one continued later is the
+    visible one. And a tie on the clock is settled by id, so that two stores
+    -- or two reads -- agree on the thread."""
     first = question("one", seconds=0)
     old = answer(first, "the old branch", seconds=1)
     new = answer(first, "the new branch", seconds=2)
     continued = question("carrying on the old one", parent=old, seconds=10)
-    built = tree([first, old, new, continued])
-    assert built.default_leaf(conversation(active_leaf_id=first.id)) == continued
-    assert built.default_leaf(conversation()) == continued
+    assert tree([first, old, new, continued]).visible_path() == (first, old, continued)
 
-
-def test_a_conversation_with_no_active_leaf_opens_on_the_newest_branch() -> None:
-    first, said, second, replied = exchange()
-    other = question("two, differently", parent=said, seconds=4)
-    built = tree([first, said, second, replied, other])
-    assert built.default_leaf(conversation()) == other
-    assert built.default_leaf(conversation(active_leaf_id=uuid.uuid4())) == other
-
-
-def test_an_author_on_a_leaf_stays_on_it() -> None:
-    first, said, _, _ = exchange()
-    assert tree([first, said]).default_leaf(conversation(active_leaf_id=said.id)) == said
+    tied = sorted(
+        (answer(first, "a", seconds=1), answer(first, "b", seconds=1)),
+        key=lambda message: message.id.bytes,
+    )
+    assert tree([first, *tied]).visible_leaf() == tied[-1]
+    assert tree([first, *reversed(tied)]).visible_leaf() == tied[-1]
 
 
 # --- a conversation somebody has used --------------------------------------
@@ -516,31 +499,22 @@ def test_a_conversation_of_ten_thousand_messages_is_read_once_not_once_each() ->
     """A guard against a quadratic walk, not a benchmark.
 
     Ten thousand answers under one question is what regenerating leaves
-    behind, and a function that looked for a message's siblings -- or for
-    where it falls among them -- by walking the whole conversation would take
-    seconds to open it.
+    behind in the store, and a function that found the newest of them by
+    walking the whole conversation for each would take seconds to open it.
     """
     asked, said = wide(10_000)
     messages = [asked, *said]
     chain = deep(10_000)
-    opened = conversation(active_leaf_id=asked.id)
 
     started = time.monotonic()
     wide_tree = tree_of_stored(messages, conversation_id=CONVERSATION)
     deep_tree = tree_of_stored(chain, conversation_id=CONVERSATION)
     assert len(wide_tree.messages) == 10_001
-    assert len(wide_tree.children_of(asked.id)) == 10_000
-    assert len(wide_tree.siblings_of(said[-1].id)) == 10_000
+    assert len(wide_tree.below[asked.id]) == 10_000
     assert len(wide_tree.leaves()) == 10_000
-    assert wide_tree.default_leaf(opened) == said[-1]
-    # The path through the last of ten thousand siblings: its branches are
-    # the whole of that fan, and finding where it falls among them must not
-    # be a walk of them.
-    along = wide_tree.branches_along(said[-1].id)
-    assert along[-1].at == 9_999
-    assert along[-1].how_many == 10_000
+    assert wide_tree.visible_path() == (asked, said[-1])
     assert len(deep_tree.path_to(chain[-1].id)) == 10_000
-    assert len(deep_tree.branches_along(chain[-1].id)) == 10_000
+    assert len(deep_tree.visible_path()) == 10_000
     assert deep_tree.turn_start(chain[-1].id) == chain[-2]
     spent = time.monotonic() - started
 

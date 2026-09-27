@@ -24,12 +24,11 @@ from robinauts.api import (
     ANYTHING_ELSE,
     NewChatRequest,
     RenameRequest,
-    SelectLeafRequest,
     TurnRequest,
     openapi_document,
 )
 
-REQUESTS = (RenameRequest, SelectLeafRequest, NewChatRequest, TurnRequest)
+REQUESTS = (RenameRequest, NewChatRequest, TurnRequest)
 """Every body a route of the API reads. Written out, like ``ANSWERS``.
 
 The last two are the streaming routes', which are outside the document
@@ -88,7 +87,6 @@ def test_the_snapshot_describes_the_routes_a_client_is_generated_for() -> None:
         "/api/agents",
         "/api/conversations",
         "/api/conversations/{conversation_id}",
-        "/api/conversations/{conversation_id}/leaf",
         "/api/conversations/{conversation_id}/runs/{run_id}/cancel",
         "/auth/logout",
         "/auth/session",

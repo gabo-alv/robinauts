@@ -17,12 +17,13 @@
  * producing -- which is in no conversation until it is complete
  * (`docs/specs/runs.md`). When a turn ends, the conversation is read again
  * and what the server says replaces all of it: real ids, the provenance of
- * the answer, the branch its author is on. Nothing here is ever the only copy
- * of anything.
+ * the answer. Nothing here is ever the only copy of anything.
  *
- * **The whole tree, not one branch.** Every message the conversation has is
- * kept, each with its parent, because that is what a branch picker is
- * (`docs/specs/conversations.md`); which branch is being read is `leafId`.
+ * **One thread, in order.** The server sends the one path a conversation
+ * shows (`docs/specs/conversations.md`), and this holds it as a list. An
+ * edit or a regeneration cuts the list after the edit point and goes on from
+ * there: what was after it is off the screen for good, kept only in the
+ * store, and the next read says the same.
  */
 import type { Message } from "../../conversation/conversation";
 import type { AguiEvent } from "./agui/events";
@@ -33,8 +34,8 @@ import type { AguiEvent } from "./agui/events";
  * A send puts the question on the screen before the turn has been accepted,
  * and until the conversation is read again that message has an id no route
  * would answer for. The prefix is how everything that would put an id into a
- * request -- moving the author's branch, hanging a message under one -- tells
- * the two apart. No id the backend issues holds a colon (they are uuids).
+ * request -- hanging a message under one -- tells the two apart. No id the
+ * backend issues holds a colon (they are uuids).
  */
 export const UNSENT = "unsent:";
 
@@ -61,7 +62,6 @@ export type ChatMessageState = "stored" | "running" | "cancelled" | "failed";
 /** One message, as the chat holds one. */
 export interface ChatMessage {
   id: string;
-  parentId: string | null;
   role: "user" | "assistant";
   parts: ChatPart[];
   state: ChatMessageState;
@@ -77,10 +77,8 @@ export interface ChatState {
   loading: boolean;
   /** Why it could not be opened, and whether that was a 404. */
   failure: { detail: string; missing: boolean } | null;
-  /** Every message of the tree, and the one being produced. */
+  /** The thread, oldest first, and the message being produced at its end. */
   messages: ChatMessage[];
-  /** The end of the branch being read. */
-  leafId: string | null;
   /** The run in flight. */
   runId: string | null;
   /**
@@ -91,8 +89,6 @@ export interface ChatState {
    * press send again.
    */
   sending: boolean;
-  /** What the next message the run announces hangs under. */
-  follows: string | null;
   /** The assistant message the stream is writing, if one is open. */
   writing: string | null;
   /** The stretch of thinking that is open, if one is. */
@@ -111,22 +107,15 @@ export interface ChatState {
    */
   notice: string | null;
   /**
-   * The turn on its way: what it added, and where the branch was before it.
+   * The thread as it was before the turn on its way changed it.
    *
-   * A turn the server refuses is one that never happened, so what it put on
-   * the screen comes off and the branch goes back -- and **neither is a
-   * guess**. The message to take off is the one that turn added and no other
-   * (another may be on the screen from a turn that is still going), and the
-   * branch goes back to where it was, which is not the refused question's
-   * parent: a retry of a turn that went wrong hangs under the *parent* of
-   * the question nobody answered (`under`), so restoring to that parent
-   * would take that question off the branch as well.
+   * A turn the server refuses is one that never happened, so what it did to
+   * the screen is undone: an edit that cut the thread and put a question at
+   * its end, a regeneration that cut an answer off, a retry that replaced
+   * the question nobody answered. The snapshot is what was there, and it is
+   * put back as it was rather than reconstructed.
    */
-  before: {
-    asked: string | null;
-    leafId: string | null;
-    follows: string | null;
-  } | null;
+  before: ChatMessage[] | null;
 }
 
 export const EMPTY: ChatState = {
@@ -134,10 +123,8 @@ export const EMPTY: ChatState = {
   loading: false,
   failure: null,
   messages: [],
-  leafId: null,
   runId: null,
   sending: false,
-  follows: null,
   writing: null,
   thinking: null,
   ended: null,
@@ -227,21 +214,22 @@ export function saidFor(code: string): string {
 }
 
 /**
- * What a new question hangs under, given where the branch ends.
+ * What a new question goes after: the end of the thread, or just before it.
  *
  * Usually the end itself. **Unless the end is a question nobody answered** --
  * which is what a run that failed, was cancelled or was interrupted leaves
  * behind, since the answer it was producing is in no conversation
- * (`docs/specs/runs.md`) -- and then it is that question's own parent. Two
- * reasons, and they are the same reason: the format refuses a message of
+ * (`docs/specs/runs.md`) -- and then it is the message before that question.
+ * Two reasons, and they are the same reason: the format refuses a message of
  * role `user` under another (`InvalidMessageTreeError`,
  * `docs/specs/conversations.md`), and **asking again is how such a turn is
- * retried**. What the tree gains is a sibling of the question that went
- * unanswered, which is a branch beside it rather than a message lost.
+ * retried**. The question that went unanswered comes off the screen, and
+ * the new one stands where it stood.
  */
-export function under(state: ChatState, at: string | null): string | null {
-  const tail = state.messages.find((message) => message.id === at);
-  return tail !== undefined && tail.role === "user" ? tail.parentId : at;
+export function under(state: ChatState): string | null {
+  const tail = state.messages.at(-1);
+  if (tail === undefined) return null;
+  return tail.role === "user" ? (state.messages.at(-2)?.id ?? null) : tail.id;
 }
 
 /** Everything that can change the chat. */
@@ -255,19 +243,22 @@ export type ChatAction =
       kind: "opened";
       conversationId: string;
       messages: readonly Message[];
-      leafId: string | null;
       runId: string | null;
-      /** Where the run in flight is to be attached after, and under what. */
-      resume: { after: number; follows: string | null } | null;
       /** How the last run ended, when it ended badly. */
       endedBadly: string | null;
     }
   /** It could not be read. */
   | { kind: "unopened"; detail: string; missing: boolean }
-  /** Somebody sent a message: it is on the screen before the server has it. */
-  | { kind: "asked"; id: string; parentId: string | null; text: string }
-  /** An answer is to be produced again, under the parent of the old one. */
-  | { kind: "again"; parentId: string | null }
+  /**
+   * Somebody sent a message: it is on the screen before the server has it.
+   *
+   * `after` is the message it goes after, and everything after **that** is
+   * cut: nothing for a first message or an edit of one, the end of the
+   * thread for a plain send, the message before the edited one for an edit.
+   */
+  | { kind: "asked"; id: string; after: string | null; text: string }
+  /** An answer is to be produced again: it and everything after it are cut. */
+  | { kind: "again"; after: string | null }
   /** The stream is open: this is the run it is of. */
   | { kind: "started"; runId: string; conversationId: string }
   /** One event of that run. */
@@ -284,11 +275,7 @@ export type ChatAction =
    * the run it is watching over a turn it never started would leave the answer
    * arriving into a thread that thinks nothing is happening.
    */
-  | { kind: "refused"; detail: string }
-  /** Hand the messages over again, unchanged. */
-  | { kind: "resync" }
-  /** Another branch is being read. */
-  | { kind: "branch"; leafId: string };
+  | { kind: "refused"; detail: string };
 
 export function reduce(state: ChatState, action: ChatAction): ChatState {
   switch (action.kind) {
@@ -325,15 +312,8 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
         loading: false,
         failure: null,
         messages,
-        leafId: action.leafId,
         runId: action.runId,
         sending: false,
-        // A run in flight says what its next message hangs under; a
-        // conversation at rest hangs the next one under the branch's end.
-        follows:
-          action.runId === null
-            ? action.leafId
-            : (action.resume?.follows ?? null),
         writing: null,
         thinking: null,
         ended: action.endedBadly,
@@ -357,21 +337,14 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
     case "asked": {
       const asked: ChatMessage = {
         id: action.id,
-        parentId: action.parentId,
         role: "user",
         parts: [{ kind: "text", text: action.text }],
         state: "stored",
       };
       return {
         ...state,
-        messages: [...state.messages, asked],
-        before: {
-          asked: asked.id,
-          leafId: state.leafId,
-          follows: state.follows,
-        },
-        leafId: asked.id,
-        follows: asked.id,
+        messages: [...upTo(state, action.after), asked],
+        before: state.messages,
         sending: true,
         ended: null,
         // The person has asked for something that went out, so whatever they
@@ -381,16 +354,12 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
     }
     case "again":
       // Nothing is added: a regeneration answers the question the turn
-      // already had (`docs/specs/conversations.md`), so what changes is only
-      // where the answer about to arrive will hang.
+      // already had (`docs/specs/conversations.md`). The old answer comes off
+      // the screen, and the new one arrives where it stood.
       return {
         ...state,
-        before: {
-          asked: null,
-          leafId: state.leafId,
-          follows: state.follows,
-        },
-        follows: action.parentId,
+        messages: upTo(state, action.after),
+        before: state.messages,
         sending: true,
         ended: null,
         notice: null,
@@ -416,33 +385,24 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
       // sentence beside it says which (`LOST_TOUCH`).
       return { ...ending(state, "cancelled"), ended: action.detail };
     case "refused":
-      // The question this turn put on the screen comes off: the server
-      // refused the turn that would have put it in the conversation, and
-      // leaving it would show a message that does not exist. **That one and
-      // no other** -- a question from a turn that is still going may be on
-      // the screen too, and an answer may already hang under it.
-      // `before` is read as a value and not with `??`: a turn asked for on
-      // an empty chat, or one whose run had nothing to hang under, saved a
-      // `follows` of `null`, and that is where the branch goes back to.
-      return where({
+      // The thread goes back to what it was: the server refused the turn
+      // that would have changed the conversation, so what that turn did to
+      // the screen -- a question added, a cut made -- is undone as one.
+      return {
         ...state,
-        messages: withoutAsked(state),
-        leafId: state.before !== null ? state.before.leafId : state.leafId,
-        follows: state.before !== null ? state.before.follows : state.follows,
+        messages: state.before ?? state.messages,
         before: null,
         sending: false,
         ended: action.detail,
-      });
-    case "resync":
-      // The same messages in a new array. The runtime re-imports what it is
-      // given when the object is not the one it was given last, and this is
-      // the smallest thing that says "all of it, again" -- the messages
-      // themselves keep their identity, so nothing is converted twice
-      // (`./runtime.tsx`, `converted`).
-      return { ...state, messages: [...state.messages] };
-    case "branch":
-      return { ...state, leafId: action.leafId, follows: action.leafId };
+      };
   }
+}
+
+/** The thread up to and including `after`; nothing when that is `null`. */
+function upTo(state: ChatState, after: string | null): ChatMessage[] {
+  if (after === null) return [];
+  const at = state.messages.findIndex((message) => message.id === after);
+  return at === -1 ? state.messages : state.messages.slice(0, at + 1);
 }
 
 /**
@@ -473,7 +433,6 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
       if (find(state, event.messageId) !== null) return state;
       const started: ChatMessage = {
         id: event.messageId,
-        parentId: state.follows,
         role: event.role === "user" ? "user" : "assistant",
         parts: [],
         state: "running",
@@ -481,7 +440,6 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
       return {
         ...state,
         messages: [...state.messages, started],
-        leafId: started.id,
         writing: started.id,
         thinking: null,
       };
@@ -520,8 +478,6 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
         ),
         writing: null,
         thinking: null,
-        follows: event.messageId,
-        leafId: event.messageId,
       };
     }
 
@@ -612,45 +568,6 @@ function opening(messageId: string): AguiEvent {
   return { type: "TEXT_MESSAGE_START", messageId, role: "assistant" };
 }
 
-/**
- * The messages without the one the refused turn added.
- *
- * **Only that one, and only if nothing hangs under it.** A message with a
- * child is one an answer is already being written under, and taking it away
- * would leave that answer with a parent the tree does not have -- which
- * assistant-ui refuses with an exception, so a refusal would take the whole
- * interface down with it.
- */
-function withoutAsked(state: ChatState): ChatMessage[] {
-  const asked = state.before?.asked ?? null;
-  if (asked === null) return state.messages;
-  const hasChild = state.messages.some((message) => message.parentId === asked);
-  if (hasChild) return state.messages;
-  return state.messages.filter((message) => message.id !== asked);
-}
-
-/**
- * That state, with the branch somewhere the messages really are.
- *
- * `leafId` and `follows` name messages, and a message that has just been
- * taken off the screen is not one of them. Falling back to what is left is a
- * guess, but it is a branch; naming something that is not there is an
- * exception thrown from inside the library on the next render.
- */
-function where(state: ChatState): ChatState {
-  const has = (id: string | null) =>
-    id === null || state.messages.some((message) => message.id === id);
-  const last = state.messages[state.messages.length - 1]?.id ?? null;
-  const leafId = has(state.leafId) ? state.leafId : last;
-  return {
-    ...state,
-    leafId,
-    // The branch, never what was there before: a `follows` that is not in the
-    // messages is not made good by another that may not be either.
-    follows: has(state.follows) ? state.follows : leafId,
-  };
-}
-
 /** That message, or `null`. */
 function find(state: ChatState, id: string): ChatMessage | null {
   return state.messages.find((message) => message.id === id) ?? null;
@@ -718,12 +635,11 @@ function ending(
 /**
  * Whether the store is still saying exactly what this state already holds.
  *
- * Only what is drawn: a message's place in the tree, who said it, and what it
- * says. Nothing else of a stored message is kept here.
+ * Only what is drawn: who said it, and what it says. Nothing else of a
+ * stored message is kept here.
  */
 function unchanged(already: ChatMessage, fresh: ChatMessage): boolean {
   return (
-    already.parentId === fresh.parentId &&
     already.role === fresh.role &&
     already.state === fresh.state &&
     already.detail === fresh.detail &&
@@ -744,7 +660,6 @@ function unchanged(already: ChatMessage, fresh: ChatMessage): boolean {
 function held(message: Message): ChatMessage {
   return {
     id: message.id,
-    parentId: message.parent_id,
     role: message.role,
     // Reasoning is shown and never stored (`docs/specs/conversations.md`), so
     // a message that came out of the store has text in it and nothing else.

@@ -10,11 +10,12 @@ export -- so what is here is deliberately small and explicit: nothing in it
 is shaped by LangChain, Pydantic AI, OpenAI or Anthropic, and every name is
 one the specs use.
 
-A conversation is a **tree**: every message has a parent, editing a question
-or regenerating an answer adds a sibling, and nothing is overwritten
-(``docs/specs/conversations.md``). The rules over a collection of messages --
-which parents are legal, what a branch is, which leaf a conversation opens on
--- are pure functions in ``robinauts.core.conversation_tree``, and the one
+A conversation is **stored** as a tree: every message has a parent, editing
+a question or regenerating an answer writes a new message beside the old
+one, and nothing is overwritten (``docs/specs/conversations.md``). What a
+reader sees is one path of it. The rules over a collection of messages --
+which parents are legal, which path is the visible one -- are pure functions
+in ``robinauts.core.conversation_tree``, and the one
 encoding of all this is ``robinauts.core.conversation_format``. A record here
 holds and checks; it does not decide and it does not serialise.
 
@@ -286,7 +287,7 @@ class Message:
 
     ``parent_id`` is ``None`` for a root. A conversation has one root
     ordinarily and gains another when its first question is edited, which is
-    the same branching as anywhere else in the tree.
+    the same as an edit anywhere else in the tree.
 
     Token counts are **not** recorded. Usage reporting is planned, and whether
     to keep the provider's raw counts before it exists is open
@@ -347,7 +348,7 @@ class Message:
 
 @dataclass(frozen=True, slots=True)
 class Conversation:
-    """A conversation: one owner, one agent, and the branch it opens on.
+    """A conversation: one owner, one agent, a title and its times.
 
     Private to its owner in this version; sharing and projects are out
     (``docs/working-notes/poc-scope.md``), and so is the trash -- deleting is
@@ -367,8 +368,6 @@ class Conversation:
     updated_at: datetime
     title: str = ""
     """Empty until the first question gives it one (``core.derive_title``)."""
-    active_leaf_id: uuid.UUID | None = None
-    """The message its author was last on; the branch it opens on."""
 
     def __post_init__(self) -> None:
         checked_uuid(self.id, "a conversation's id")
@@ -377,5 +376,3 @@ class Conversation:
         checked_line(self.title, "a conversation's title", MAX_TITLE_CHARS)
         checked_instant(self.created_at, "created_at")
         checked_instant(self.updated_at, "updated_at")
-        if self.active_leaf_id is not None:
-            checked_uuid(self.active_leaf_id, "a conversation's active leaf")

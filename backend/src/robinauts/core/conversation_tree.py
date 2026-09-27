@@ -3,11 +3,26 @@
 
 """The rules of the tree: what a conversation's messages may look like.
 
-A conversation is a tree, not a list (``docs/specs/conversations.md``):
-editing a question or regenerating an answer adds a **sibling**, the earlier
-branch is kept, and nothing is overwritten. Everything that follows from that
-is here, as pure functions over a collection of messages -- the store hands
-them over, this says what they mean.
+A conversation is **stored** as a tree and **shown** as one thread
+(``docs/specs/conversations.md``). Editing a question or regenerating an
+answer writes a new message beside the old one, under the same parent, and
+nothing is overwritten; what a reader sees is the **visible path**, the walk
+from a root to the newest leaf. Everything the edit put aside is still in
+the tree, off that path: that is how an edited-away message is soft-deleted
+-- no column says so, the shape does -- and how its lineage is kept for
+analytics, which reads the whole tree. Nothing else does: every other reader
+is handed ``visible_path`` and never a message off it. Everything that
+follows from that is here, as pure functions over a collection of messages
+-- the store hands them over, this says what they mean.
+
+**The visible path is the newest leaf's**, by the one order every message
+has -- ``created_at``, then id. It is the whole rule, and it holds because an
+edit or a regeneration always writes the newest message, and because a
+conversation has one run at a time, so an older branch can never gain a
+newer message than the one that put it aside. The one moment it does not
+hold is a regeneration in flight, which has put the old answer aside before
+writing anything: then the thread ends at what the run is extending
+(``visible_path(extending=...)``).
 
 The invariants, all of them refused loudly rather than worked around:
 
@@ -29,8 +44,9 @@ changes nothing about the shape of a conversation.
 
 **More than one root is legal.** Editing the first question of a conversation
 gives the new question the same parent as the old one -- which is nothing --
-so a conversation gains a second root. That is the same branching as anywhere
-else in the tree, and the only place it looks different.
+so a conversation gains a second root, and the visible path begins there.
+That is the same as an edit anywhere else in the tree, and the only place it
+looks different.
 
 **The conversation is read once.** A ``ConversationTree`` is every message by
 its id, in order, and every parent's children in order, built in one pass and
@@ -71,7 +87,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from robinauts.domain import (
-    Conversation,
     InvalidMessageTreeError,
     Message,
     MessageNotFoundError,
@@ -145,8 +160,6 @@ class ConversationTree:
     """Every message by its id. Read-only, as is everything here."""
     below: Mapping[uuid.UUID | None, tuple[Message, ...]] = field(init=False, default_factory=dict)
     """The children of each message, in order; the roots under ``None``."""
-    among: Mapping[uuid.UUID, int] = field(init=False, default_factory=dict)
-    """Where each message falls among the branches beside it."""
 
     def __post_init__(self) -> None:
         checked_uuid(self.conversation_id, "a conversation's id")
@@ -161,11 +174,8 @@ class ConversationTree:
             at[message.id] = message
         ordered = tuple(sorted(at.values(), key=_order))
         below: dict[uuid.UUID | None, list[Message]] = {}
-        among: dict[uuid.UUID, int] = {}
         for message in ordered:
-            siblings = below.setdefault(message.parent_id, [])
-            among[message.id] = len(siblings)
-            siblings.append(message)
+            below.setdefault(message.parent_id, []).append(message)
         conversations = {message.conversation_id for message in ordered}
         if conversations - {self.conversation_id}:
             raise InvalidMessageTreeError(
@@ -181,7 +191,6 @@ class ConversationTree:
             "below",
             MappingProxyType({parent: tuple(kept) for parent, kept in below.items()}),
         )
-        object.__setattr__(self, "among", MappingProxyType(among))
         self._check_shape()
 
     def _check_shape(self) -> None:
@@ -219,29 +228,14 @@ class ConversationTree:
         except KeyError:
             raise MessageNotFoundError(f"no message {message_id} in this conversation") from None
 
-    def children_of(self, message_id: uuid.UUID | None) -> tuple[Message, ...]:
-        """The messages hanging under ``message_id``; the roots for ``None``."""
-        return self.below.get(message_id, ())
-
-    def siblings_of(self, message_id: uuid.UUID) -> tuple[Message, ...]:
-        """The branches ``message_id`` is one of, itself included, oldest first.
-
-        What the interface counts when it offers "2 of 3": an edited question
-        and a regenerated answer are siblings of what they were made from.
-        """
-        return self.children_of(self.message_at(message_id).parent_id)
-
     def leaves(self) -> tuple[Message, ...]:
         """The messages nothing hangs under: the end of each branch."""
         return tuple(message for message in self.messages if message.id not in self.below)
 
-    # --- branches ---
+    # --- the visible path ---
 
     def path_to(self, leaf_id: uuid.UUID) -> tuple[Message, ...]:
-        """The path from a root down to ``leaf_id``: the history an engine is sent.
-
-        This is what a branch *is*.
-        """
+        """The path from a root down to ``leaf_id``: the history an engine is sent."""
         path: list[Message] = []
         current: Message | None = self.message_at(leaf_id)
         while current is not None:
@@ -252,59 +246,40 @@ class ConversationTree:
         path.reverse()
         return tuple(path)
 
-    def branches_along(self, leaf_id: uuid.UUID) -> tuple[Branch, ...]:
-        """The path to ``leaf_id``, each message with the branches beside it.
+    def visible_leaf(self) -> Message | None:
+        """The newest leaf: the end of the one thread a reader sees.
 
-        Everything the interface needs to draw a conversation and offer its
-        other branches, in one walk.
+        ``None`` while the conversation is empty. The newest by the order
+        every message has -- ``created_at``, then id -- and not the leaf of
+        whichever branch began last: the message an edit or a regeneration
+        wrote is the newest there is, so its branch is the visible one.
         """
-        return tuple(
-            Branch(
-                message=message,
-                siblings=tuple(sibling.id for sibling in self.children_of(message.parent_id)),
-                at=self.among[message.id],
-            )
-            for message in self.path_to(leaf_id)
-        )
+        leaves = self.leaves()
+        return leaves[-1] if leaves else None
 
-    def default_leaf(self, conversation: Conversation) -> Message | None:
-        """The message a conversation opens on; ``None`` while it is empty.
+    def visible_path(self, *, extending: uuid.UUID | None = None) -> tuple[Message, ...]:
+        """The one thread a reader sees: a root down to the newest leaf, oldest first.
 
-        "A conversation opens on the branch its author was last on"
-        (``docs/specs/conversations.md``). That is ``active_leaf_id``. If what
-        it names has since been answered, the author is at the end of one of
-        the branches below it, and the one they are on is **the branch whose
-        last message is the newest** -- not the one whose first message was. A
-        conversation whose last position names nothing -- never opened, or a
-        branch since deleted -- opens by the same rule over the whole tree.
+        Everything a reader other than analytics is handed. A message off
+        this path was put aside by an edit or a regeneration and is kept in
+        the tree for that reason alone.
+
+        **While a run is in flight** the thread ends where the run is
+        writing: ``extending`` is the message the run's next one will hang
+        under -- the last it completed, or the question it answers
+        (``core.resume_point``'s ``follows``) -- and the path is the path to
+        it. A regeneration writes nothing until its first answer completes,
+        so until then the newest leaf is still the answer being replaced, or
+        whatever came after it, and the thread by the newest leaf would show
+        what the run is about to put aside, with the new answer arriving
+        below it. For every other turn the two agree: the question just
+        asked, or the answer just completed, is the newest leaf. An
+        ``extending`` that is not here is ``MessageNotFoundError``.
         """
-        if conversation.id != self.conversation_id:
-            raise InvalidMessageTreeError(
-                f"these messages do not belong to conversation {conversation.id}"
-            )
-        if not self.messages:
-            return None
-        start = self.at.get(conversation.active_leaf_id) if conversation.active_leaf_id else None
-        return sorted(self._leaves_under(start), key=_order)[-1]
-
-    def _leaves_under(self, start: Message | None) -> list[Message]:
-        """The ends of the branches under ``start``; every leaf if it is ``None``."""
-        if start is None:
-            return list(self.leaves())
-        found: list[Message] = []
-        stack = [start]
-        seen = 0
-        while stack:
-            current = stack.pop()
-            seen += 1
-            if seen > len(self.messages):
-                raise InvalidMessageTreeError("this conversation walks in circles")
-            children = self.children_of(current.id)
-            if not children:
-                found.append(current)
-            else:
-                stack.extend(children)
-        return found
+        if extending is not None:
+            return self.path_to(extending)
+        leaf = self.visible_leaf()
+        return () if leaf is None else self.path_to(leaf.id)
 
     # --- turns ---
 
@@ -325,35 +300,13 @@ class ConversationTree:
             current = self.message_at(current.parent_id)
         return current
 
-    def branches_of(self, message_id: uuid.UUID) -> Branch:
-        """One message and the branches it is one of."""
-        message = self.message_at(message_id)
-        return Branch(
-            message=message,
-            siblings=tuple(sibling.id for sibling in self.children_of(message.parent_id)),
-            at=self.among[message.id],
-        )
-
-    def parent_for_edit(self, message_id: uuid.UUID) -> uuid.UUID | None:
-        """Where an edit of ``message_id`` attaches: beside it, under its parent.
-
-        Editing never overwrites; the new question is a sibling of the old
-        one, and the old branch stays where it was.
-        """
-        message = self.message_at(message_id)
-        if message.role is not Role.USER:
-            raise InvalidMessageTreeError(
-                f"only a question is edited, not a message of role {message.role.value!r}"
-            )
-        return message.parent_id
-
     def parent_for_regenerate(self, message_id: uuid.UUID) -> uuid.UUID:
         """Where a regeneration of ``message_id`` attaches: under its own question.
 
         A turn may have produced several messages, so the new answer hangs
         where the whole turn hung -- under the question -- and not under
         whatever the old answer happened to follow. The earlier turn is kept
-        and can be revisited.
+        in the tree, off the visible path.
         """
         message = self.message_at(message_id)
         if message.role is not Role.ASSISTANT:
@@ -402,25 +355,6 @@ def tree_of_stored(messages: Iterable[Message], *, conversation_id: uuid.UUID) -
 
 def _order(message: Message) -> tuple[object, ...]:
     return (message.created_at, message.id.bytes)
-
-
-@dataclass(frozen=True, slots=True)
-class Branch:
-    """One message of a path, and the branches it is one of.
-
-    What the interface shows as "2 of 3" beside a message, and what it moves
-    between: ``siblings`` is every message hanging where this one hangs,
-    oldest first, and ``at`` is where this one falls among them.
-    """
-
-    message: Message
-    siblings: tuple[uuid.UUID, ...]
-    at: int
-
-    @property
-    def how_many(self) -> int:
-        """How many branches there are here. One means there is no choice."""
-        return len(self.siblings)
 
 
 def check_tree(messages: Iterable[Message], *, conversation_id: uuid.UUID) -> tuple[Message, ...]:
