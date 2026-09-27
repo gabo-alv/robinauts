@@ -123,4 +123,4 @@ eslint, build) passed; full suite against a throwaway Postgres 2967 passed
 Not done / to watch: for step 5, a turn in a conversation whose model was
 removed is the same 404 as a missing conversation while opening it is 200;
 the frontend explains it by comparing the conversation's `model` with
-`GET /api/models`. Step 5 still starts by bringing 3e02925 across.
+`GET /api/models`.

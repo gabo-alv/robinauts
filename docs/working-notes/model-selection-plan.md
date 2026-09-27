@@ -1,7 +1,7 @@
 # Plan: the user picks the model
 
 Written 2026-09-27 on `feature/model-selection`, after the agent line under
-a conversation's title and the always-shown agent picker (3e02925). Revised
+a conversation's title and the always-shown agent picker (merged in #16). Revised
 the same day against main at #18 (one visible thread, the schema version
 fixed at 1), with the questions it ended on settled. Not a spec: the
 decisions, what they cost across the codebase, and the order to build them
@@ -138,13 +138,6 @@ One stacked branch per step, reviewed and committed one at a time, as the
 POC steps were ([three-agent recipe](poc-progress.md)). Each step leaves
 every check green.
 
-**The base.** The always-shown agent picker and the agent line (3e02925)
-were made on a branch cut before #16–#18 and are not on main. Steps 1–4 and
-6 do not touch the frontend and need nothing from it. Step 5 does: it
-begins by bringing 3e02925 across, which conflicts in `shell/Shell.tsx` and
-`shell/Shell.test.tsx` and has to be resolved by hand against the one
-visible thread, or that commit lands on main first on its own.
-
 1. **Specs and domain.** The spec sentences below; `ModelConfig.title` and
    `model_by_id`; `Conversation.model`; `UnknownModelError`; the parser.
    Tests: `test_models_config.py`, `test_conversation_domain.py`.
@@ -168,8 +161,7 @@ visible thread, or that commit lands on main first on its own.
    mapping, the OpenAPI snapshot, `wire.md`. Tests: `test_stream_routes.py`,
    `test_conversation_routes.py`, `test_api_access.py`,
    `test_openapi_snapshot.py`.
-5. **Frontend.** 3e02925 first (see the base, above). Then the hook, the
-   picker in both places, the plumbing into the
+5. **Frontend.** The hook, the picker in both places, the plumbing into the
    first message, the `PUT` on change. Tests: `AgentPicker.test.tsx` (or the
    sibling), `Shell.test.tsx`, `client.test.ts`, `runtime.test.tsx`; the
    fixtures in `src/test/conversations.ts` gain `model`.
