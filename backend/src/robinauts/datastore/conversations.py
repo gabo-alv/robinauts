@@ -129,6 +129,7 @@ from robinauts.domain import (
     RunEvent,
     RunNotFoundError,
     RunState,
+    checked_config_id,
     checked_line,
     reading_stored,
 )
@@ -267,9 +268,9 @@ UPDATE conversations SET updated_at = $2 WHERE id = $1
 """
 """Date it: the one column an append moves.
 
-Named columns, never the whole row read back and written again: a rename
-landing between the read and the write would be lost, and the contract has a
-test that is exactly that.
+Named columns, never the whole row read back and written again: a rename or a
+model change landing between the read and the write would be lost, and the
+contract has a test for each.
 """
 
 _TOUCH_CONVERSATION = "UPDATE conversations SET updated_at = $2 WHERE id = $1"
@@ -399,6 +400,24 @@ class PostgresConversationStore(ConversationStore):
             """,
             conversation_id,
             title,
+            now,
+        )
+        return None if row is None else _conversation(row)
+
+    async def set_model(
+        self, conversation_id: uuid.UUID, model: str, *, now: datetime
+    ) -> Conversation | None:
+        # The record's rule, kept before the statement, for the reason the
+        # rename gives: the column is plain text and would take anything.
+        checked_config_id(model, "a model's id")
+        _instant(now, "now")
+        row = await self._pool.fetchrow(
+            f"""
+            UPDATE conversations SET model = $2, updated_at = $3 WHERE id = $1
+            RETURNING {_CONVERSATION_COLUMNS}
+            """,
+            conversation_id,
+            model,
             now,
         )
         return None if row is None else _conversation(row)

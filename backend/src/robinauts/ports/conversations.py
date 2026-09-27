@@ -18,8 +18,8 @@ Two shapes cross it, and the difference is the whole of ``docs/layout.md``'s
 rule about stores and the platform's format:
 
 - a **conversation** and a **run** cross as records. Their fields are this
-  store's own indexed columns -- an owner, an agent, a title, the times, a
-  state -- and a store builds one from its columns inside
+  store's own indexed columns -- an owner, an agent, a model, a title, the
+  times, a state -- and a store builds one from its columns inside
   ``domain.reading_stored``.
 - a **message** and a **run event** cross as **documents**: the plain mapping
   the platform's format is written as, which a store keeps whole and hands
@@ -89,7 +89,8 @@ in the tests, not here.
 - an argument outside what the method takes: a ``limit`` outside 1 to
   ``MAX_PAGE`` or to ``MAX_SWEPT``, a position to read past that is negative,
   a cursor that does not parse, a **title** that is not the one bounded,
-  printable line a ``Conversation`` holds: ``InvalidValueError``. These are on
+  printable line a ``Conversation`` holds, a **model** that is not the
+  configuration id one holds: ``InvalidValueError``. These are on
   the methods that take them as well, and they are here so that this table is
   what its heading says.
 
@@ -245,6 +246,27 @@ class ConversationStore(ABC):
         of what it read before the write: what it read may be older than what
         is there, and an interface drawn from it would show a title that has
         already changed.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def set_model(
+        self, conversation_id: uuid.UUID, model: str, *, now: datetime
+    ) -> Conversation | None:
+        """Give it that model and date it ``now``; the conversation as it now is.
+
+        The model's id is held to what a ``Conversation`` holds -- the shape of
+        a configuration id (``domain.checked_config_id``) -- and anything else
+        is ``InvalidValueError`` before anything is written, as a title is on a
+        rename. **Whether the deployment offers that model is not asked
+        here**: a store knows no configuration, and the conversation keeps a
+        model the operator has since removed anyway (``docs/specs/agents.md``).
+        That is the application's check, before it calls this.
+
+        Dated like a rename, because it is the same kind of thing: its author
+        changing the conversation, which the listing, most recently updated
+        first, should show. ``None`` if there was none, and the **written**
+        record otherwise, for the reason ``rename_conversation`` gives.
         """
         raise NotImplementedError
 

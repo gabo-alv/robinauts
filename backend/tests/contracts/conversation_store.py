@@ -269,7 +269,7 @@ class ConversationStoreContract:
                 with pytest.raises(InvalidValueError):
                     await store.conversations_of(OWNER, limit=limit)
 
-    # Renaming, and the time.
+    # Renaming.
 
     @asyncio_test
     async def test_renaming_gives_the_title_and_dates_the_conversation(self) -> None:
@@ -319,6 +319,83 @@ class ConversationStoreContract:
             assert await store.touch_conversation(CONVERSATION, now=at(30)) is None
             assert await store.conversation_by_id(CONVERSATION) is None
 
+    # Changing the model.
+
+    @asyncio_test
+    async def test_changing_the_model_gives_it_dates_it_and_changes_nothing_else(
+        self,
+    ) -> None:
+        async with self.opened() as store:
+            kept = conversation()
+            await store.add_conversation(kept)
+
+            written = await store.set_model(CONVERSATION, "gpt-5-5", now=at(30))
+
+            # Everything else -- the owner, the agent, the engine, the title
+            # and when it began -- is what it was.
+            assert written == replace(kept, model="gpt-5-5", updated_at=at(30))
+            assert await store.conversation_by_id(CONVERSATION) == written
+            listed = await store.conversations_of(OWNER, limit=10)
+            assert listed.conversations == (written,)
+
+    @asyncio_test
+    async def test_the_model_changes_again_and_a_rename_leaves_the_last_one(self) -> None:
+        async with self.opened() as store:
+            await store.add_conversation(conversation())
+
+            await store.set_model(CONVERSATION, "gpt-5-5", now=at(10))
+            await store.set_model(CONVERSATION, "gemini-2-5-pro", now=at(20))
+            renamed = await store.rename_conversation(CONVERSATION, "Mine", now=at(30))
+
+            assert renamed is not None
+            assert (renamed.model, renamed.title) == ("gemini-2-5-pro", "Mine")
+            assert await store.conversation_by_id(CONVERSATION) == renamed
+
+    @asyncio_test
+    async def test_a_model_no_conversation_could_hold_is_refused(self) -> None:
+        # A model is named by a configuration id, and the check runs before the
+        # write, so the conversation keeps the model and the time it had. That
+        # the deployment offers the model is not the store's to know.
+        async with self.opened() as store:
+            kept = conversation()
+            await store.add_conversation(kept)
+
+            for nonsense in (None, 7, "", "GPT 5.5", "gpt\n5", "a \x00 in it", "x" * 1000):
+                with pytest.raises(InvalidValueError):
+                    await store.set_model(
+                        CONVERSATION,
+                        nonsense,  # type: ignore[arg-type]
+                        now=at(5),
+                    )
+
+            assert await store.conversation_by_id(CONVERSATION) == kept
+
+    @asyncio_test
+    async def test_changing_the_model_of_what_is_not_there_says_so_and_stores_nothing(
+        self,
+    ) -> None:
+        async with self.opened() as store:
+            await store.add_conversation(conversation())
+            assert await store.delete_conversation(CONVERSATION, now=at(9))
+
+            assert await store.set_model(CONVERSATION, "gpt-5-5", now=at(30)) is None
+            assert await store.set_model(OTHER_CONVERSATION, "gpt-5-5", now=at(30)) is None
+            assert await store.conversation_by_id(CONVERSATION) is None
+            assert await store.conversation_by_id(OTHER_CONVERSATION) is None
+
+    @asyncio_test
+    async def test_changing_one_conversations_model_leaves_the_others(self) -> None:
+        async with self.opened() as store:
+            other = conversation(id=OTHER_CONVERSATION)
+            await store.add_conversation(conversation())
+            await store.add_conversation(other)
+
+            await store.set_model(CONVERSATION, "gpt-5-5", now=at(30))
+
+            assert await store.conversation_by_id(OTHER_CONVERSATION) == other
+
+    # Touching, and the time.
+
     @asyncio_test
     async def test_touching_dates_the_conversation_and_changes_nothing_else(self) -> None:
         async with self.opened() as store:
@@ -339,6 +416,8 @@ class ConversationStoreContract:
 
             with pytest.raises(InvalidValueError):
                 await store.rename_conversation(CONVERSATION, "Mine", now=naive)
+            with pytest.raises(InvalidValueError):
+                await store.set_model(CONVERSATION, "gpt-5-5", now=naive)
             with pytest.raises(InvalidValueError):
                 await store.touch_conversation(CONVERSATION, now=naive)
             with pytest.raises(InvalidValueError):
@@ -540,6 +619,26 @@ class ConversationStoreContract:
             found = await store.conversation_by_id(CONVERSATION)
             assert found is not None
             assert found.title == "Renamed"
+            assert found.updated_at in {at(5), at(6)}
+            assert len(await store.messages_of(CONVERSATION)) == 1
+
+    @asyncio_test
+    async def test_a_model_change_and_an_append_at_once_keep_both(self) -> None:
+        # The rename's race, over the other column a person changes: the model
+        # chosen for the next turn must not be lost to an append that wrote
+        # back the row it read, nor the append's time to the change.
+        async with self.opened() as store:
+            await store.add_conversation(conversation())
+            first = question()
+
+            await asyncio.gather(
+                store.set_model(CONVERSATION, "gpt-5-5", now=at(5)),
+                store.append_message(first, message_to_data(first), now=at(6)),
+            )
+
+            found = await store.conversation_by_id(CONVERSATION)
+            assert found is not None
+            assert found.model == "gpt-5-5"
             assert found.updated_at in {at(5), at(6)}
             assert len(await store.messages_of(CONVERSATION)) == 1
 
