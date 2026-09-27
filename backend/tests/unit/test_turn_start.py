@@ -84,6 +84,9 @@ async def test_a_new_chat_stores_the_conversation_the_question_and_the_run_at_on
     assert stored is not None
     assert stored.owner_id == AUTHOR.id
     assert stored.agent == AGENT
+    # The agent's default is copied in: the conversation names its model
+    # from the start rather than deferring to the agent (docs/specs/agents.md).
+    assert stored.model == begun_turn.conversation.model == wiring.definition.model
     assert [message.text for message in await stored_messages(wiring.store, stored.id)] == [
         "What is a robinaut?"
     ]

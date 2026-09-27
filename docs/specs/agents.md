@@ -3,13 +3,25 @@
 ## Agents
 
 - The operator defines named **agents** in the configuration: a name, a
-  system prompt, a model, and the engine that runs it.
+  system prompt, a **default** model, and the engine that runs it.
 - A user chooses an agent when starting a conversation.
 - Users do not create agents. That is planned.
+- **The model is the conversation's.** When a conversation starts it takes
+  its agent's default, unless its author picks another of the models the
+  operator configured, and the author may change it at any point after. A
+  change takes effect at the next turn: a turn already running keeps the
+  model it started with, and every answer records the model that produced
+  it ([conversations.md](conversations.md)).
+- **A model the deployment no longer offers refuses the turn**: it is not
+  there, and is refused exactly as an agent the operator has removed is
+  (below); which model it was goes to the log. There is no falling back to
+  the agent's default: the point of choosing is knowing who answers.
 - The engine is a property of the agent. Both engines run side by side in
-  one deployment. Changing an agent's engine or model takes effect at the
-  next turn of its existing conversations — which is the swap the
-  persistence design guarantees.
+  one deployment. Changing an agent's engine takes effect at the next turn
+  of its existing conversations — which is the swap the persistence design
+  guarantees. Changing an agent's **model** reaches new conversations only:
+  the default was copied into each existing one when it started, and what a
+  conversation runs on is read off the conversation alone.
 - **In this version that means the next turn after a restart.** The
   configuration is read once, at start-up, and the definitions are handed to
   the controller then; a turn looks its agent up afresh, so nothing but a
@@ -94,8 +106,8 @@ runs every turn the same way:
    the events, which the UI watches ([wire.md](wire.md)).
 3. Translate each new message into the platform's format and append it to
    the conversation as it is produced.
-4. The next turn starts again from step 1, with whichever engine and
-   vendor the agent has at that moment.
+4. The next turn starts again from step 1, with whichever engine the agent
+   has at that moment and whichever model the conversation names.
 
 - The LangGraph engine compiles its graph without a checkpointer; the
   Pydantic AI engine passes `message_history`. Neither remembers anything
@@ -114,9 +126,11 @@ runs every turn the same way:
   credential chain). Keys are read at start-up, never stored in the
   database, never logged, never sent to the browser. Users do not supply
   keys.
-- The operator declares providers and models; agents refer to a model by
-  the platform's own id for it. The configuration is the platform's, not
-  either framework's.
+- The operator declares providers and models; agents and conversations
+  refer to a model by the platform's own id for it. The configuration is the
+  platform's, not either framework's.
+- A model may have a `title`, the name a person picks it by, as an agent
+  has; left out, it is the model's id.
 - A provider's `kind` names either a **vendor** — `anthropic`, `openai` —
   or a **protocol at an address the operator gives**:
   `anthropic-compatible` is an endpoint that speaks Anthropic's Messages
@@ -191,7 +205,8 @@ runs every turn the same way:
   identity providers people sign in with, and one file cannot have a table
   that means one of them here and the other there. `timeout_seconds` (per
   model call) and `max_output_tokens` are optional; what they default to is
-  the platform's and the engine's business respectively.
+  the platform's and the engine's business respectively. `title` is optional
+  too, and is the model's id when it is left out.
 
 ```toml
 [model_providers.anthropic]
@@ -201,6 +216,7 @@ api_key_env = "ROBINAUTS_ANTHROPIC_KEY"
 [models.sonnet]
 provider = "anthropic"
 name = "claude-sonnet-5"
+title = "Claude Sonnet 5"
 timeout_seconds = 120
 max_output_tokens = 8192
 

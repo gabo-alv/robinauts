@@ -348,7 +348,7 @@ class Message:
 
 @dataclass(frozen=True, slots=True)
 class Conversation:
-    """A conversation: one owner, one agent, a title and its times.
+    """A conversation: one owner, one agent, a model, a title and its times.
 
     Private to its owner in this version; sharing and projects are out
     (``docs/working-notes/poc-scope.md``), and so is the trash -- deleting is
@@ -364,6 +364,18 @@ class Conversation:
     """The user whose conversation it is. Every route checks it."""
     agent: str
     """The agent's id in the configuration; a conversation is bound to one."""
+    model: str
+    """The platform's id for the model its next turn runs on.
+
+    The agent's default, copied in when the conversation starts unless its
+    author picked another, and changeable at any point after
+    (``docs/specs/conversations.md``). **Always there**, never "whatever the
+    agent says": what a conversation runs on is read off the conversation
+    alone, and a change to the agent's default reaches new conversations only.
+    Checked for its spelling and nothing else -- whether the deployment still
+    offers it is asked at each turn, and one it no longer does refuses that
+    turn (``ModelsConfig.model_by_id``).
+    """
     created_at: datetime
     updated_at: datetime
     title: str = ""
@@ -373,6 +385,7 @@ class Conversation:
         checked_uuid(self.id, "a conversation's id")
         checked_uuid(self.owner_id, "a conversation's owner")
         checked_config_id(self.agent, "an agent's id")
+        checked_config_id(self.model, "a model's id")
         checked_line(self.title, "a conversation's title", MAX_TITLE_CHARS)
         checked_instant(self.created_at, "created_at")
         checked_instant(self.updated_at, "updated_at")

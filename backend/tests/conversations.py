@@ -123,6 +123,7 @@ def conversation(**changes: object) -> Conversation:
         "id": CONVERSATION,
         "owner_id": OWNER,
         "agent": AGENT,
+        "model": MODEL,
         "created_at": at(0),
         "updated_at": at(0),
         "title": "What is a robinaut?",

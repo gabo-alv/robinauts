@@ -634,6 +634,7 @@ class Turns:
             id=conversation_id,
             owner_id=user.id,
             agent=definition.id,
+            model=definition.model,
             created_at=now,
             updated_at=now,
             title=derive_title((message,)),

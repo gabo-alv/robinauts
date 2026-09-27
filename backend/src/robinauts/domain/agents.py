@@ -3,7 +3,7 @@
 
 """Agents are configuration: the engine that runs one, and how ids are spelt.
 
-An agent is a name, a system prompt, a model and an engine
+An agent is a name, a system prompt, a default model and an engine
 (``docs/specs/agents.md``); the operator writes them in the configuration and
 users do not create them. What the conversation format needs of it is here:
 the engine a message was produced by, and the shape of the ids an agent and a
@@ -31,7 +31,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
-from robinauts.domain.errors import InvalidValueError
+from robinauts.domain.errors import InvalidValueError, UnknownModelError
 from robinauts.domain.values import checked_line, checked_text, describe
 
 MAX_CONFIG_ID_CHARS = 40
@@ -117,7 +117,13 @@ class AgentDefinition:
     system_prompt: str
     """What the agent is told before the conversation. May be empty."""
     model: str
-    """The platform's own id for the model, not the vendor's name for it."""
+    """The platform's own id for its **default** model, not the vendor's name for it.
+
+    Copied into a conversation when it starts, unless its author picks another
+    of the configured models, and read off the conversation from then on
+    (``Conversation.model``). So a change to it reaches new conversations
+    only.
+    """
     engine: Engine
 
     def __post_init__(self) -> None:
@@ -188,6 +194,13 @@ never sees.
 
 MAX_MODEL_NAME_CHARS = 200
 """The longest a vendor's name for a model may be, such as ``claude-sonnet-5``."""
+
+MAX_MODEL_TITLE_CHARS = MAX_AGENT_TITLE_CHARS
+"""The longest a model's title may be.
+
+An agent's bound, because a model is picked beside an agent, in the same kind
+of place, and one bound is one thing for an operator to learn.
+"""
 
 MAX_BASE_URL_CHARS = 500
 """The longest a configured endpoint's URL may be (``KINDS_WITH_BASE_URL``)."""
@@ -349,12 +362,12 @@ class ModelProviderConfig:
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
-    """One model an agent may be pointed at: whose it is, and what it is called.
+    """One model a conversation may run on: whose it is, and what it is called.
 
     The platform's id (``id``) and the vendor's name for it (``name``) are two
-    things on purpose: an agent refers to the platform's, so that changing
-    which vendor model an id means is a line of configuration and not a change
-    to every agent (``docs/specs/agents.md``).
+    things on purpose: an agent and a conversation refer to the platform's, so
+    that changing which vendor model an id means is a line of configuration
+    and not a change to every agent (``docs/specs/agents.md``).
     """
 
     id: str
@@ -382,6 +395,15 @@ class ModelConfig:
     to the client and moves with the vendor's models. An engine that must send
     one says what it sends.
     """
+    title: str = ""
+    """What a person picks it by; empty is the model's id.
+
+    Optional in the configuration, as an agent's is, so that an operator who
+    does not care is not made to write the id twice, and one who does can
+    write "Claude Sonnet 5" rather than ``sonnet-via-openrouter``. The record
+    fills the id in itself, so every reader finds a title and none of them
+    has to know the rule.
+    """
 
     def __post_init__(self) -> None:
         checked_config_id(self.id, "a model's id")
@@ -389,6 +411,11 @@ class ModelConfig:
         checked_line(self.name, "a model's name", MAX_MODEL_NAME_CHARS)
         if not self.name.strip():
             raise InvalidValueError("a model has a name: what the vendor calls it")
+        checked_line(self.title, "a model's title", MAX_MODEL_TITLE_CHARS)
+        if not self.title:
+            object.__setattr__(self, "title", self.id)
+        elif not self.title.strip():
+            raise InvalidValueError("a model's title is what a person picks it by, not spaces")
         if (
             isinstance(self.timeout_seconds, bool)
             or not isinstance(self.timeout_seconds, int | float)
@@ -454,6 +481,21 @@ class ModelsConfig:
     def model_for(self, agent: AgentDefinition) -> ModelConfig:
         """The model that agent runs on. Whole by construction, so this cannot miss."""
         return self.models[agent.model]
+
+    def model_by_id(self, model_id: str) -> ModelConfig:
+        """The model of that id; ``UnknownModelError`` if this deployment has none.
+
+        Unlike ``model_for`` this can miss: the id is one a conversation
+        carries (``docs/specs/agents.md``), chosen by a person or copied from
+        an agent's default when the conversation started, and the operator may
+        have removed that model since. That is refused as not there, the way a
+        removed agent is, rather than answered by some other model.
+        """
+        checked_config_id(model_id, "a model's id")
+        found = self.models.get(model_id)
+        if found is None:
+            raise UnknownModelError(f"no model {model_id!r} is configured in this deployment")
+        return found
 
     def provider_for(self, model: ModelConfig) -> ModelProviderConfig:
         """The provider that model is reached through."""

@@ -128,6 +128,27 @@ class ConversationStoreContract:
             assert await store.conversation_by_id(kept.id) == kept
 
     @asyncio_test
+    async def test_a_conversation_keeps_its_model_through_every_read_and_write(self) -> None:
+        # The model is the conversation's, not the agent's (docs/specs/agents.md):
+        # one other than the default goes in and comes back out of every path a
+        # conversation is read by, and a rename or a touch leaves it alone.
+        async with self.opened() as store:
+            await store.add_conversation(conversation(model="gpt-5-5"))
+
+            found = await store.conversation_by_id(CONVERSATION)
+            listed = await store.conversations_of(OWNER, limit=10)
+            snapshot = await store.conversation_snapshot(CONVERSATION)
+            renamed = await store.rename_conversation(CONVERSATION, "Mine", now=at(30))
+            touched = await store.touch_conversation(CONVERSATION, now=at(31))
+
+            assert found is not None and found.model == "gpt-5-5"
+            assert [each.model for each in listed.conversations] == ["gpt-5-5"]
+            assert snapshot.conversation is not None
+            assert snapshot.conversation.model == "gpt-5-5"
+            assert renamed is not None and renamed.model == "gpt-5-5"
+            assert touched is not None and touched.model == "gpt-5-5"
+
+    @asyncio_test
     async def test_an_id_nobody_stored_finds_nothing_rather_than_refusing(self) -> None:
         async with self.opened() as store:
             assert await store.conversation_by_id(OTHER_CONVERSATION) is None

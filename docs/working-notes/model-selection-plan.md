@@ -148,9 +148,14 @@ visible thread, or that commit lands on main first on its own.
 1. **Specs and domain.** The spec sentences below; `ModelConfig.title` and
    `model_by_id`; `Conversation.model`; `UnknownModelError`; the parser.
    Tests: `test_models_config.py`, `test_conversation_domain.py`.
-2. **Storage.** The column, the schema version and hash, `set_model`,
-   creation with a model, the fake store, both contract suites.
-   Tests: `test_datastore_schema.py`, `test_postgres_schema.py`,
+   **And the storage that carries `Conversation.model`**, since the field
+   is required and every step leaves every check green, Postgres included:
+   the `conversations.model` column, `SCHEMA_SHA256` re-pinned, the store's
+   column lists and row mapping, and a contract test that a conversation's
+   model round-trips through both stores. A new chat takes its agent's
+   default (`test_turn_start.py`).
+2. **Storage: `set_model`.** On the port beside `rename_conversation`, in
+   both stores, with the contract suites. Tests:
    `contracts/conversation_store.py`, `test_fake_conversation_store.py`,
    `test_postgres_conversation_store.py`.
 3. **Application and port.** `Turns` with models; `begin(model_id=)`;

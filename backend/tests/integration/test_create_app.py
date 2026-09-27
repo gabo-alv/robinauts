@@ -308,6 +308,7 @@ async def test_a_conversation_is_listed_opened_renamed_and_deleted_over_http() -
                     id=uuid.uuid4(),
                     owner_id=owner,
                     agent="assistant",
+                    model="sonnet",
                     created_at=T0,
                     updated_at=T0,
                     title=ASKED,

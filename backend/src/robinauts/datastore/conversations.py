@@ -243,7 +243,7 @@ reached, so a violation means something is wrong here rather than with the
 call, and it propagates.
 """
 
-_CONVERSATION_COLUMNS = "id, owner_id, agent, title, created_at, updated_at"
+_CONVERSATION_COLUMNS = "id, owner_id, agent, model, title, created_at, updated_at"
 _RUN_COLUMNS = (
     "id, conversation_id, message_id, agent, engine, model, state,"
     " created_at, started_at, finished_at, error"
@@ -251,7 +251,7 @@ _RUN_COLUMNS = (
 
 _INSERT_CONVERSATION = f"""
 INSERT INTO conversations ({_CONVERSATION_COLUMNS})
-VALUES ($1, $2, $3, $4, $5, $6)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 """
 
 _LOCK_CONVERSATION = "SELECT agent FROM conversations WHERE id = $1 FOR UPDATE"
@@ -888,6 +888,7 @@ def _conversation(row: asyncpg.Record) -> Conversation:
             id=row["id"],
             owner_id=row["owner_id"],
             agent=row["agent"],
+            model=row["model"],
             title=row["title"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -916,6 +917,7 @@ def _conversation_values(conversation: Conversation) -> tuple[object, ...]:
         conversation.id,
         conversation.owner_id,
         conversation.agent,
+        conversation.model,
         conversation.title,
         conversation.created_at,
         conversation.updated_at,

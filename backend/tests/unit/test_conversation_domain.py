@@ -392,12 +392,27 @@ def test_a_conversation_has_an_owner_and_an_agent() -> None:
     assert (conversation().owner_id, conversation().agent) == (OWNER, AGENT)
 
 
+def test_a_conversation_names_the_model_it_runs_on() -> None:
+    """Always, and never "whatever the agent says": the agent's default is
+    copied in when the conversation starts, so there is no "no model"."""
+    assert conversation().model == MODEL
+    with pytest.raises(TypeError):
+        Conversation(  # type: ignore[call-arg]
+            id=CONVERSATION,
+            owner_id=OWNER,
+            agent=AGENT,
+            created_at=datetime(2026, 9, 21, 9, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 9, 21, 9, 0, tzinfo=UTC),
+        )
+
+
 def test_a_new_conversation_has_no_title_yet() -> None:
     assert (
         Conversation(
             id=CONVERSATION,
             owner_id=OWNER,
             agent=AGENT,
+            model=MODEL,
             created_at=datetime(2026, 9, 21, 9, 0, tzinfo=UTC),
             updated_at=datetime(2026, 9, 21, 9, 0, tzinfo=UTC),
         ).title
@@ -419,6 +434,9 @@ def test_a_title_is_one_line_of_printable_text(title: str) -> None:
         {"id": "not a uuid"},
         {"owner_id": None},
         {"agent": "No Such Agent"},
+        {"model": "Claude Sonnet 5"},
+        {"model": None},
+        {"model": ""},
         {"created_at": NAIVE},
         {"updated_at": NAIVE},
         {"title": 7},
