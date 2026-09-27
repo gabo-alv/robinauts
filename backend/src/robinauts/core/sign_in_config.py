@@ -28,6 +28,12 @@ rather than in as many restarts as there are mistakes.
 Secrets are never in the file: a provider names the environment variable its
 client secret is read from, and the variable is read elsewhere, by the layer
 that may touch the environment.
+
+**One file, two parsers.** The same file holds the model tables
+(``core.models_config``), and each parser is handed the whole of it and reads
+its own share. So "unknown key" means unknown to *both*, which is what
+``TOP_LEVEL_KEYS`` below is for: a misspelt table is still refused, and a
+table that is simply the other parser's is not.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from robinauts.core.urls import normalise_issuer, normalise_origin
 from robinauts.domain import (
     DEFAULT_SCOPES,
     DEFAULT_SESSION_HOURS,
+    MAX_PROVIDER_ID_CHARS,
     MAX_SESSION_HOURS,
     TOKEN_ENDPOINT_AUTH_METHODS,
     AllowEntry,
@@ -50,9 +57,29 @@ from robinauts.domain import (
     ProviderConfig,
     SignInConfig,
     is_google_issuer,
+    is_provider_id,
 )
 
-TOP_LEVEL_KEYS = frozenset({"public_url", "session_hours", "providers", "allow"})
+SIGN_IN_KEYS = frozenset({"public_url", "session_hours", "providers", "allow"})
+"""The top-level tables sign-in is written in."""
+
+MODEL_KEYS = frozenset({"model_providers", "models", "agents"})
+"""The top-level tables the model half is written in (``core.models_config``).
+
+Named here, beside sign-in's own, because **one file holds both** and each
+parser is handed the whole of it: a table that belongs to the other parser is
+not an unknown key, and the one way for the two to agree about that is for
+both sets to be written down once. ``core.models_config`` imports these rather
+than repeating them.
+
+They are ``model_providers`` and not ``providers`` because ``providers`` is
+already taken, by the identity providers people sign in with: one file, two
+kinds of provider, and a table that meant one of them in one place and the
+other elsewhere would be the worst of both (``docs/specs/agents.md``).
+"""
+
+TOP_LEVEL_KEYS = SIGN_IN_KEYS | MODEL_KEYS
+"""Every table a configuration file may hold: what neither parser refuses."""
 PROVIDER_KEYS = frozenset(
     {
         "title",
@@ -65,7 +92,6 @@ PROVIDER_KEYS = frozenset(
     }
 )
 
-_PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _MATCHERS = {matcher.value: matcher for matcher in Matcher}
 
@@ -156,8 +182,11 @@ def _session_hours(data: Mapping[str, Any], problems: list[str]) -> float:
 
 def _provider(provider_id: object, table: object, problems: list[str]) -> ProviderConfig | None:
     where = f"providers.{provider_id}"
-    if not isinstance(provider_id, str) or not _PROVIDER_ID.fullmatch(provider_id):
-        problems.append(f"{where}: an id is up to 40 lower-case letters, digits, _ and -")
+    if not is_provider_id(provider_id):
+        problems.append(
+            f"{where}: an id is up to {MAX_PROVIDER_ID_CHARS} lower-case letters,"
+            f" digits, _ and -"
+        )
         return None
     if not isinstance(table, Mapping):
         problems.append(f"{where}: a table")

@@ -17,9 +17,13 @@ What an internal platform team deploys and controls.
   Until a production deployment exists the schema is edited in place and
   the database is recreated; after that, migrations upgrade it in place
   ([backend.md](backend.md)).
-- A restart lets active runs drain for a bounded time; the rest are marked
-  interrupted and can be retried by their authors ([runs.md](runs.md)).
-  Several backend processes may run against the one database.
+- A restart ends the runs that are in flight: each is marked interrupted,
+  and its author retries it by sending the message again
+  ([runs.md](runs.md)). Letting them **drain** for a bounded time first is
+  planned there too; the bounded window a shutdown has today is for ending
+  them and giving back what the process holds, not for finishing
+  them. Several backend processes may run against
+  the one database.
 - Outbound traffic: the identity providers at sign-in, and the model
   providers the operator configured. Nothing else.
 
@@ -27,9 +31,16 @@ What an internal platform team deploys and controls.
 
 - Files, version-controllable, with no secret in them: a secret is always
   given as the *name* of an environment variable.
+- **One file names the deployment**, and `ROBINAUTS_CONFIG` names the file.
+  It was `ROBINAUTS_AUTH_CONFIG` while sign-in was all the file held; that
+  name is still read, with a warning at start-up, and is deprecated. If both
+  are set, `ROBINAUTS_CONFIG` is what is read and the start-up log says so.
 - What the operator configures: sign-in providers, the allow list and the
   admins ([sign-in.md](sign-in.md)); model providers, models and agents
   ([agents.md](agents.md)); limits and retention (below).
+- The **local development mode** ([sign-in.md](sign-in.md)) may be given the
+  same file and reads only its model tables; a file that also holds sign-in
+  tables is a start-up refusal there.
 - Unknown keys are errors, and all problems are reported at once, at
   start-up.
 
@@ -75,5 +86,29 @@ is settled:
 
 - Whether the configuration is one file or several, and the key names.
   Sketches are in [sign-in.md](sign-in.md) and [agents.md](agents.md).
-- The `robinauts` command: `start`, `db init`, later `db migrate`, and
-  what else it needs.
+- The `robinauts` command: `start`, `db init`, `version`, later
+  `db migrate`, and what else it needs. `start` runs uvicorn with
+  `--proxy-headers` on and `--forwarded-allow-ips` naming the reverse proxy
+  in front, since that is where the scheme and the client address of a
+  request come from; `--dev-no-sign-in` is the local development mode and
+  refuses any bind address that is not loopback.
+- `--uds` binds a unix socket instead of an address, for a reverse proxy on
+  the same machine. A socket is a file, so it is on no network at all — and
+  **who on this machine may open it is the file's mode and its directory's**,
+  not something the socket gives for free. The command binds it itself, with
+  mode `0600` (this user alone) before it listens; `--uds-mode` widens that
+  for a proxy running as another user, which then belongs in a directory only
+  those two can enter. It cannot be given with `--host` or `--port`, the path
+  is refused rather than written over if something is already there, and it is
+  removed when the server stops. It satisfies the local development mode's
+  loopback rule.
+- With `--uds`, `--forwarded-allow-ips` defaults to `*`. A connection over a
+  socket has no address to compare with anything, and the only thing that can
+  connect is whatever the mode lets open the file — which is the proxy. **That
+  assumes the default mode**: a deployment that widens `--uds-mode` has
+  widened who may connect, and says `--forwarded-allow-ips` for itself.
+- The database is named by `ROBINAUTS_DATABASE_URL` and by nothing on a
+  command line: a url holds a password, and a command line is a shell
+  history. A database that cannot be opened — no server there, no such
+  database, credentials refused — is one line naming what the driver said,
+  and never the url it was given.

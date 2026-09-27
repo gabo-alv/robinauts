@@ -21,7 +21,7 @@ its own.
 ## Repository layout
 
     backend/     the Python backend (the `robinauts` package)
-    frontend/    the web UI (not there yet)
+    frontend/    the web UI (Vite, React, TypeScript)
     docs/        specs, decisions, legal records, working notes
     scripts/     the checks, one script per gate, which CI runs as they are
 
@@ -54,6 +54,9 @@ or one at a time:
     scripts/check-tests.sh      pytest, with the architecture contracts
     scripts/check-licences.sh   the dependency licence gate of DEPENDENCIES.md
     scripts/check-audit.sh      pip-audit over the whole locked set
+    scripts/check-frontend.sh   the frontend: format, lint, types, tests,
+                                the build with its licence gate, npm audit
+    scripts/check-wheel.sh      the wheel: built, looked inside, installed
     scripts/check-reuse.sh      reuse lint: every file states its licence
     scripts/check-dco.sh        sign-off on every commit of the branch
 
@@ -68,16 +71,135 @@ arguments on to the tool they wrap, so `scripts/check-tests.sh -k licence`
 does what you would expect. `check-dco.sh` takes a commit range and defaults
 to what this branch adds to `main`; CI runs it over the commits of the pull
 request, since the first commits of this repository predate the sign-off
-rule. `check-lint.sh`, `check-audit.sh` and `check-all.sh` take no arguments
-and say so rather than ignoring them — `check-audit.sh` reads pip-audit's
-JSON to make sure every pinned package was really looked at, and an argument
-that changed that output would quietly turn the check off.
+rule. `check-lint.sh`, `check-audit.sh`, `check-frontend.sh` and
+`check-all.sh` take no arguments and say so rather than ignoring them —
+`check-audit.sh` reads pip-audit's JSON to make sure every pinned package was
+really looked at, and `check-frontend.sh` is the frontend's whole CI job in
+order; an argument that changed either would quietly turn the check off.
+
+### The wheel
+
+A deployment is one wheel and one PostgreSQL
+([docs/specs/operations.md](docs/specs/operations.md)), and the wheel carries
+the **built frontend**: `frontend/dist` goes into the package as
+`robinauts/ui/`, which is what the backend serves under `/ui/`. So building
+one means building the interface first, which is what
+`scripts/build-wheel.sh` does:
+
+    scripts/build-wheel.sh /tmp/robinauts-wheel   # prints the path it built
+
+`scripts/check-wheel.sh` is the gate around it: it builds the wheel, looks
+inside it for the interface, the schema and the three licence files, installs
+it into an empty virtual environment and runs `robinauts version` out of it.
+It works in a temporary directory and leaves the checkout alone. It takes a
+few seconds beyond the frontend build and is part of `check-all.sh`; in CI it
+is the `wheel` job, and the artifact of a green run is what gets installed
+(there is no release workflow yet).
+
+**A wheel cannot be built without the interface.** `backend/hatch_build.py`
+refuses when `frontend/dist` has no `index.html`, or no
+`THIRD_PARTY_LICENSES.txt` beside it — one would install and serve a page
+saying the interface is not built, the other would redistribute other
+people's code without their notices. An **editable** install (`uv sync`) is
+exempt and is the only thing that is: a development checkout has no built
+frontend, the interface is developed against Vite's own server, and `/ui/`
+then answers the page that explains it.
+
+**Use `uv build --wheel`, through the script, and not plain `uv build`.** The
+source distribution is a copy of `backend/` and carries no interface, because
+the interface is not under `backend/`; a wheel built *from* an unpacked sdist
+therefore cannot carry one either, and is refused with a sentence saying so.
+`uv build` with no argument does exactly that — sdist, then wheel from the
+sdist — so it fails, on purpose. The sdist itself builds, and is not the
+deliverable. Nothing is left out of it beyond what is not in `backend/` in
+the first place.
+
+**Build one at a time in one checkout.** The licence files the build stages
+beside `pyproject.toml` are real files, so two builds of this project running
+at once would share them and the first to finish would take them out from
+under the second. Only a checkout is written to: in an unpacked sdist the
+files of those names are ones the distribution carries, and nothing here
+touches them.
+
+One script under `scripts/` is not a gate: `scripts/update-openapi.sh`
+rewrites `backend/openapi.json` from the routes as they are. The document is
+committed, and `check-tests.sh` fails when the file and the code disagree, so
+a change to the wire is something a reviewer reads in the diff. Run it after
+changing a route, and read what it wrote.
 
 `reuse` and `pip-audit` are not dependencies of the project: they run as
 isolated tools, from a version pinned in
 [scripts/tool-versions.sh](scripts/tool-versions.sh) and bumped by hand. That
 file is the one place for such pins, and CI reads uv's version from it too.
 [DEPENDENCIES.md](DEPENDENCIES.md) says why they stay out of the lockfile.
+
+### PostgreSQL for the tests
+
+Most of the suite needs nothing but Python. The tests under
+`backend/tests/integration/` need a PostgreSQL, and they are **given** one
+rather than starting one: set `ROBINAUTS_TEST_DATABASE_URL` to its URL and
+run the tests as usual.
+
+    ROBINAUTS_TEST_DATABASE_URL=postgresql://user@localhost/robinauts_test \
+        scripts/check-tests.sh
+
+Any PostgreSQL 14 or later will do, on your machine or anywhere you can
+reach it, as long as the account may create and drop schemas in that
+database: each test makes a schema of its own, named after a fresh UUID, sets
+the connection's `search_path` to it, and drops it when it ends. That is also
+how a deployment is expected to be set up — the schema the tables live in is
+the first entry on the path — and `check_schema` refuses to start when it is
+not.
+
+Nothing is left behind, two runs at once do not interfere, and no test needs
+a database to itself. CI runs them against a service container, which is the
+same arrangement — and in a time zone that is deliberately not UTC, so that a
+store reading a time as a wall clock fails there rather than in somebody's
+deployment.
+
+Without the variable those tests **skip**, with the reason printed, and
+everything else runs — so a contributor with no PostgreSQL to hand still
+gets a green `scripts/check-all.sh`. They are marked `io`, so
+`scripts/check-tests.sh -m "not io"` skips them even when the variable is
+set.
+
+Set `ROBINAUTS_REQUIRE_POSTGRES=1` and a missing database becomes a
+**failure** instead of a skip. CI sets it, because a skip that nobody sees is
+how a typo in the URL, or a service container that never started, quietly
+stops the database tests from running while the build stays green. It is
+checked at the end of the run, on what actually happened: a run with the
+variable set in which no database test ran is failed, and so is one narrowed
+with `-m`, `-k` or a path argument, since such a run cannot show anything
+about the tests it did not select. Narrow your runs freely — just without
+the variable. A run split across processes with `-n` is refused for the same
+reason rather than guessed at: the count is kept in one process, and
+`pytest-xdist` is not a dependency of this project. Unset, empty, `0`, `false`, `no` and `off` all mean "a skip is
+fine".
+
+No package that starts a PostgreSQL is a dependency of this project;
+[DEPENDENCIES.md](DEPENDENCIES.md) says why.
+
+### Changing the database schema
+
+`backend/src/robinauts/datastore/schema.sql` is the whole schema, and until
+there is a production deployment it is **one definition edited in place**:
+there are no migrations, and a database made from an older definition is
+recreated rather than upgraded ([docs/specs/backend.md](docs/specs/backend.md)).
+So `robinauts db init` applies the file to an **empty** database, does nothing
+to one already at this version, and refuses every other database there is; and
+every edit to that file comes with a bump of `SCHEMA_VERSION` in
+`datastore/schema.py` **and** of the `SCHEMA_SHA256` pinned beside it. A test
+fails until both are done, and says so; that pin is the only thing standing
+where a migration would otherwise be. (The version stays at 1 while nothing
+is deployed, so in practice it is the hash that is updated.) The file is
+hashed with `\n` line endings, which [.gitattributes](.gitattributes) keeps
+it checked out with everywhere.
+
+Constraint names in that file are part of its interface: the store turns a
+violation of `sessions_secret_hash_key` or `sessions_user_id_fkey` into an
+answer for its caller and lets every other one through as the bug it is, and
+it tells them apart by name. Renaming one without changing the store fails a
+test.
 
 ## Licence header
 
@@ -170,3 +292,17 @@ the allowed list; the pull request says why the dependency is needed; and
 the lockfile is committed. `scripts/check-licences.sh` enforces the licence
 rules over the whole locked set, and a licence it cannot resolve fails as
 surely as a forbidden one.
+
+npm has rules of its own, because its packages are compiled into a bundle
+that ships inside the wheel:
+[docs/contributing/js-dependencies.md](docs/contributing/js-dependencies.md).
+Read it before touching anything under `frontend/`. There are two gates.
+`frontend/scripts/check-licences.mjs` applies the policy of
+[DEPENDENCIES.md](DEPENDENCIES.md) to **everything the lockfile pins and npm
+installed**, with the development exceptions named — by package, version,
+scope and licence — in that document's "JavaScript build tooling" table, and
+it refuses a version in `package.json` that is not exact. The build then
+gates the **bundle** itself: what ends up in it, and nothing else, has to be
+on the allowed list with no exception at all, and
+`frontend/bundled-packages.txt` records what that was, written by the build
+and compared with the commit. `scripts/check-frontend.sh` runs both.

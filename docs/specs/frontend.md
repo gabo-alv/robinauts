@@ -70,18 +70,40 @@ neorc's rules (`neorc/contributing/js-dependencies.md`):
 - The typed API client is generated from the committed OpenAPI snapshot.
 - Content-Security-Policy: `default-src 'none'`; `script-src`, `font-src`,
   `connect-src` `'self'`; `style-src 'self' 'unsafe-inline'`;
-  `img-src 'self' data:`; `frame-ancestors 'none'`; plus `nosniff`.
+  `img-src 'self' data:`; `frame-ancestors 'none'`; plus `base-uri 'none'`
+  and `form-action 'none'`, which `default-src` does not cover — the page's
+  script and stylesheet are named relatively, so an injected `<base>` would
+  re-point both, and no form here posts anywhere. Plus `nosniff`, and
+  `X-Frame-Options: DENY` for a browser too old to read `frame-ancestors`.
+  On the interface's own answers only: an API response is JSON read by a
+  script and has no document to govern. A refusal at an interface path — a
+  file that is not there, a method these paths have not got — carries them
+  too, being an answer where a document could have been.
+- The interface's paths are read: `GET` and `HEAD`, and a write to one is a
+  `405` with `Allow: GET, HEAD`. Nothing under `/ui/` whose name begins with
+  a dot is served or packaged: a directory a build writes into is one an
+  editor or a stray `.env` writes into too.
 - Design tokens are CSS custom properties carried over from neorc; the
   Tailwind theme refers to them, so they survive a change of either
   Tailwind or the chat library.
-- Packages the styled components bring: `clsx`, `tailwind-merge`,
-  `class-variance-authority`, `lucide-react`, `tw-animate-css`, Radix.
-  `assistant-cloud` arrives as a dependency of `@assistant-ui/react`; it
-  is never configured.
+- Packages the styled components bring, as pinned on 2026-09-22 when they
+  were copied in: `clsx`, `tailwind-merge`, `class-variance-authority`,
+  `lucide-react`, `tw-animate-css`, Radix (the `radix-ui` package, which
+  `@assistant-ui/react` depends on anyway), and two the list did not expect —
+  `remark-gfm`, for the Markdown, and `tw-shimmer`, a second Tailwind plugin
+  the copied components are written against. The two Tailwind plugins are
+  reached only through `src/styles.css`, so they are named by hand in
+  `CSS_PACKAGES`. `assistant-cloud` arrives as a dependency of
+  `@assistant-ui/react`; it is never configured.
 - The wheel carries `THIRD_PARTY_LICENSES.txt`, listed in its
   `license-files`.
-
-## Open
-
-- The bundle size budget. neorc's 500 KB does not fit a chat UI with
-  Markdown and syntax highlighting; it is set once a first bundle exists.
+- **The bundle size budget is 400 KB**, everything the browser downloads,
+  gzipped — which is what the build's own gate measures and the only number
+  this is about. neorc's 500 KB was never going to fit a chat UI with
+  Markdown in it, and the real one was left open until there was a bundle to
+  measure: with the chat in it that is 278.6 KB (step 21, 2026-09-23), so the
+  budget is that with room for the features named above and none for a
+  dependency an order of magnitude too big. It is `SIZE_BUDGET_BYTES` in
+  `frontend/vite.config.ts` and the build fails over it; raising it is a
+  reviewed change with its reason written down
+  ([contributing/js-dependencies.md](../contributing/js-dependencies.md)).

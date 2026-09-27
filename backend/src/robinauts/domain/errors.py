@@ -10,6 +10,7 @@ while ``detail`` says what really happened and goes to the log.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from enum import StrEnum
 
@@ -35,6 +36,403 @@ class ConfigError(RobinautsError):
         if not self.problems:
             raise InvalidValueError("a ConfigError lists at least one problem")
         super().__init__("invalid configuration:\n" + "\n".join(self.problems))
+
+
+class UnsupportedContentError(InvalidValueError):
+    """Content the format names and this build does not carry.
+
+    An image, a file, a tool call, a tool result, a message of the ``tool``
+    role: every one of them has its place in the conversation format
+    (``docs/specs/conversations.md``) and none of them is built yet. Meeting
+    one is not a broken record -- it is a record from a version of the
+    platform that has more of the format than this one -- so it is refused by
+    name rather than read as something else.
+    """
+
+
+class UnsupportedFormatError(InvalidValueError):
+    """Data recorded in a version of the conversation format this build cannot read.
+
+    A build that guessed at the fields of a version it does not know would
+    write back a conversation it had misread. It stops instead.
+
+    **Only our own rows raise it.** A version is written and read by the
+    platform; a request carries the fields of a message and never a
+    ``format_version``, and the api that takes one must not accept one -- a
+    browser naming a version would be choosing how its message is read. So
+    this always means a row of ours, which is why it answers as a fault of
+    ours (500) and is read through ``StoredDataError`` on the paths that go to
+    the database.
+    """
+
+
+class StoredDataError(RobinautsError):
+    """A row of our own database that this build cannot read.
+
+    Whatever the reason -- a version above this build's, a kind of content it
+    does not carry, a tree that is no tree, a field of the wrong type -- it is
+    **not** something a request did, and the browser learns nothing from it:
+    it is answered like any other mistake of ours, and the whole of it goes to
+    the log. The cause is chained, so the log says what was really wrong.
+
+    ``robinauts.core`` raises it from the ``*_stored`` readers, which is what
+    the stores and the application read rows through.
+    """
+
+
+class NotFoundError(RobinautsError):
+    """Something was asked for by id and there is no such thing.
+
+    Also what someone is told when the thing exists and is not theirs: a
+    conversation nobody may see and a conversation that never existed answer
+    the same, because the difference is one only an attacker has a use for.
+    """
+
+
+class ConversationNotFoundError(NotFoundError):
+    """No conversation of that id, or none this person may see."""
+
+
+class MessageNotFoundError(NotFoundError):
+    """No message of that id in this conversation."""
+
+
+class RunNotFoundError(NotFoundError):
+    """No run of that id, or none in this person's conversation."""
+
+
+class UnknownAgentError(NotFoundError):
+    """No agent of that id is configured in this deployment.
+
+    Under ``NotFoundError`` because that is what it is -- a name that reaches
+    nothing -- and so that it answers the same fixed body as everything else
+    that is not there (``robinauts.api.errors``). An agent's id is not a
+    secret: the picker lists the ones there are (``docs/specs/agents.md``). It
+    is also what a conversation bound to an agent the operator has since
+    removed meets, and the detail, which reaches the log alone, says which of
+    the two it was.
+    """
+
+
+class NotTheOwnerError(RobinautsError):
+    """A conversation belongs to somebody else.
+
+    Raised where ownership is decided; what reaches the browser is a
+    ``NotFoundError``'s answer, so that an id cannot be probed for existence.
+    """
+
+
+class RunAlreadyActiveError(RobinautsError):
+    """The conversation already has a run going, and may have only one.
+
+    The person cancels it or waits (``docs/specs/runs.md``); a second run
+    would have two answers writing into one branch.
+    """
+
+
+class IllegalTransitionError(RobinautsError):
+    """A run cannot go from the state it is in to the one asked for."""
+
+
+class RunQuietError(RobinautsError):
+    """A run said nothing for so long that watching it was given up on.
+
+    Not a failure of the run and not a fault of the request: the run is still
+    active as far as the store is concerned, and nothing has been stored under
+    it for longer than a whole turn may take. That is what a run whose end
+    could not be written looks like, and what one whose process was killed
+    looks like (``docs/specs/runs.md``, known limits), and a watcher that
+    waited on either for ever would hold a request open for ever.
+
+    **It is raised only by the giving up**, and by nothing else: a watcher
+    whose stream simply ends has sent everything there is -- the run's
+    ``RunEnded``, or everything stored after the position it asked for of a
+    run that is over or is no longer there. So "the stream ended" and "the
+    stream was given up on" are told apart by what was raised rather than by
+    what was missing.
+    """
+
+
+class PositionTakenError(InvalidValueError):
+    """An event was offered a position of its run that is not the next one.
+
+    A run's events are numbered from ``FIRST_POSITION`` with no gaps, and the
+    application is the single writer of them: it reads the run's last position
+    and offers the one after it. So meeting this means the run moved on
+    between the two -- somebody ended it, or another process took it up -- and
+    the right answer is to stop writing into it, not to renumber and try
+    again.
+
+    Never something a request did: no browser names a position.
+    """
+
+
+class InvalidCursorError(InvalidValueError):
+    """The text offered as a listing's cursor is no cursor of this store's.
+
+    A cursor is a **position** inside the caller's own listing, written by a
+    store and read back by it, and it goes out to a browser and comes back --
+    so one that does not parse is refused as a value like any other, and one
+    that parses and was never issued is simply a position
+    (``docs/specs/conversations.md``).
+
+    Its own class because it is the one refusal of a listing that names a
+    **field**: whoever answers a request knows which parameter carried it
+    (``robinauts.api.conversation_routes``), and a class is how that is known
+    for certain rather than by being the only thing a call could have refused.
+    """
+
+
+class InvalidMessageTreeError(InvalidValueError):
+    """A collection of messages that is no conversation.
+
+    A parent that is not there, a cycle, two conversations mixed, an answer
+    to an answer: none of them can be shown, sent to a model or branched
+    from, so they are refused where they are read rather than where they are
+    drawn.
+    """
+
+
+class AuthenticationError(RobinautsError):
+    """The request carries no credential this deployment accepts.
+
+    Nobody is signed in, or the session cookie names a session that has ended.
+    The browser is told that and nothing more: which of the two it was is a
+    difference only an attacker has a use for.
+    """
+
+
+class CrossSiteRequestError(RobinautsError):
+    """A write that a page on another site sent, or may have sent.
+
+    A cookie goes with every request the browser makes, whoever asked for it,
+    so a write that arrives with one has to prove where it came from --
+    ``Origin``, or ``Sec-Fetch-Site`` (``docs/specs/sign-in.md``, "Request
+    protection"). There is no CSRF token; this is what stands in its place.
+    """
+
+
+class PayloadTooLargeError(RobinautsError):
+    """A request body larger than this deployment reads.
+
+    A bound on **what is read**, which is not the bound on what a record may
+    hold: the conversation format carries a message of sixty-four million
+    characters, and a wire that accepted one would let anybody signed in make
+    the deployment buffer and parse that much twice over
+    (``robinauts.api.protection``). What the two numbers mean is different --
+    one is what a store keeps, the other is what a request may spend -- and an
+    operator moves the second without the first moving
+    (``docs/specs/operations.md``).
+    """
+
+
+class UnsupportedMediaTypeError(RobinautsError):
+    """A write sent as something other than JSON.
+
+    A form, and the handful of types a page may ``fetch`` without a preflight,
+    cannot be ``application/json``: insisting on it is what keeps another
+    site's page from writing here at all, since asking for that type makes the
+    browser ask us first, and nothing here answers a preflight.
+    """
+
+
+DB_INIT_COMMAND = "robinauts db init"
+"""The command that creates the schema. The server never creates it itself.
+
+Named here because ``SchemaError`` is what an operator reads when the
+database is not the one this build was written against, and an error that
+says what is wrong without saying what to type is half an error.
+"""
+
+
+REDACTED = "<redacted>"
+"""What takes the place of anything in a driver's words that could be a secret."""
+
+_A_SECRET = re.compile(
+    # A connection string, whole: everything from the scheme to the first run
+    # of whitespace, since the password is inside it and so is the host.
+    r"[A-Za-z][A-Za-z0-9+.-]*://\S*"
+    # A password given as a field of an object -- JSON, a repr of a mapping, a
+    # driver quoting the arguments it was handed. The name may be quoted, the
+    # separator may be `=` or `:`, and the value may be quoted, in which case
+    # it runs to the closing quote and **may hold spaces**.
+    r'|(?i:["\']?(?:password|passfile|pgpassword)["\']?\s*[=:]\s*)'
+    r"""(?:"[^"]*"|'[^']*'|\S+)"""
+)
+"""What is taken out of a message before it is shown to anybody.
+
+Fails **safe rather than exact**: it takes out more than it has to -- a whole
+url, including the host somebody might have wanted to read -- because the
+alternative is a password in a log. What is left is the driver's own sentence
+about what went wrong, which is the part an operator acts on.
+
+The field rule is **quote-aware** on both halves. A driver that prints what it
+was handed prints it the way its own language spells a mapping, so the name
+arrives as ``password``, ``"password"`` or ``'password'`` and the value as a
+bare word or a quoted string -- and a quoted one runs to its closing quote,
+because a password with a space in it is still a password.
+"""
+
+
+def without_secrets(said: str) -> str:
+    """``said`` with anything that could be a connection string taken out.
+
+    The one rule about showing what a database driver said. A url is where a
+    password lives, and a failure to connect is exactly the moment somebody
+    copies the message into a ticket.
+    """
+    return _A_SECRET.sub(REDACTED, said)
+
+
+class DatabaseUnreachableError(RobinautsError):
+    """The deployment's PostgreSQL could not be opened.
+
+    Not a request's fault and not a bug: a database that is not there, a name
+    that does not exist, credentials the server refused, a connection string
+    the driver will not read. Every one of them is something an operator
+    changes, and every one of them arrives as an exception of the **driver's**
+    -- which nothing above ``datastore`` may name (``docs/layout.md``), and
+    which would otherwise reach a command as a traceback.
+
+    So ``datastore.open_pool`` turns them into this, and a command prints it
+    as one line (``robinauts.cli``). The driver's own sentence is kept,
+    because it is what says which of the five it was; the connection string is
+    **not**, because it holds the password (``without_secrets``).
+    """
+
+    @classmethod
+    def from_driver(cls, problem: BaseException) -> DatabaseUnreachableError:
+        """This error for what a driver raised, with nothing quotable in it."""
+        said = without_secrets(str(problem)) or type(problem).__name__
+        return cls(f"the database could not be opened: {said}")
+
+
+class SchemaError(RobinautsError):
+    """The database is not the one this build was written against.
+
+    Every way that can be true ends in the same two refusals -- the schema is
+    not created, and the server does not start -- because a server that ran
+    against a schema it does not know would write rows nothing can read back
+    (``docs/specs/backend.md``). What differs is only what the operator is
+    told they are looking at, so the shapes are the constructors below and
+    the advice is one sentence, written once.
+
+    Until there is a production deployment there are no migrations: a
+    database of any other version is **made again**, not upgraded, and the
+    command that creates the schema works on an empty database only. Saying
+    that in every message is deliberate -- the alternative is an operator
+    running the command on the database that already has their data in it.
+    """
+
+    ADVICE = (
+        f"`{DB_INIT_COMMAND}` creates the schema, and until there are migrations it works"
+        " on an empty database only: a database of any other version is made again"
+    )
+
+    def __init__(
+        self,
+        problem: str,
+        *,
+        expected: int,
+        found: int | None = None,
+        advice: str | None = None,
+    ) -> None:
+        self.problem = problem
+        """What is wrong, without the advice: one clause, for a log line."""
+        self.expected = expected
+        self.found = found
+        """The version in the database, or ``None`` if it has no usable one."""
+        self.advice = advice or self.ADVICE
+        """What to do. Recreating the database, unless something else fixes it."""
+        super().__init__(f"{problem}; this build needs schema version {expected}. {self.advice}")
+
+    @classmethod
+    def missing(cls, expected: int) -> SchemaError:
+        """There is nothing of ours in this database at all."""
+        return cls("the database has no Robinauts schema", expected=expected)
+
+    @classmethod
+    def no_schema(cls, expected: int, path: str) -> SchemaError:
+        """The connection's search path names nothing that exists.
+
+        Then there is no schema to look in and none to create in either: an
+        unqualified ``CREATE TABLE`` has nowhere to go. The command cannot
+        help, so it is not the thing to suggest.
+        """
+        return cls(
+            f"the connection's search path ({path}) names no schema that exists",
+            expected=expected,
+            advice=(
+                "create the schema in the database, or point the search path at one that"
+                " is there"
+            ),
+        )
+
+    @classmethod
+    def mismatch(cls, expected: int, found: int) -> SchemaError:
+        """There is a schema, of a version this build was not written for."""
+        return cls(f"the database is at schema version {found}", expected=expected, found=found)
+
+    @classmethod
+    def unversioned(cls, expected: int, tables: Iterable[str]) -> SchemaError:
+        """Our tables are there and no version is recorded.
+
+        A database somebody made by hand, or one whose creation stopped half
+        way. Either way there is no telling what shape those tables are in,
+        so it is not a database to add the rest of a schema to.
+        """
+        return cls(
+            "the database holds Robinauts tables"
+            f" ({', '.join(sorted(tables))}) but records no schema version",
+            expected=expected,
+        )
+
+    @classmethod
+    def unreadable(cls, expected: int) -> SchemaError:
+        """There is a ``schema_version`` table, and it is not ours.
+
+        Another shape, another meaning, or another project's: a version that
+        cannot be read is a version that cannot be trusted, and guessing it
+        is how a server ends up writing into somebody else's tables.
+        """
+        return cls(
+            "the database has a schema_version table this build cannot read,"
+            " so the schema in it is of an unknown version",
+            expected=expected,
+        )
+
+    @classmethod
+    def shadowed(cls, expected: int, tables: Iterable[str]) -> SchemaError:
+        """The schema is right, and it is not the one the queries would reach.
+
+        PostgreSQL resolves an unqualified table name through ``search_path``,
+        and the schema checked is the one the definition was created in. If
+        something earlier on the path answers to the same name, the two part
+        company: the check passes, and every statement afterwards goes
+        somewhere else. It is a configuration to correct, not a database.
+        """
+        return cls(
+            "the search path reaches other tables by these names before the schema's own"
+            f" ({', '.join(sorted(tables))}), so the queries would not go where the"
+            " schema is",
+            expected=expected,
+            found=expected,
+            # Not a database to make again: nothing is wrong with it.
+            advice=(
+                "set the connection's search path so that the schema holding the Robinauts"
+                " tables is the first one on it"
+            ),
+        )
+
+    @classmethod
+    def incomplete(cls, expected: int, missing: Iterable[str]) -> SchemaError:
+        """The version is right and the schema is not all there."""
+        return cls(
+            f"the database records schema version {expected} but does not have"
+            f" every table this build expects (missing: {', '.join(sorted(missing))})",
+            expected=expected,
+            found=expected,
+        )
 
 
 class SignInErrorCode(StrEnum):

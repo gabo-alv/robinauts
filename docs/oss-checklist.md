@@ -55,30 +55,50 @@ them from the start.
 - [x] Python: ruff, black, the test suite with the architecture contracts,
       a licence gate over the locked set, `pip-audit`. **(neorc gap: no
       Python licence gate)**
-- [ ] JavaScript: lint, type check, tests, build with the licence
+- [x] JavaScript: lint, type check, tests, build with the licence
       allowlist, `bundled-packages.txt` diff, size budget, `npm audit`,
       `npm audit signatures --omit=dev`; `.npmrc` with `ignore-scripts` and
-      `save-exact`; `npm ci` only.
+      `save-exact`; `npm ci` only. All of it in `scripts/check-frontend.sh`,
+      which the `frontend` job runs, plus `frontend/scripts/check-licences.mjs`
+      — the licence policy over the whole installed tree, not the bundle
+      alone, with the development exceptions named in `DEPENDENCIES.md`. The
+      size budget is provisional until a bundle with the chat in it exists.
 - [x] `reuse lint`; a DCO check over the commits of the pull request
       **(neorc gap)**. Making them required statuses is branch protection,
       below.
-- [ ] `gitleaks`; the ESLint import rule that confines assistant-ui
-      (ADR 0001).
+- [ ] CSS-reached packages in the bundle record. `bundled-packages.txt` is
+      written from rollup's module graph, so a package reached only through a
+      stylesheet (`@import "pkg"`, `url(pkg/x)`) is in the bundle and not in
+      the record. It is still held to the allowed list by the installed-tree
+      gate; what is missing is the record, and a reviewer reads CSS
+      `@import`/`url()` targets by hand
+      ([DEPENDENCIES.md](../DEPENDENCIES.md)).
+- [ ] `gitleaks`. The ESLint import rule that confines assistant-ui
+      (ADR 0001) is done: `frontend/eslint.config.js`, with
+      `frontend/src/test/seam-rule.test.ts` proving it still fires.
 - [x] Workflows: `permissions: contents: read`, `persist-credentials:
       false`, actions pinned to commit SHAs **(neorc gap: pinned by tag)**.
-- [ ] Dependabot for pip, npm and github-actions, 10-day cooldown
-      **(neorc gap: npm only)**. Done for `uv` (the ecosystem that reads
-      `uv.lock`) and `github-actions`; npm follows the frontend.
+- [x] Dependabot for pip, npm and github-actions, 10-day cooldown
+      **(neorc gap: npm only)**. `uv` (the ecosystem that reads `uv.lock`),
+      `github-actions`, and npm for `/frontend`.
 - [ ] Branch protection on `main`: pull requests only, linear history, no
       force-push, required checks, signed commits.
 
 ## Releases
 
 - [ ] Built in CI from a signed `v*` tag; the frontend bundle built only
-      there. PyPI trusted publishing, no long-lived tokens.
-- [ ] `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt` inside the wheel,
+      there. PyPI trusted publishing, no long-lived tokens. Half of this is
+      done: the `wheel` job builds the bundle and the wheel on every run and
+      uploads the wheel as an artifact, which is how the POC is deployed. What
+      is left is the tag, the signature and the publishing.
+- [x] `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt` inside the wheel,
       and listed in `license-files`. **(neorc gap: the third-party file is
-      shipped but not listed)**
+      shipped but not listed)** All three are in
+      `<name>.dist-info/licenses/` and in the metadata as `License-File:`,
+      put there by the metadata hook in `backend/hatch_build.py`; the build
+      hook beside it refuses to build a wheel whose frontend, or whose
+      third-party notices, are not there. `scripts/check-wheel.sh` looks
+      inside a real wheel for all three, and CI runs it.
 - [ ] An SBOM per release; build provenance attestation; `RELEASING.md`
       that someone else can follow; OpenSSF Scorecard.
 

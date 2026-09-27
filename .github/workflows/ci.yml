@@ -53,6 +53,38 @@ jobs:
   test:
     name: tests and architecture contracts
     runs-on: ubuntu-latest
+    services:
+      # The tests that need a database create and drop a schema of their own
+      # in this one; without it they skip, which is what happens on a laptop
+      # with no PostgreSQL. It is pinned by digest like every action here: a
+      # tag is a name somebody may repoint, and this one names postgres:16 as
+      # it stood on 2026-09-21, which is PostgreSQL 16.15.
+      postgres:
+        image: postgres@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
+        env:
+          # Thrown away with the job, reachable from this job alone, and never
+          # anywhere near a deployment: a password here is a required field,
+          # not a secret.
+          POSTGRES_PASSWORD: robinauts-test
+          POSTGRES_DB: robinauts_test
+          # Deliberately not UTC, and deliberately a quarter-hour offset: a
+          # store that reads a time as a wall clock passes against a server on
+          # UTC and fails here, which is the whole point of running it.
+          TZ: Asia/Kathmandu
+        ports:
+          - 5432:5432
+        # A first filter, and no more than that. `pg_isready` cannot tell
+        # this server from the private one initdb runs over a Unix socket
+        # while it is still setting the data directory up -- no argument
+        # makes it able to -- so a healthy container can still be a server
+        # that is about to be shut down and started again. The step below
+        # settles it by actually connecting and running a statement.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d robinauts_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 10s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,7 +98,24 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
         working-directory: backend
-      - run: scripts/check-tests.sh
+      # What the health check cannot prove: that *this* server, over TCP, as
+      # this account, answers a query. asyncpg is a dependency of the backend
+      # that `uv sync` above has just installed, so nothing else is needed on
+      # the runner.
+      - name: wait for the database to really answer
+        env:
+          ROBINAUTS_TEST_DATABASE_URL: postgresql://postgres:robinauts-test@127.0.0.1:5432/robinauts_test
+        run: uv run --locked python ../scripts/wait_for_postgres.py
+        working-directory: backend
+      - env:
+          ROBINAUTS_TEST_DATABASE_URL: postgresql://postgres:robinauts-test@127.0.0.1:5432/robinauts_test
+          # Without this, a URL that stopped working -- a typo, a container
+          # that never came up, this very variable dropped in an edit --
+          # would skip the database tests and leave the job green. With it,
+          # a skipped database is a failed build that says which tests
+          # stopped running.
+          ROBINAUTS_REQUIRE_POSTGRES: "1"
+        run: scripts/check-tests.sh
 
   licences:
     name: dependency licences
@@ -101,6 +150,68 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - run: scripts/check-audit.sh
+
+  frontend:
+    name: lint, types, tests and the bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Node version is frontend/.nvmrc, the same file nvm reads on a
+      # laptop, so there is one place it is written down.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # Lint, types, tests, the build with its licence gate and its committed
+      # bundled-package list, and the two npm audits. A red step here names
+      # docs/contributing/js-dependencies.md.
+      - run: scripts/check-frontend.sh
+
+  wheel:
+    name: the wheel, built and installed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Both toolchains: the wheel carries the built frontend, so this job
+      # builds the bundle and then packages it (docs/specs/frontend.md).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # The uv version lives with the other hand-bumped pins, in one file.
+      - run: . ./scripts/tool-versions.sh && echo "UV_VERSION=$UV_VERSION" >>"$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      # Builds the frontend, builds the wheel, looks inside it, installs it
+      # into an empty virtual environment and runs the command. The wheel is
+      # kept outside the checkout, so that this job leaves the tree exactly as
+      # every other job sees it.
+      - run: scripts/check-wheel.sh "$RUNNER_TEMP/wheel"
+      # This is how the POC is deployed until there is a release workflow
+      # (docs/working-notes/poc-scope.md): the artifact of a green run is
+      # installed on the machine. The bundle is built here and nowhere else --
+      # a wheel built on a laptop is never released.
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: robinauts-wheel
+          # Both files: the wheel, and the locked runtime set with its hashes.
+          # A deployment installs the second first, so that what runs is the
+          # set the licence gate and pip-audit judged rather than whatever pip
+          # resolves on the day (docs/deployment.md).
+          path: |
+            ${{ runner.temp }}/wheel/*.whl
+            ${{ runner.temp }}/wheel/requirements.txt
+          if-no-files-found: error
+          retention-days: 14
 
   reuse:
     name: licence headers
