@@ -117,6 +117,15 @@ run left is cancelled, and each of them ends ``interrupted`` rather than
 may retry them. Nothing is drained (``docs/working-notes/poc-scope.md``); what
 the shutdown bound does not cover is ended by the sweep of the next start-up.
 
+**What a turn runs on is the conversation's model, copied onto its run.** A
+conversation starts on the model its author picked, or on its agent's
+default, and may be moved to another at any point (``set_model``); each run
+takes the model the conversation names when the run is begun, and the engine
+is handed the **run's**, so a run in flight -- or one taken up again -- keeps
+the model it started with (``docs/specs/agents.md``). A model the deployment
+no longer offers is refused with ``UnknownModelError`` before anything is
+written, as an agent that is gone is.
+
 **Ownership is the same one rule as everywhere else**: a conversation of
 somebody else's is answered exactly like one that is not there
 (``application.conversations.owner_of``), and a run is reached through its
@@ -169,6 +178,7 @@ from robinauts.domain import (
     MessageCompleted,
     MessagePart,
     MessageStarted,
+    ModelConfig,
     PositionTakenError,
     ReasoningDelta,
     Role,
@@ -182,6 +192,7 @@ from robinauts.domain import (
     TextDelta,
     TurnEvent,
     UnknownAgentError,
+    UnknownModelError,
     User,
     chain,
     checked_config_id,
@@ -344,12 +355,16 @@ class Turns:
         clock: Clock,
         ids: IdSource,
         agents: Mapping[str, AgentDefinition],
+        models: Mapping[str, ModelConfig],
         engines: Mapping[Engine, Agent],
         executor: RunExecutor,
         signals: RunSignals,
         history_chars: int = DEFAULT_HISTORY_CHARS,
         turn_seconds: float = DEFAULT_TURN_SECONDS,
     ) -> None:
+        for model_id, model in models.items():
+            if not isinstance(model, ModelConfig) or model.id != model_id:
+                raise InvalidValueError(f"the model under {model_id!r} is not that model")
         for agent_id, definition in agents.items():
             if not isinstance(definition, AgentDefinition) or definition.id != agent_id:
                 raise InvalidValueError(f"the agent under {agent_id!r} is not that agent")
@@ -358,6 +373,14 @@ class Turns:
                     f"agent {agent_id!r} runs on the {definition.engine.value} engine,"
                     " which this deployment has not wired: point the agent at an engine"
                     " this build runs, or build one and hand it in"
+                )
+            if definition.model not in models:
+                # Every conversation it started would be on a model that is
+                # refused at its first turn: said at start-up instead.
+                raise InvalidValueError(
+                    f"agent {agent_id!r} starts its conversations on model"
+                    f" {definition.model!r}, which this deployment does not offer:"
+                    " configure the model, or point the agent at one that is"
                 )
         if isinstance(history_chars, bool) or not isinstance(history_chars, int):
             raise InvalidValueError(
@@ -377,6 +400,9 @@ class Turns:
         # Copied: what a deployment configured is not something a caller goes
         # on editing behind this service's back.
         self._agents = dict(agents)
+        self._models = dict(models)
+        """The models a conversation may run on: what ``set_model`` accepts and
+        what a turn is refused without. Its agents' defaults are among them."""
         self._engines = dict(engines)
         self._history_chars = history_chars
         self._turn_seconds = turn_seconds
@@ -425,6 +451,7 @@ class Turns:
         user: User,
         *,
         agent_id: str | None = None,
+        model_id: str | None = None,
         conversation_id: uuid.UUID | None = None,
         text: str,
         parent_id: uuid.UUID | None = None,
@@ -445,6 +472,7 @@ class Turns:
         started = await self.start(
             user,
             agent_id=agent_id,
+            model_id=model_id,
             conversation_id=conversation_id,
             text=text,
             parent_id=parent_id,
@@ -544,6 +572,7 @@ class Turns:
         user: User,
         *,
         agent_id: str | None = None,
+        model_id: str | None = None,
         conversation_id: uuid.UUID | None = None,
         text: str,
         parent_id: uuid.UUID | None = None,
@@ -553,7 +582,8 @@ class Turns:
         The two shapes a request with a new message has
         (``docs/specs/wire.md``): an **agent**, which begins a conversation
         with that agent and titles it from the question
-        (``core.derive_title``); or a **conversation**, which appends the
+        (``core.derive_title``) -- on ``model_id``, or on the agent's default
+        when that is ``None``; or a **conversation**, which appends the
         question to it -- under ``parent_id``, which is what makes an edit
         hang beside the message it replaces, putting that message and
         everything under it off the visible path, and a continuation hang
@@ -570,14 +600,23 @@ class Turns:
         The text is repaired on the way in (``domain.clean_text``) and carried
         in as many parts as it needs (``domain.text_parts``); a message with
         nothing in it is refused.
+
+        A model is picked for a conversation that is new, and only then: a
+        question in one that exists runs on that conversation's model, which
+        is changed by ``set_model`` and never by a turn.
         """
         parts = _asked(text)
         if parent_id is not None:
             checked_uuid(parent_id, "a message's parent id")
         checked_uuid(user.id, "a user's id")
         if agent_id is not None and conversation_id is None:
-            return await self._new_chat(user, agent_id, parts, parent_id)
+            return await self._new_chat(user, agent_id, model_id, parts, parent_id)
         if conversation_id is not None and agent_id is None:
+            if model_id is not None:
+                raise InvalidValueError(
+                    "a model is picked when a conversation begins; a turn in one that"
+                    " exists runs on the conversation's model"
+                )
             return await self._in_conversation(user, conversation_id, parts, parent_id)
         raise InvalidValueError(
             "a turn names the agent to begin a conversation with, or the"
@@ -609,11 +648,19 @@ class Turns:
         self,
         user: User,
         agent_id: str,
+        model_id: str | None,
         parts: tuple[MessagePart, ...],
         parent_id: uuid.UUID | None,
     ) -> StartedTurn:
-        """A conversation, its first question and the run answering it."""
+        """A conversation, its first question and the run answering it.
+
+        On the model its author picked, or on the agent's default -- copied
+        in, so that what the conversation runs on is read off it alone and an
+        operator's later change of the default reaches new conversations only
+        (``docs/specs/agents.md``).
+        """
         definition = self._definition(agent_id)
+        model = self._model(definition.model if model_id is None else model_id)
         conversation_id = self._ids.new_id()
         # A conversation that does not exist yet has no message to hang under,
         # and the rule that says so is the tree's, not one restated here.
@@ -634,7 +681,7 @@ class Turns:
             id=conversation_id,
             owner_id=user.id,
             agent=definition.id,
-            model=definition.model,
+            model=model.id,
             created_at=now,
             updated_at=now,
             title=derive_title((message,)),
@@ -711,14 +758,20 @@ class Turns:
         No ``started_at``: nothing has taken it up yet. The moment a process
         does is stamped when it ends (``core.transition``), which is where an
         ended run that never recorded a beginning is given one.
+
+        **On the conversation's model**, which the run then keeps however the
+        conversation's changes. One the deployment no longer offers is
+        ``UnknownModelError`` here, which every way of beginning a turn --
+        a question, an edit, a regeneration -- reaches before it writes.
         """
+        model = self._model(conversation.model)
         return Run(
             id=self._ids.new_id(),
             conversation_id=conversation.id,
             message_id=message_id,
             agent=definition.id,
             engine=definition.engine,
-            model=definition.model,
+            model=model.id,
             state=RunState.RUNNING,
             created_at=now,
         )
@@ -740,6 +793,55 @@ class Turns:
         if found is None:
             raise UnknownAgentError(f"no agent {agent_id!r} is configured in this deployment")
         return found
+
+    def _model(self, model_id: str) -> ModelConfig:
+        """The model of that id; ``UnknownModelError`` if this deployment offers none.
+
+        ``domain.ModelsConfig.model_by_id``'s rule, over the models this
+        service was wired with -- which are the configuration's in a
+        deployment, and whatever a test handed in beside its own agents. A
+        conversation whose model the operator has since removed meets this,
+        and is refused as not there rather than answered by another model
+        (``docs/specs/agents.md``).
+        """
+        checked_config_id(model_id, "a model's id")
+        found = self._models.get(model_id)
+        if found is None:
+            raise UnknownModelError(f"no model {model_id!r} is configured in this deployment")
+        return found
+
+    # --- the conversation's model --------------------------------------------
+
+    async def set_model(
+        self, user: User, conversation_id: uuid.UUID, model_id: str
+    ) -> Conversation:
+        """Move the conversation to another of this deployment's models.
+
+        Here, beside the turns, rather than beside the rename in
+        ``application.Conversations``, because what it accepts must be exactly
+        what a turn accepts: one service holds the models this deployment
+        offers, and it is the one that refuses a turn without one. The
+        ownership rule is the same one (``application.conversations.owner_of``).
+
+        A model the deployment does not offer is ``UnknownModelError`` before
+        anything is written. **A run in flight is no reason to refuse**: it
+        keeps the model it started with, and the change is what the next turn
+        runs on (``docs/specs/agents.md``).
+
+        What comes back is what the **store wrote**, for the reason
+        ``Conversations.rename`` gives.
+        """
+        model = self._model(model_id)
+        checked_uuid(conversation_id, "a conversation's id")
+        checked_uuid(user.id, "a user's id")
+        conversation = owner_of(
+            user, conversation_id, await self._store.conversation_by_id(conversation_id)
+        )
+        written = await self._store.set_model(conversation.id, model.id, now=self._clock.now())
+        if written is None:
+            # Deleted between the read and the write.
+            raise ConversationNotFoundError(f"there is no conversation {conversation_id}")
+        return written
 
     # --- executing a turn ----------------------------------------------------
 
@@ -866,7 +968,9 @@ class Turns:
         # lifecycle awaits is the queue, so a cancellation reaches it at once
         # however long the engine then takes to let go, and a provider faster
         # than the database is held back rather than buffered.
-        pump.begin(self._engine(run.engine).run_turn(definition, history))
+        # The run's model, not the conversation's as it now is: a turn taken
+        # up again runs on what it was begun on.
+        pump.begin(self._engine(run.engine).run_turn(definition, history, model=run.model))
         while (event := await pump.next()) is not None:
             if isinstance(event, AnswerStarted):
                 if open_id is not None:

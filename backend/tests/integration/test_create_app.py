@@ -38,7 +38,7 @@ from ag_ui.core import EventType
 from fastapi import FastAPI
 
 from aio import asyncio_test
-from conversations import agent_definition
+from conversations import agent_definition, offered
 from engines import Scripts, both_engines, scripts
 from fakes import ScriptedAgent, says
 from postgres import DATABASE_URL, TemporarySchema, requires_postgres
@@ -384,6 +384,7 @@ async def test_a_turn_is_streamed_and_what_it_produced_is_in_the_conversation() 
             database_url=in_schema(temporary.name),
             secret_for={}.get,
             agents={definition.id: definition},
+            models=offered(),
             engines={definition.engine: ScriptedAgent(*says(ANSWERED))},
         )
 

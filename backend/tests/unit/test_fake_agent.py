@@ -23,7 +23,7 @@ import pytest
 
 from aio import asyncio_test
 from contracts.agents import AgentContract, Ending, Script
-from conversations import agent_definition, question
+from conversations import MODEL, agent_definition, question
 from fakes import Gate, Raise, ScriptedAgent, Step, says
 from robinauts.domain import AnswerCompleted, AnswerStarted, AnswerTextDelta, InvalidValueError
 from robinauts.ports import Agent
@@ -66,7 +66,9 @@ async def test_a_gate_holds_the_turn_until_the_test_opens_it() -> None:
     seen = []
 
     async def watch() -> None:
-        async with aclosing(agent.run_turn(agent_definition(), (question(),))) as events:
+        async with aclosing(
+            agent.run_turn(agent_definition(), (question(),), model=MODEL)
+        ) as events:
             async for event in events:
                 seen.append(event)
 
@@ -89,7 +91,9 @@ async def test_it_raises_where_the_script_says_and_not_before() -> None:
     seen = []
 
     with pytest.raises(InvalidValueError) as raised:
-        async with aclosing(agent.run_turn(agent_definition(), (question(),))) as events:
+        async with aclosing(
+            agent.run_turn(agent_definition(), (question(),), model=MODEL)
+        ) as events:
             async for event in events:
                 seen.append(event)
 
@@ -102,11 +106,12 @@ async def test_it_records_every_turn_with_the_history_it_was_given() -> None:
     agent = ScriptedAgent(*says("Answered."))
     asked = question("What is a robinaut?")
 
-    async with aclosing(agent.run_turn(agent_definition(), (asked,))) as events:
+    async with aclosing(agent.run_turn(agent_definition(), (asked,), model=MODEL)) as events:
         async for _ in events:
             pass
 
     assert agent.asked[-1].agent == agent_definition()
+    assert agent.asked[-1].model == MODEL
     assert agent.history == (asked,)
     assert agent.released == 1
 
@@ -117,7 +122,7 @@ async def test_a_turn_nobody_finishes_is_released_when_it_is_closed() -> None:
     # whatever it held goes with it.
     agent = ScriptedAgent(AnswerStarted(), Gate())
 
-    async with aclosing(agent.run_turn(agent_definition(), (question(),))) as events:
+    async with aclosing(agent.run_turn(agent_definition(), (question(),), model=MODEL)) as events:
         assert await anext(events) == AnswerStarted()
         assert agent.held == 1
 

@@ -119,7 +119,10 @@ Which state may follow which:
   because its error would not fit.
 
 A run records the conversation, the message it answers, the agent, the
-engine and the model it used, its state, its times, and its error if any.
+engine and the model it used, its state, its times, and its error if any. The
+model is the conversation's at the moment the run is begun, and it is what
+the engine is handed, so a run keeps it however the conversation's changes
+([agents.md](agents.md)).
 
 ## Tools
 

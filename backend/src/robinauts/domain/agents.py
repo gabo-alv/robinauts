@@ -478,18 +478,15 @@ class ModelsConfig:
                     f"agent {agent.id!r} runs on model {agent.model!r}, which is not" f" configured"
                 )
 
-    def model_for(self, agent: AgentDefinition) -> ModelConfig:
-        """The model that agent runs on. Whole by construction, so this cannot miss."""
-        return self.models[agent.model]
-
     def model_by_id(self, model_id: str) -> ModelConfig:
         """The model of that id; ``UnknownModelError`` if this deployment has none.
 
-        Unlike ``model_for`` this can miss: the id is one a conversation
-        carries (``docs/specs/agents.md``), chosen by a person or copied from
-        an agent's default when the conversation started, and the operator may
-        have removed that model since. That is refused as not there, the way a
-        removed agent is, rather than answered by some other model.
+        This can miss, though the configuration is whole: the id is one a
+        conversation carries (``docs/specs/agents.md``), chosen by a person or
+        copied from an agent's default when the conversation started, and the
+        operator may have removed that model since. That is refused as not
+        there, the way a removed agent is, rather than answered by some other
+        model.
         """
         checked_config_id(model_id, "a model's id")
         found = self.models.get(model_id)

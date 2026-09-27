@@ -20,6 +20,7 @@ from robinauts.domain import (
     Engine,
     Message,
     MessagePart,
+    ModelConfig,
     Provenance,
     Role,
     Run,
@@ -33,6 +34,8 @@ OWNER = uuid.UUID("33333333-3333-4333-8333-333333333333")
 RUN = uuid.UUID("44444444-4444-4444-8444-444444444444")
 AGENT = "assistant"
 MODEL = "sonnet"
+OTHER_MODEL = "opus"
+"""A second model a test deployment offers, for a conversation moved off ``MODEL``."""
 
 T0 = datetime(2026, 9, 21, 9, 0, tzinfo=UTC)
 """When every test conversation begins."""
@@ -54,6 +57,19 @@ def agent_definition(**changes: object) -> AgentDefinition:
     }
     fields.update(changes)
     return AgentDefinition(**fields)  # type: ignore[arg-type]
+
+
+def model_config(model_id: str = MODEL, **changes: object) -> ModelConfig:
+    """A model a deployment offers, reached through a provider nobody calls."""
+    fields: dict[str, object] = {"id": model_id, "provider": "anthropic", "name": model_id}
+    fields.update(changes)
+    return ModelConfig(**fields)  # type: ignore[arg-type]
+
+
+def offered(*model_ids: str) -> dict[str, ModelConfig]:
+    """The models a test deployment offers: ``MODEL``, which every agent here
+    starts on, and any others the test names."""
+    return {model_id: model_config(model_id) for model_id in (MODEL, *model_ids)}
 
 
 def provenance(**changes: object) -> Provenance:

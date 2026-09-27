@@ -32,12 +32,12 @@ import functools
 import uuid
 from dataclasses import dataclass
 
-from conversations import AGENT, OWNER, agent_definition, at
+from conversations import AGENT, OTHER_MODEL, OWNER, agent_definition, at, offered
 from fakes import CountingIdSource, FakeClock, MemoryConversationStore, ScriptedAgent, Step
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
 from robinauts.application import Conversations, Turns, Watch
 from robinauts.core import check_event_order, message_from_stored, run_event_from_stored
-from robinauts.domain import AgentDefinition, Message, Run, RunEvent, User
+from robinauts.domain import AgentDefinition, Message, ModelConfig, Run, RunEvent, User
 from robinauts.ports import ConversationStore
 
 NOW = at(100)
@@ -71,6 +71,7 @@ class Wiring:
 def wired(
     *steps: Step,
     definition: AgentDefinition | None = None,
+    models: dict[str, ModelConfig] | None = None,
     store: MemoryConversationStore | None = None,
     signals: MemoryRunSignals | None = None,
     history_chars: int = 100_000,
@@ -78,7 +79,11 @@ def wired(
     wait_seconds: float = 30.0,
     quiet_seconds: float = 300.0,
 ) -> Wiring:
-    """``Turns`` over the fakes, with an engine that runs that script."""
+    """``Turns`` over the fakes, with an engine that runs that script.
+
+    It offers ``MODEL``, which the agent starts on, and ``OTHER_MODEL`` to move
+    a conversation to, unless the test names its own ``models``.
+    """
     kept = definition if definition is not None else agent_definition()
     store = store if store is not None else MemoryConversationStore()
     clock = FakeClock(now=NOW)
@@ -92,6 +97,7 @@ def wired(
             clock=clock,
             ids=ids,
             agents={kept.id: kept},
+            models=models if models is not None else offered(OTHER_MODEL),
             engines={kept.engine: agent},
             executor=executor,
             signals=signals,

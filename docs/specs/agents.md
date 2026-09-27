@@ -30,13 +30,14 @@
 
 ## The agent port
 
-- The controller knows one port, `Agent`: given the agent's definition and a
-  history, **stream the engine's own events** — an answer has begun, more of
-  its text, more of its thinking, the answer is complete and here are its
-  parts — and end either "finished" or "waiting on these tool calls"
-  ([runs.md](runs.md)). **No usage**: what a turn cost is reported in the
-  platform's own terms when usage reporting is built, and until then an
-  engine's events carry none and no field is written for one.
+- The controller knows one port, `Agent`: given the agent's definition, the
+  model the run records (the conversation's when the run began, never read
+  off the agent) and a history, **stream the engine's own events** — an
+  answer has begun, more of its text, more of its thinking, the answer is
+  complete and here are its parts — and end either "finished" or "waiting on
+  these tool calls" ([runs.md](runs.md)). **No usage**: what a turn cost is
+  reported in the platform's own terms when usage reporting is built, and
+  until then an engine's events carry none and no field is written for one.
 - **The history is a path of the conversation ending in the user message being
   answered**, already trimmed to what the model will take, and the system
   prompt is the agent's and is not one of the messages. So there is no second
@@ -102,8 +103,8 @@ runs every turn the same way:
 
 1. Load the conversation's messages from the database, and take the path
    down to the message being answered.
-2. Call the agent port with the agent and that history, trimmed; publish
-   the events, which the UI watches ([wire.md](wire.md)).
+2. Call the agent port with the agent, the run's model and that history,
+   trimmed; publish the events, which the UI watches ([wire.md](wire.md)).
 3. Translate each new message into the platform's format and append it to
    the conversation as it is produced.
 4. The next turn starts again from step 1, with whichever engine the agent
@@ -198,7 +199,7 @@ runs every turn the same way:
   ([open-source.md](open-source.md)). A provider whose client fails is not
   offered by that engine until it passes.
 - Not every model has to exist under both engines, but an agent's engine
-  can be swapped only if its model does.
+  can be swapped only if the models its conversations run on do.
 - A sketch of the configuration. It is written in the **same file** as
   sign-in ([sign-in.md](sign-in.md)), which is why the model providers are
   `[model_providers.*]` and not `[providers.*]`: that name is already the

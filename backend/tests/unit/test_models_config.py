@@ -156,8 +156,8 @@ def test_the_lookups_are_whole_by_construction() -> None:
     config = parse_models_config(data())
 
     definition = config.agents["assistant"]
-    assert config.model_for(definition).name == "claude-sonnet-5"
-    assert config.provider_for(config.model_for(definition)).kind is ProviderKind.ANTHROPIC
+    assert config.model_by_id(definition.model).name == "claude-sonnet-5"
+    assert config.provider_for(config.model_by_id(definition.model)).kind is ProviderKind.ANTHROPIC
 
 
 def test_an_openai_compatible_provider_carries_its_base_url() -> None:

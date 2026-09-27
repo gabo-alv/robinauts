@@ -26,7 +26,7 @@ import uuid
 from datetime import UTC, datetime
 
 from aio import asyncio_test
-from conversations import AGENT, agent_definition, at
+from conversations import AGENT, agent_definition, at, offered
 from fakes import CountingIdSource, FakeClock, Gate, ScriptedAgent, says
 from postgres import requires_postgres, temporary_schema
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
@@ -65,6 +65,7 @@ class Wired:
             clock=clock,
             ids=CountingIdSource(),
             agents={definition.id: definition},
+            models=offered(),
             engines={definition.engine: ScriptedAgent(*steps)},  # type: ignore[arg-type]
             executor=self.executor,
             signals=self.signals,

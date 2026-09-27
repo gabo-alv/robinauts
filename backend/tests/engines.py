@@ -18,7 +18,7 @@ application and the store are the deployment's own.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -27,7 +27,7 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic_ai import ModelRequest
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 
-from conversations import AGENT, MODEL, agent_definition
+from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition
 from robinauts.adapters import ProviderKeys
 from robinauts.adapters.agents.langgraph import LangGraphAgent
 from robinauts.adapters.agents.pydantic_ai import PydanticAIAgent
@@ -52,13 +52,17 @@ MODELS = ModelsConfig(
             id=PROVIDER, kind=ProviderKind.ANTHROPIC, api_key_env=KEY_VARIABLE
         )
     },
-    models={MODEL: ModelConfig(id=MODEL, provider=PROVIDER, name="claude-sonnet-5")},
+    models={
+        MODEL: ModelConfig(id=MODEL, provider=PROVIDER, name="claude-sonnet-5"),
+        OTHER_MODEL: ModelConfig(id=OTHER_MODEL, provider=PROVIDER, name="claude-opus-5"),
+    },
     agents={AGENT: agent_definition()},
 )
-"""One provider and one model, which both engines reach by the same id.
+"""One provider and two models, which both engines reach by the same ids.
 
 An agent's engine can be swapped only if its model exists under both
-(``docs/specs/agents.md``); this is that, as a deployment writes it.
+(``docs/specs/agents.md``); this is that, as a deployment writes it. The
+second is what a conversation moved off the agent's default runs on.
 """
 
 Heard = tuple[tuple[str, str], ...]
@@ -148,6 +152,8 @@ class Scripts:
 
     langgraph: ScriptedChat
     pydantic_ai: ScriptedStream
+    built: list[tuple[Engine, str]] = field(default_factory=list)
+    """Each turn's engine and the model it built its client for, in order."""
 
 
 def scripts(said: str, *, thinking: str = "") -> Scripts:
@@ -166,11 +172,16 @@ def scripts(said: str, *, thinking: str = "") -> Scripts:
 def both_engines(said: Scripts) -> dict[Engine, Agent]:
     """Both real engines, wired as a deployment wires them, over those models."""
     keys = ProviderKeys({PROVIDER: KEY})
+
+    def chat_for(model: ModelConfig, *_: object) -> ScriptedChat:
+        said.built.append((Engine.LANGGRAPH, model.id))
+        return said.langgraph
+
+    def model_for(model: ModelConfig, *_: object) -> Any:
+        said.built.append((Engine.PYDANTIC_AI, model.id))
+        return said.pydantic_ai.model
+
     return {
-        Engine.LANGGRAPH: LangGraphAgent(
-            MODELS, keys, chat_model_for=lambda *_: said.langgraph  # noqa: ARG005
-        ),
-        Engine.PYDANTIC_AI: PydanticAIAgent(
-            MODELS, keys, model_for=lambda *_: said.pydantic_ai.model  # noqa: ARG005
-        ),
+        Engine.LANGGRAPH: LangGraphAgent(MODELS, keys, chat_model_for=chat_for),
+        Engine.PYDANTIC_AI: PydanticAIAgent(MODELS, keys, model_for=model_for),
     }

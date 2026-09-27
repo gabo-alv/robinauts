@@ -19,8 +19,15 @@ selection adds to it.
 - `ConversationStore.set_model(conversation_id, model, *, now)`, beside
   `rename_conversation` in both stores: checks the id's spelling, dates the
   conversation, returns the written record or `None`.
-- Not yet: runs and engines still use the agent's default
-  (`definition.model`, `model_for(agent)`) until step 3.
+- `Turns` holds the offered models (`Mapping[str, ModelConfig]`, wired in
+  `app.py`, which refuses at start-up an agent whose default is not
+  offered). `begin(model_id=)` picks a new chat's model (`None` is the
+  agent's default); `_new_run` takes `conversation.model` and raises
+  `UnknownModelError` before any write for a model no longer offered;
+  `Turns.set_model(user, conversation_id, model_id)` checks the model, then
+  the owner, then writes. `_produce` hands the engine `run.model`: the agent
+  port is `run_turn(agent, history, *, model)` and both engines look it up
+  with `ModelsConfig.model_by_id` (`model_for` is gone).
 
 ## Steps
 
@@ -66,3 +73,25 @@ Review: 1 round.
 Checks: lint; unit suite 2723 passed; full suite against a throwaway
 Postgres 2928 passed (before the comment-only fixes).
 Not done / to watch: nothing calls `set_model` yet.
+
+### Step 3 — application and port   (feature/model-selection-3-application)
+
+Summary: turns run on the conversation's model, copied onto the run; a new
+chat takes `model_id` or the agent's default; `Turns.set_model` changes it,
+owner only, allowed mid-run (the run keeps its model); a model the
+deployment no longer offers refuses continue, edit and regenerate before
+anything is written. The engines are handed the run's model. `set_model`
+lives in `Turns`, not beside the rename, so that one service holds what a
+turn accepts. Start-up now refuses an agent whose default model is not
+offered even when agents and engines are handed in.
+
+Review: 1 round.
+- High: 0
+- Medium: 0
+- Low: 3 (3/0)
+
+Checks: lint; unit suite 2745 passed; full suite against a throwaway
+Postgres 2950 passed (before the docstring and one-test fixes).
+Not done / to watch: nothing in the API reaches `model_id` or `set_model`
+yet (step 4). `_produce` does not re-check `run.model` against `Turns`'
+models; an engine's `model_by_id` fails such a turn.

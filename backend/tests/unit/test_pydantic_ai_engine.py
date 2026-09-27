@@ -83,6 +83,7 @@ from robinauts.domain import (
     ReasoningPart,
     Role,
     TextPart,
+    UnknownModelError,
     UnsupportedContentError,
 )
 from robinauts.ports import Agent
@@ -251,10 +252,11 @@ async def turn_of(
     history: Sequence[Message],
     *,
     definition_: AgentDefinition | None = None,
+    model: str = MODEL,
 ) -> list[EngineEvent]:
     """Every event of one turn, run to its end."""
     seen: list[EngineEvent] = []
-    events = agent.run_turn(definition_ or definition(), history)
+    events = agent.run_turn(definition_ or definition(), history, model=model)
     async for event in events:
         seen.append(event)
     return seen
@@ -486,6 +488,53 @@ async def test_the_engine_holds_nothing_after_a_turn_that_ended() -> None:
     await turn_of(agent, (question(),))
 
     assert (agent.held, model.open_streams) == (0, 0)
+
+
+# --- the model a turn runs on ------------------------------------------------
+
+OTHER_MODEL = "opus"
+"""A second model beside the agent's default, which a conversation may be on."""
+
+
+def two_models() -> ModelsConfig:
+    """The one agent, whose default is ``MODEL``, and ``OTHER_MODEL`` beside it."""
+    config = models()
+    other = ModelConfig(id=OTHER_MODEL, provider=PROVIDER, name="claude-opus-5")
+    return ModelsConfig(
+        providers=config.providers,
+        models={**config.models, OTHER_MODEL: other},
+        agents=config.agents,
+    )
+
+
+@asyncio_test
+async def test_a_turn_runs_on_the_model_it_is_given_and_not_the_agent_s_default() -> None:
+    # The run's model is the conversation's, which its author may have moved
+    # off the agent's default: that is the one the client is built for.
+    built: list[ModelConfig] = []
+
+    def client_for(model: ModelConfig, *_: object) -> Any:
+        built.append(model)
+        return ScriptedModel("Done.").model
+
+    agent = PydanticAIAgent(two_models(), keys(), model_for=client_for)
+
+    await turn_of(agent, (question(),), model=OTHER_MODEL)
+
+    assert [model.name for model in built] == ["claude-opus-5"]
+
+
+@asyncio_test
+async def test_a_model_the_configuration_does_not_have_fails_the_turn() -> None:
+    # Where the stream is iterated, like any other failure of a turn, and
+    # holding nothing afterwards.
+    agent = engine(ScriptedModel("Done."))
+    events = agent.run_turn(definition(), (question(),), model="gpt-5-5")
+
+    with pytest.raises(UnknownModelError):
+        await anext(events)
+
+    assert agent.held == 0
 
 
 # --- the client the configuration describes ---------------------------------
