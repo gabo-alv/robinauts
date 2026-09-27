@@ -5,8 +5,7 @@
  * Which agent the next conversation is with (`docs/specs/agents.md`).
  *
  * It shows on an empty chat and nowhere else: once a conversation exists,
- * the agent is a fact about it rather than a choice. Hidden when the
- * deployment has one agent, because there is nothing to pick.
+ * the agent is a fact about it rather than a choice.
  *
  * The choice is remembered per browser, and checked against what the
  * deployment still offers: an agent removed from the configuration is not
@@ -133,9 +132,6 @@ export function AgentPicker({
       </div>
     );
   }
-  // One agent is not a choice: it is simply who you are talking to.
-  if (agents.items.length === 1) return null;
-
   return (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
       Agent

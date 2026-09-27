@@ -36,7 +36,9 @@ import { Thread } from "./vendor/components/assistant-ui/elements/thread.aui";
 
 export function Chat(props: ChatProps) {
   const { state, runtime } = useChat(props);
-  const welcome = props.welcome;
+  // Only on the empty chat: a conversation with nothing in it yet is still a
+  // conversation, and its agent is no longer a choice (`../index.ts`).
+  const welcome = props.conversationId === null ? props.welcome : undefined;
   // Held across renders: a component identity that changed on every one of
   // them would remount the welcome -- and a `<select>` that is remounted
   // loses the focus, on every keystroke in the box beside it. What the shell

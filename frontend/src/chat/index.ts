@@ -23,6 +23,8 @@
  */
 import type { ReactNode } from "react";
 
+import type { Conversation } from "../conversation/conversation";
+
 /**
  * The chat window: the messages, the box to write in, and the stream.
  *
@@ -69,6 +71,14 @@ export interface ChatProps {
   conversationId: ConversationId | null;
   agentId: AgentId | null;
   onConversationStarted: (id: ConversationId) => void;
+  /**
+   * What the server says the conversation is, each time it is read.
+   *
+   * The shell draws the title and the agent above the chat, and the panel's
+   * pages do not hold every conversation a link can open. This is the one
+   * read that always has them (`GET /api/conversations/{id}`).
+   */
+  onConversationOpened?: (conversation: Conversation) => void;
   /**
    * That a turn has finished and the conversation has been written to.
    *

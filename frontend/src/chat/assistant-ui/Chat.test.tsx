@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react";
 import { expect, expectTypeOf, test, vi } from "vitest";
 
 import { json, refusal, type Call } from "../../test/api";
+import type { Conversation } from "../../conversation/conversation";
 import { conversation, id, message, opened } from "../../test/conversations";
 import { event, streamed, streamHeaders, writable } from "../../test/stream";
 import {
@@ -90,6 +91,18 @@ test("the empty chat shows what it is given above the box", async () => {
   draw({ welcome: <p>Pick an agent</p> });
   await settle();
   expect(screen.getByText("Pick an agent")).toBeVisible();
+});
+
+test("a conversation with nothing in it is not the empty chat", async () => {
+  stub((call) =>
+    call.url === `/api/conversations/${CONVERSATION}`
+      ? json(opened(conversation(1), [], null))
+      : undefined,
+  );
+  draw({ conversationId: CONVERSATION, welcome: <p>Pick an agent</p> });
+  await settle();
+  expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible();
+  expect(screen.queryByText("Pick an agent")).toBeNull();
 });
 
 test("sending a first message posts a turn and reports the conversation", async () => {
@@ -405,19 +418,20 @@ test("a conversation that is not here has no thread to draw", async () => {
   expect(screen.queryByRole("textbox", { name: "Message input" })).toBeNull();
 });
 
-test("the seam is a component and five names, and nothing of a library", () => {
+test("the seam is a component and six names, and nothing of a library", () => {
   // **A claim about the types, checked by the type checker.** `tsc -b` reads
   // this file, so the three assertions below fail the build rather than a
-  // run: the seam is exactly these five names, they are exactly these types,
+  // run: the seam is exactly these six names, they are exactly these types,
   // and none of them comes from assistant-ui (ADR 0001, the discard test).
   expectTypeOf<ChatProps>().toEqualTypeOf<{
     conversationId: ConversationId | null;
     agentId: AgentId | null;
     onConversationStarted: (id: ConversationId) => void;
+    onConversationOpened?: (conversation: Conversation) => void;
     onTurnEnded?: () => void;
     welcome?: ReactNode;
   }>();
-  // A sixth name does not belong to it, whatever it is called.
+  // A seventh name does not belong to it, whatever it is called.
   const extra = {
     conversationId: null,
     agentId: null,

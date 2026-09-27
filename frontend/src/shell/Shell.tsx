@@ -26,12 +26,34 @@ import { navigate, NEW_CHAT, useRoute } from "../router";
 import type { Session } from "../session/session";
 import { signOut as endSession } from "../session/session";
 import { shownTitle } from "../conversation/conversation";
-import { AgentPicker, useAgents, useChosenAgent } from "./AgentPicker";
+import type { Conversation } from "../conversation/conversation";
+import {
+  AgentPicker,
+  type Agents,
+  useAgents,
+  useChosenAgent,
+} from "./AgentPicker";
 import { LocalModeBanner } from "./LocalModeBanner";
 import { PANEL_ID, Panel } from "./Panel";
 import { remember, remembered } from "./storage";
 
 export const PANEL_KEY = "panel";
+
+/**
+ * What to call the agent a conversation is with (`docs/specs/agents.md`).
+ *
+ * The conversation names its agent by id, and the list the picker was given
+ * has the title. Until that list has arrived there is nothing to call it by,
+ * so nothing is said rather than an id that a moment later turns into a
+ * name. An id the list does not have -- an agent the operator has removed,
+ * or a list that never came -- is shown as it is: a conversation with an
+ * agent nobody can name any more still had one.
+ */
+export function agentTitle(agents: Agents, id: string): string | null {
+  if (agents.status === "loading") return null;
+  if (agents.status === "failed") return id;
+  return agents.items.find((agent) => agent.id === id)?.title ?? id;
+}
 
 /** The rail, as this browser last left it. */
 function usePanelCollapsed(): [boolean, (collapsed: boolean) => void] {
@@ -101,6 +123,26 @@ export function Shell({
 
   const current = route.kind === "conversation" ? route.id : null;
   const listed = conversationIn(history.items, current);
+  // What the chat's own read said about the conversation on the screen,
+  // which the panel's pages need not hold; the title is the panel's first,
+  // since renaming happens there.
+  const [opened, setOpened] = useState<{
+    id: string;
+    agent: string;
+    title: string | null;
+  } | null>(null);
+  const about = current !== null && opened?.id === current ? opened : null;
+  const title = listed?.title ?? about?.title ?? null;
+  const conversationAgent = listed?.agent ?? about?.agent ?? null;
+  const withAgent =
+    conversationAgent === null ? null : agentTitle(agents, conversationAgent);
+  const conversationOpened = useCallback((conversation: Conversation) => {
+    setOpened({
+      id: conversation.id,
+      agent: conversation.agent,
+      title: conversation.title,
+    });
+  }, []);
   // Held across renders: the chat memoises what it is given, so that a
   // keystroke in the message box does not remount the picker under it.
   const welcome = useMemo(
@@ -117,10 +159,11 @@ export function Shell({
       navigate({ kind: "conversation", id });
       // A conversation that has just been created is not in the panel's
       // list, and its title is the beginning of the message that created it
-      // (`docs/specs/conversations.md`).
+      // (`docs/specs/conversations.md`). Its agent is the one just chosen.
+      if (agentId !== null) setOpened({ id, agent: agentId, title: null });
       history.refresh();
     },
-    [history],
+    [history, agentId],
   );
 
   return (
@@ -183,16 +226,30 @@ export function Shell({
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <h1 className="mx-auto w-full max-w-3xl px-6 pt-4 text-xl font-semibold">
             {route.kind === "conversation"
-              ? listed === null
+              ? title === null
                 ? "…"
-                : shownTitle(listed.title)
+                : shownTitle(title)
               : "New chat"}
           </h1>
+          {/* Who the conversation is with, under its title. The picker is
+              gone once a conversation exists (`./AgentPicker.tsx`), and
+              with it the only thing on the screen that said so; this is
+              the fact it left behind, told as a line rather than a control
+              that could not be changed. */}
+          {withAgent !== null && (
+            <p
+              data-agent=""
+              className="mx-auto w-full max-w-3xl px-6 pt-1 text-sm text-muted-foreground"
+            >
+              with {withAgent}
+            </p>
+          )}
           <Chat
             key={chat}
             conversationId={current}
             agentId={agentId}
             onConversationStarted={startedConversation}
+            onConversationOpened={conversationOpened}
             onTurnEnded={history.refresh}
             welcome={welcome}
           />

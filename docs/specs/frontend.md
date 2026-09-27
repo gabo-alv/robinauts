@@ -12,6 +12,9 @@
   per browser.
 - The application opens on an empty chat, ready for a first message, with
   the agent to talk to selectable.
+- An open conversation names the agent it is with, under its title: once
+  the conversation exists the agent is a fact about it and not a choice
+  ([agents.md](agents.md)), so it is shown as a line, not a control.
 - On a small screen the panel becomes an overlay drawer opened from a
   button, and the chat is usable on a phone.
 - The theme follows the operating system by default. A light / dark /
