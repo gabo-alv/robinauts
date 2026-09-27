@@ -43,7 +43,7 @@ from robinauts.app import (
     NO_DATABASE,
     OFF_LOOPBACK,
 )
-from robinauts.datastore import SCHEMA_VERSION
+from robinauts.datastore import SCHEMA_SHA256, SCHEMA_VERSION
 from robinauts.domain import DatabaseUnreachableError
 
 DATABASE_URL = "postgresql://robinauts@127.0.0.1:5432/robinauts"
@@ -173,14 +173,15 @@ def test_an_unknown_log_level_is_a_usage_error() -> None:
 
 def test_version_says_the_build_and_the_schema_it_wants(capsys: Any) -> None:
     # The two halves of an upgrade. Until the first release the schema version
-    # stays 1, and a wheel whose schema.sql changed is a database to recreate
+    # stays 1, so the schema.sql hash is what tells a wheel whose schema
+    # changed -- and a database to recreate -- from one whose did not
     # (docs/specs/backend.md).
     code = cli.run(["version"])
 
     said = capsys.readouterr().out
     assert code == cli.OK
     assert said.startswith(f"{cli.PROGRAM} ")
-    assert f"(schema {SCHEMA_VERSION})" in said
+    assert f"(schema {SCHEMA_VERSION}, schema.sql {SCHEMA_SHA256[:12]})" in said
 
 
 # start.

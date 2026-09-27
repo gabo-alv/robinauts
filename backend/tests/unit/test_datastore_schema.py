@@ -198,6 +198,14 @@ def test_the_schema_stays_at_version_one_until_the_first_release() -> None:
     )
 
 
+def test_the_hash_is_recorded_by_the_command_and_not_by_the_file() -> None:
+    # A file cannot hold its own hash, so the column is there and the file
+    # leaves it empty: `create_schema` writes it after the file, and a file
+    # applied by hand records nothing and is refused.
+    assert "schema_sha256 text" in TABLES["schema_version"]
+    assert "schema_sha256" not in SQL[SQL.index("INSERT INTO schema_version") :]
+
+
 def test_the_version_is_written_last_and_never_overwritten() -> None:
     # Last, because the row is the claim that every table above it exists: a
     # file that stopped half way must leave no version at all. And never
@@ -293,6 +301,19 @@ def test_a_shadowed_table_is_a_search_path_to_fix_not_a_database_to_remake() -> 
     assert "sessions, users" in str(refused)
     assert "search path" in refused.advice
     assert DB_INIT_COMMAND not in str(refused)
+
+
+def test_a_database_made_from_an_older_file_is_told_to_drop_it() -> None:
+    # The version is 1 for every edit before the first release, so this is
+    # the refusal that stands where a version mismatch would otherwise be.
+    for recorded in ("0" * 64, None):
+        refused = SchemaError.stale(1, recorded)
+
+        assert refused.found == 1
+        assert "made from an older schema.sql" in str(refused)
+        assert "drop it and run" in str(refused) and DB_INIT_COMMAND in str(refused)
+    assert "not by" not in str(SchemaError.stale(1, "0" * 64))
+    assert "not by `robinauts db init`" in str(SchemaError.stale(1, None))
 
 
 def test_a_missing_table_under_the_right_version_names_the_table() -> None:

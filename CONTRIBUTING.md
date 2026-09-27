@@ -192,8 +192,12 @@ Every edit to that file updates the `SCHEMA_SHA256` pinned in
 both. That pin is the only thing standing where a migration would otherwise
 be; freezing the released schema comes with the migrations work. After
 pulling a schema change, drop your local database and run
-`robinauts db init` again; the tests are unaffected, because each creates a
-fresh schema. The file is hashed with `\n` line endings, which
+`robinauts db init` again. If you forget, the server and the command refuse
+the database, saying it was made from an older `schema.sql`: `db init`
+records the file's hash in the version row and both compare it, since the
+version alone says nothing about which edit a database was made from. The
+tests are unaffected, because each creates a fresh schema. The file is
+hashed with `\n` line endings, which
 [.gitattributes](.gitattributes) keeps it checked out with everywhere.
 
 Constraint names in that file are part of its interface: the store turns a

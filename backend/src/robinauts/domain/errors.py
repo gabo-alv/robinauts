@@ -374,6 +374,28 @@ class SchemaError(RobinautsError):
         return cls(f"the database is at schema version {found}", expected=expected, found=found)
 
     @classmethod
+    def stale(cls, expected: int, recorded: str | None) -> SchemaError:
+        """The right version, made from another edit of ``schema.sql``.
+
+        Until the first release the version is 1 whatever edit a database
+        was made from, so the hash ``robinauts db init`` records is what
+        tells them apart. ``None`` is a file applied by hand, which recorded
+        nothing, and is refused the same way: there is no telling which edit
+        it was.
+        """
+        return cls(
+            "the database was made from an older schema.sql"
+            + ("" if recorded else " (or not by `robinauts db init`)"),
+            expected=expected,
+            found=expected,
+            advice=(
+                f"drop it and run `{DB_INIT_COMMAND}` again: until the first release the"
+                " schema is edited in place, and a database made from an older schema.sql"
+                " is made again rather than upgraded"
+            ),
+        )
+
+    @classmethod
     def unversioned(cls, expected: int, tables: Iterable[str]) -> SchemaError:
         """Our tables are there and no version is recorded.
 

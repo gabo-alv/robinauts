@@ -54,8 +54,11 @@ against". Until the first release it is 1 and stays 1: ``schema.sql`` is one
 definition, edited in place, and a database made from an older edit is
 dropped and made again. ``SCHEMA_SHA256`` is what the file looked like when
 this build was written, so ``tests/unit/test_datastore_schema.py`` fails if
-the file changes and the pin does not. After the first release every change
-is a migration; freezing the released file comes with that work.
+the file changes and the pin does not -- and ``create_schema`` records it in
+the version row, where ``check_schema`` compares it, so a database made from
+an older edit is refused and named as one. That is what stands in for a
+version bump before the first release. After it every change is a
+migration; freezing the released file comes with that work.
 """
 
 from __future__ import annotations
@@ -76,7 +79,7 @@ again. The schema as released is version 1, and from then on every change is
 a migration that moves this number (``docs/specs/backend.md``, "Schema").
 """
 
-SCHEMA_SHA256 = "6d3425229e6db9d8b6202e6c97e9f42757c86bfcf86f2775a0a791e741694cb6"
+SCHEMA_SHA256 = "794d6d306d8ae3f03a3cb934f5e3e3f8544c9afb4c3c41e8d11cafecb7832955"
 """``schema.sql`` as this build was written against it.
 
 Before the first release every edit to ``schema.sql`` updates this pin and
@@ -195,6 +198,9 @@ async def create_schema(executor: Executor) -> None:
     * a schema of another version, our tables with no version recorded, or a
       ``schema_version`` this build cannot read -- refused, because there is
       no migration to run and the file would relabel rather than upgrade;
+    * this version, made from another edit of the file -- refused, and
+      told apart from the next case by the hash the row records, because
+      before the first release the version says nothing about which edit;
     * this version with a table missing -- refused too: it is a database
       somebody's ``psql`` left half way through, and finishing it would
       leave whatever else that run half did;
@@ -256,7 +262,7 @@ async def _create_schema(connection: asyncpg.Connection) -> None:
     """``create_schema`` once there is a connection to hold a lock on."""
     async with connection.transaction():
         await connection.execute(_LOCK_SCHEMA)
-        tables, found = await _state(connection)
+        tables, found, recorded = await _state(connection)
         if found is None:
             if tables.here:
                 raise SchemaError.unversioned(SCHEMA_VERSION, tables.here)
@@ -265,15 +271,20 @@ async def _create_schema(connection: asyncpg.Connection) -> None:
             # leave a schema that passes no check and takes no writes.
             tables.check_nothing_is_in_the_way()
             await connection.execute(schema_sql())
+            # After the file, in the same transaction: the file cannot hold
+            # its own hash, and the row is not a claim until the hash is in.
+            await connection.execute("UPDATE schema_version SET schema_sha256 = $1", SCHEMA_SHA256)
             return
         if found != SCHEMA_VERSION:
             raise SchemaError.mismatch(SCHEMA_VERSION, found)
+        if recorded != SCHEMA_SHA256:
+            raise SchemaError.stale(SCHEMA_VERSION, recorded)
         tables.check()
 
 
 async def _check_schema(connection: asyncpg.Connection) -> None:
     """``check_schema`` once there is one connection to ask everything on."""
-    tables, found = await _state(connection)
+    tables, found, recorded = await _state(connection)
     if found is None:
         raise (
             SchemaError.unversioned(SCHEMA_VERSION, tables.here)
@@ -282,17 +293,23 @@ async def _check_schema(connection: asyncpg.Connection) -> None:
         )
     if found != SCHEMA_VERSION:
         raise SchemaError.mismatch(SCHEMA_VERSION, found)
+    # Before the tables: a database made from an older edit may well be
+    # missing one, and "made from an older schema.sql" is the truer sentence.
+    if recorded != SCHEMA_SHA256:
+        raise SchemaError.stale(SCHEMA_VERSION, recorded)
     tables.check()
 
 
 async def _schema_version(connection: asyncpg.Connection) -> int | None:
     """``schema_version`` on one connection."""
-    _, found = await _state(connection)
+    _, found, _ = await _state(connection)
     return found
 
 
-async def _state(connection: asyncpg.Connection) -> tuple[_Tables, int | None]:
-    """What this schema holds, and the version it records.
+async def _state(
+    connection: asyncpg.Connection,
+) -> tuple[_Tables, int | None, str | None]:
+    """What this schema holds, the version it records, and the hash beside it.
 
     The search path is checked first, because a path that names no schema
     makes every other question meaningless. Then the catalogue, and the
@@ -305,20 +322,28 @@ async def _state(connection: asyncpg.Connection) -> tuple[_Tables, int | None]:
     here = await _current_schema(connection)
     tables = _Tables(await connection.fetch(_TABLES_HERE, list(SCHEMA_TABLES)))
     if "schema_version" not in tables.here:
-        return tables, None
+        return tables, None, None
     try:
         # Qualified with `current_schema()`, quoted by PostgreSQL's own
         # `quote_ident` rather than by us, so a `schema_version` further
         # along the search path is somebody else's business and a schema
-        # named something strange is still asked about correctly.
-        found = await connection.fetchval(f"SELECT version FROM {here}.schema_version")
+        # named something strange is still asked about correctly. The hash
+        # is read through `to_jsonb` so that a row from before the column
+        # existed reads as no hash rather than as an error.
+        row = await connection.fetchrow(
+            "SELECT version, to_jsonb(row) ->> 'schema_sha256' AS recorded"
+            f" FROM {here}.schema_version AS row"
+        )
     except asyncpg.exceptions.UndefinedColumnError as unreadable:
         # A table of that name with no `version` column: somebody else's, or
         # from a shape of ours older than this pin.
         raise SchemaError.unreadable(SCHEMA_VERSION) from unreadable
-    if found is not None and not isinstance(found, int):
+    if row is None:
+        return tables, None, None
+    found = row["version"]
+    if not isinstance(found, int):
         raise SchemaError.unreadable(SCHEMA_VERSION)
-    return tables, found
+    return tables, found, row["recorded"]
 
 
 class _Tables:

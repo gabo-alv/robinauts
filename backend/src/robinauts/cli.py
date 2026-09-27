@@ -66,7 +66,7 @@ import uvicorn
 
 from robinauts.adapters import environment
 from robinauts.app import DATABASE_URL_VARIABLE, NO_DATABASE, create_app
-from robinauts.datastore import SCHEMA_VERSION, create_schema, open_pool
+from robinauts.datastore import SCHEMA_SHA256, SCHEMA_VERSION, create_schema, open_pool
 from robinauts.domain import ConfigError, RobinautsError
 
 _log = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ DEV_MODE_HELP = (
     " deploy, and it refuses any --host that is not loopback"
 )
 
-SCHEMA_READY = "the database is at schema version %d"
+SCHEMA_READY = "the database is at schema version %d (schema.sql %s)"
 """Said by ``db init`` whether it created the schema or found it already there:
 the command's promise is the state of the database, not the work it did."""
 
@@ -397,11 +397,21 @@ def version() -> int:
     """This build, and the schema it was written against.
 
     Both, because they are the two halves of an upgrade. Until the first
-    release the schema version stays 1, and a new wheel whose ``schema.sql``
-    changed is a database to recreate (``docs/specs/backend.md``, "Schema").
+    release the schema version stays 1, so the start of the ``schema.sql``
+    hash is printed beside it: a new wheel whose hash differs is a database
+    to recreate (``docs/specs/backend.md``, "Schema"), and the server would
+    refuse the old one anyway.
     """
-    print(f"{PROGRAM} {_installed_version()} (schema {SCHEMA_VERSION})")
+    print(
+        f"{PROGRAM} {_installed_version()}"
+        f" (schema {SCHEMA_VERSION}, schema.sql {hash_prefix()})"
+    )
     return OK
+
+
+def hash_prefix() -> str:
+    """Enough of ``SCHEMA_SHA256`` to tell two edits of the file apart by eye."""
+    return SCHEMA_SHA256[:12]
 
 
 def _installed_version() -> str:
@@ -677,4 +687,4 @@ async def _created(url: str) -> None:
         await create_schema(pool)
     finally:
         await pool.close()
-    _log.info(SCHEMA_READY, SCHEMA_VERSION)
+    _log.info(SCHEMA_READY, SCHEMA_VERSION, hash_prefix())

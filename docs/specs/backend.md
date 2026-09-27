@@ -52,7 +52,10 @@ in [layout.md](../layout.md). This document holds the component choices.
   edited. From then on a deployment is upgradable in place.
 - The server never creates or changes the schema on its own. A command
   does. The server refuses to start against a database whose schema does
-  not match the code, and names the command that fixes it.
+  not match the code, and names the command that fixes it. Before the first
+  release "match" is the version **and** the SHA-256 of `schema.sql`, which
+  the command records when it creates the schema: a database made from an
+  older edit of the file is refused and named as one.
 
 ## Details likely to change
 

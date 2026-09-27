@@ -73,8 +73,9 @@ The locked set goes in **first**, and the wheel then goes in with
         --no-deps /tmp/robinauts-0.1.0-py3-none-any.whl
     sudo -u robinauts /var/lib/robinauts/venv/bin/robinauts version
 
-The last line prints the build and the schema version it wants — which is
-what an upgrade is decided by.
+The last line prints the build, the schema version it wants and the first
+characters of the `schema.sql` it carries — which is what an upgrade is
+decided by.
 
 `pip install robinauts-*.whl` on its own also works, and is fine for a
 trial: it just installs whatever `pip` resolves today rather than the set
@@ -263,11 +264,12 @@ Now create the schema, with that file and not with a flag:
         --property=EnvironmentFile=/etc/robinauts/environment \
         /var/lib/robinauts/venv/bin/robinauts db init
 
-It prints `the database is at schema version N` whether it created the
-schema or found it already there. It works on an **empty** database only:
-there are no migrations before the first release, and a database made from
-another `schema.sql` is made again rather than upgraded
-([specs/backend.md](specs/backend.md)).
+It prints `the database is at schema version N (schema.sql …)` whether it
+created the schema or found it already there. It works on an **empty**
+database only: there are no migrations before the first release, and a
+database made from another `schema.sql` is refused and made again rather
+than upgraded ([specs/backend.md](specs/backend.md)). The command records
+the file's hash in the database, and the server checks it at every start.
 
 The local development mode has **no** variable: it is asked for on the
 command line and nowhere else, so nothing a process inherits can turn
@@ -544,11 +546,12 @@ read once at start-up.
    install, with the new artifact's own pair of files:
    `pip install --require-hashes -r requirements.txt` then
    `pip install --no-deps --force-reinstall robinauts-<new>.whl`.
-3. Until the first release the schema version does not change, so
-   `robinauts version` says nothing about it: an upgrade whose `schema.sql`
-   changed means the database is **recreated**, not migrated, and all data
-   in it is disposable ([specs/backend.md](specs/backend.md)). After the
-   first release a moved version is a migration to run.
+3. `robinauts version` — until the first release the schema version stays
+   1, so what to compare is the `schema.sql` hash it prints beside it. If
+   it differs from what the previous install printed, the database is
+   **recreated**, not migrated, and all data in it is disposable
+   ([specs/backend.md](specs/backend.md)). The server refuses the old
+   database anyway, saying it was made from an older `schema.sql`.
 4. `robinauts db init` (a no-op when the schema is unchanged), then start
    the service.
 
@@ -614,6 +617,7 @@ engine = "pydantic-ai"
 | `the database could not be opened: …` | no server there, no such database, credentials refused | the driver's own sentence says which; the url is never echoed |
 | `the database has no Robinauts schema; this build needs schema version N` | `db init` was not run | run `robinauts db init` |
 | `the database is at schema version M; this build needs schema version N` | the wheel and the database disagree | there are no migrations before the first release: recreate the database and `db init` |
+| `the database was made from an older schema.sql …` | the wheel's `schema.sql` changed since `db init` ran, or the file was applied by hand | drop the database and run `robinauts db init` |
 | signing in loops back to the sign-in page | `public_url` is not the origin the browser is on: the redirect URI, the cookie prefix and the origin check are all built from that one string | make `public_url` character for character what the address bar shows, and re-register the redirect URI if it changed |
 | the sign-in page says the sign-in "came back to a different browser" (`state_mismatch`) | the login cookie did not come back: the deployment is reachable under two names or two ports, so the cookie was set on one origin and the callback landed on the other | one origin, equal to `public_url`; send the other name to it with a redirect |
 | `public_url: '…' is http on a host that is not loopback: use https` | an `http://` origin on a real host | https is mandatory: `public_url` beginning `https://` is what marks the cookies `Secure` and `__Host-`, and neither may be sent over `http` ([specs/sign-in.md](specs/sign-in.md)) |

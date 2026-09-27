@@ -222,10 +222,9 @@ fi
 [ -x "$ROBINAUTS" ] || fail "$ROBINAUTS is not there even after uv sync." 1
 
 # `db init` is idempotent: it applies this build's schema to an empty database,
-# does nothing to one that already has it, and refuses everything else. Until
-# the first release the schema is edited in place at version 1, so a demo
-# database made from an older schema.sql passes this step and is not upgraded:
-# `demo/stop.sh --reset` deletes it, and the next start makes it again.
+# does nothing to one that already has it, and refuses everything else -- a
+# demo database made from an older schema.sql included, which it says so
+# about: `demo/stop.sh --reset` deletes it, and the next start makes it again.
 say "Creating the schema if it is not there (robinauts db init) ..."
 "$ROBINAUTS" db init ||
     fail "robinauts db init failed; nothing was started, and it said why above." 1

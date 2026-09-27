@@ -18,7 +18,9 @@
 --
 -- Without both flags psql runs the statements one by one and keeps going
 -- after an error, which is exactly the half-applied database the version row
--- at the bottom of this file is placed to expose.
+-- at the bottom of this file is placed to expose. A database made that way
+-- records no `schema_sha256` (below), and the server refuses it: the command
+-- is what makes a database the server will run against.
 --
 -- **Editing this file means updating `SCHEMA_SHA256` in schema.py**, and
 -- nothing else: a test pins the SHA-256 of this file, so every edit is
@@ -64,9 +66,18 @@
 
 -- One row, for ever: `only_row` is a boolean primary key that must be true,
 -- so a second row cannot be inserted and the version cannot become ambiguous.
+--
+-- `schema_sha256` is the SHA-256 of this file as `robinauts db init` applied
+-- it, written by the command right after the file, since a file cannot hold
+-- its own hash. Until the first release the version is 1 whatever edit of
+-- this file a database was made from, so the hash is what tells an older
+-- edit apart from the current one: the server and the command refuse a
+-- database whose hash is not the build's, and say to make it again. NULL is
+-- a file applied by hand, refused the same way.
 CREATE TABLE IF NOT EXISTS schema_version (
     only_row boolean PRIMARY KEY DEFAULT true CHECK (only_row),
     version integer NOT NULL,
+    schema_sha256 text,
     applied_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -386,6 +397,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS run_events_one_end_per_run
 -- tests/unit/test_datastore_schema.py fails if the two drift apart.
 --
 -- Version 1 is the schema until the first release: this file, as it stands,
--- edited in place. A database made from an older edit is made again.
+-- edited in place. A database made from an older edit is made again, and
+-- `schema_sha256`, written by the command after this row, is how it is told.
 INSERT INTO schema_version (version) VALUES (1)
 ON CONFLICT (only_row) DO NOTHING;
