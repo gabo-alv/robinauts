@@ -722,6 +722,24 @@ test("after a turn that went wrong, asking again replaces the question", async (
   expect(posts[0]?.body).toEqual({ text: "why, really?", parent_id: null });
 });
 
+test("opening a conversation says what the server says it is", async () => {
+  stub((call) => {
+    if (call.url === `/api/conversations/${CONVERSATION}`) {
+      return json(opened(conversation(1, "Robins"), TREE, "m2"));
+    }
+    return undefined;
+  });
+  const openedWith = vi.fn();
+  const { result } = chatting({
+    conversationId: CONVERSATION,
+    onConversationOpened: openedWith,
+  });
+  await waitFor(() => {
+    expect(result.current.state.messages).toHaveLength(2);
+  });
+  expect(openedWith).toHaveBeenCalledWith(conversation(1, "Robins"));
+});
+
 test("regenerating names the answer to produce again, and sends no message", async () => {
   const posts: Call[] = [];
   stub((call) => {

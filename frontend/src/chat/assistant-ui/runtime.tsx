@@ -384,6 +384,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       return;
     }
     if (signal.aborted) return;
+    props.onConversationOpened?.(opened.conversation);
     dispatch({
       kind: "opened",
       conversationId,

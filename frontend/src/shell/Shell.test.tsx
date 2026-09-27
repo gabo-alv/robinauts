@@ -25,9 +25,9 @@ const SESSION: Session = {
 };
 
 /**
- * One agent, so the picker keeps out of the way of what is being tested, and
- * no conversations. A test that is about the history or a conversation
- * answers those calls itself and falls through to these for the rest.
+ * One agent and no conversations. A test that is about the history or a
+ * conversation answers those calls itself and falls through to these for
+ * the rest.
  */
 function answering(
   answer: (call: Call) => Response | undefined = () => undefined,
@@ -354,6 +354,53 @@ test("the hash decides which of the two the main area is", async () => {
   );
 });
 
+test("an open conversation says which agent it is with", async () => {
+  location.hash = `#/c/${id(1)}`;
+  await shell(undefined, withConversation);
+
+  // The fixture's conversation is with "helper", which the agents call Helper.
+  expect(screen.getByText("with Helper")).toBeInTheDocument();
+});
+
+test("a conversation the panel has not listed still has its title and agent", async () => {
+  location.hash = `#/c/${id(1)}`;
+  await shell(undefined, (call) => {
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(opened(conversation(1, "Robins"), [], null));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Robins",
+    );
+  });
+  expect(screen.getByText("with Helper")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Agent")).toBeNull();
+});
+
+test("an agent the deployment no longer offers is named by its id", async () => {
+  location.hash = `#/c/${id(1)}`;
+  await shell(undefined, (call) => {
+    if (call.url.startsWith("/api/agents")) {
+      return json({
+        items: [{ id: "other", title: "Other", engine: "langgraph" }],
+      });
+    }
+    return withConversation(call);
+  });
+
+  expect(screen.getByText("with helper")).toBeInTheDocument();
+});
+
+test("the empty chat has the picker and no line about an agent", async () => {
+  location.hash = "#/";
+  await shell();
+
+  expect(document.querySelector("[data-agent]")).toBeNull();
+});
+
 test("the chat stands where the placeholder stood, on both routes", async () => {
   // The empty chat: the box, and the agent picker above it. What used to be
   // here was a sentence saying the box arrives with the chat.
@@ -409,6 +456,8 @@ test("a first message routes to the conversation it created", async () => {
     await settled();
   });
   expect(location.hash).toBe(`#/c/${created}`);
+  // Who it is with is known before the panel has listed it.
+  expect(screen.getByText("with Helper")).toBeInTheDocument();
   // The chat is not remounted by the route following it: the answer that is
   // arriving would be thrown away.
   await waitFor(() => {

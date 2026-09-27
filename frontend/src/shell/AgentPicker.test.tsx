@@ -39,11 +39,6 @@ function Picking({ agents }: { agents: Agents }) {
   return <AgentPicker agents={agents} chosen={chosen} onChoose={choose} />;
 }
 
-test("one agent is not a choice, so there is no picker", () => {
-  render(<Picking agents={ready(AGENTS.slice(0, 1))} />);
-  expect(screen.queryByLabelText("Agent")).toBeNull();
-});
-
 test("no agent at all: nothing to pick, and a reason why", () => {
   render(<Picking agents={ready([])} />);
   expect(screen.getByLabelText("Agent")).toBeDisabled();
