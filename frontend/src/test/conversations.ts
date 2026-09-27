@@ -29,6 +29,7 @@ export function conversation(
     id: id(n),
     title,
     agent: "helper",
+    model: "sonnet",
     created_at: "2026-09-01T10:00:00Z",
     updated_at: "2026-09-02T10:00:00Z",
   };

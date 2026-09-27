@@ -492,7 +492,7 @@ class PydanticAIAgent(Agent):
         clear_client_overrides()
         quiet_client_logging()
         self._models = models
-        """Which model each agent runs on, and through which provider."""
+        """The models a turn may run on, and the provider each is reached through."""
         self._keys = keys
         """The providers' keys, as start-up read them. It prints nothing."""
         self._model_for = model_for
@@ -519,9 +519,9 @@ class PydanticAIAgent(Agent):
         return self._open
 
     def run_turn(
-        self, agent: AgentDefinition, history: Sequence[Message]
+        self, agent: AgentDefinition, history: Sequence[Message], *, model: str
     ) -> AsyncGenerator[EngineEvent, None]:
-        """Answer ``history`` as ``agent``, streaming the events of the turn.
+        """Answer ``history`` as ``agent`` on ``model``, streaming the events of the turn.
 
         Not a coroutine and nothing is done here: everything -- building the
         model, building the framework's agent, opening the stream -- happens
@@ -529,12 +529,14 @@ class PydanticAIAgent(Agent):
         failure of the turn, reported by raising where the caller is iterating,
         and not an exception thrown at whoever asked for the stream.
         """
-        return self._turn(agent, history)
+        return self._turn(agent, history, model)
 
     async def _turn(
-        self, agent: AgentDefinition, history: Sequence[Message]
+        self, agent: AgentDefinition, history: Sequence[Message], model_id: str
     ) -> AsyncGenerator[EngineEvent, None]:
-        model = self._models.model_for(agent)
+        # The run's model, never the agent's default: the conversation may
+        # have been moved to another (``robinauts.ports.agents``).
+        model = self._models.model_by_id(model_id)
         provider = self._models.provider_for(model)
         runner = _runner(agent, self._model_for(model, provider, self._keys.key_for(provider.id)))
         settings = _settings(model)

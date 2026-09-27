@@ -37,6 +37,8 @@ from conversations import (
     agent_definition,
     at,
     conversation,
+    model_config,
+    offered,
     question,
     run,
 )
@@ -480,6 +482,7 @@ def answering(
         tmp_path,
         conversation_store=store,
         agents={definition.id: definition},
+        models=offered(),
         engines={definition.engine: ScriptedAgent(*steps)},  # type: ignore[arg-type]
         provider=ScriptedIdentityProvider(),
         **changes,
@@ -993,21 +996,58 @@ NO_AGENT_TABLE = CONFIGURATION + MODEL_TABLES.partition("[agents.assistant]")[0]
 """Both halves of the file, with the provider and the model but no agent."""
 
 
-def test_an_agent_handed_in_with_its_own_engine_is_nobody_else_s_business(
+def test_an_agent_handed_in_with_its_own_engine_still_starts_on_a_model_on_offer(
     tmp_path: Path,
 ) -> None:
-    # The engine that was handed in is what will run it, and what model it can
-    # reach is that engine's affair, not this file's.
+    # The engine that was handed in is what will run it, and what it can reach
+    # is that engine's affair. What a conversation may run on is not: a turn
+    # on a model the deployment does not offer is refused, so an agent whose
+    # default is not among them would begin conversations that refuse their
+    # first turn. Said at start-up instead.
+    definition = agent_definition(id="stranger", model="opus", engine=Engine.PYDANTIC_AI)
+
+    with pytest.raises(ConfigError) as raised:
+        with_agents(
+            tmp_path,
+            NO_AGENT_TABLE,
+            agents={definition.id: definition},
+            engines={Engine.PYDANTIC_AI: ScriptedAgent(*says("Answered."))},
+        )
+
+    (problem,) = raised.value.problems
+    assert problem.startswith(
+        "the agent 'stranger' starts its conversations on model 'opus', which this"
+        " deployment does not offer"
+    )
+
+
+def test_an_agent_handed_in_with_its_own_engine_may_bring_its_models(
+    tmp_path: Path,
+) -> None:
+    # Handed in beside it, the models are what the deployment offers, and the
+    # file's are not consulted.
     definition = agent_definition(id="stranger", model="opus", engine=Engine.PYDANTIC_AI)
 
     deployment = with_agents(
         tmp_path,
         NO_AGENT_TABLE,
         agents={definition.id: definition},
+        models={"opus": model_config("opus")},
         engines={Engine.PYDANTIC_AI: ScriptedAgent(*says("Answered."))},
     )
 
     assert deployment is not None
+
+
+def test_models_handed_in_without_engines_are_refused(tmp_path: Path) -> None:
+    # The engines built from the file reach the file's models and no others,
+    # so a model handed in beside them would be offered and then fail in the
+    # middle of a turn.
+    with pytest.raises(ConfigError) as raised:
+        with_agents(tmp_path, models={"opus": model_config("opus")})
+
+    (problem,) = raised.value.problems
+    assert problem.startswith("models were handed in without the engines to run them")
 
 
 def test_an_agent_handed_in_that_the_configuration_does_know_is_accepted(

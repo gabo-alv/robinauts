@@ -171,6 +171,7 @@ api_key_env = "ROBINAUTS_ANTHROPIC_KEY"
 [models.sonnet]
 provider = "anthropic"
 name = "claude-sonnet-5"
+title = "Claude Sonnet 5"
 timeout_seconds = 120
 max_output_tokens = 8192
 
@@ -202,6 +203,14 @@ Notes on what is and is not there:
   dependency policy ([../DEPENDENCIES.md](../DEPENDENCIES.md)).
 - `token_endpoint_auth` is `client_secret_basic` by default, or
   `client_secret_post`.
+- **Titles.** An agent's or a model's `title` is the name a person picks it
+  by. It is optional, and left out it is the table's id.
+- **An agent's `model` is its default.** It is copied into a conversation
+  when the conversation starts, so changing it reaches new conversations
+  only. Removing a model that conversations are using refuses their next
+  turn as not found, exactly as removing their agent would, rather than
+  answering with another model; the log names the model
+  ([specs/agents.md](specs/agents.md)).
 - A file with no `[agents]` table is a deployment with no agents: it
   starts, the picker is empty, and the log says so.
 
@@ -538,9 +547,9 @@ platform pins those loggers and removes `ANTHROPIC_LOG` at start-up.
 
 **Restart.** `systemctl restart robinauts`. Runs still in flight are ended
 and marked `interrupted`; their authors retry by sending the message
-again. A configuration change — an agent's engine or model, the allow
-list, a new agent — takes effect at the next restart, because the file is
-read once at start-up.
+again. A configuration change — an agent's engine, an agent's default
+model (for new conversations only), the allow list, a new agent — takes
+effect at the next restart, because the file is read once at start-up.
 
 **Upgrade.**
 

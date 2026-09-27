@@ -38,8 +38,8 @@ import asyncio
 from typing import Any
 
 from aio import asyncio_test
-from conversations import AGENT, agent_definition
-from engines import Scripts, both_engines, scripts
+from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition
+from engines import MODELS, Scripts, both_engines, scripts
 from fakes import CountingIdSource, FakeClock, MemoryConversationStore
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
 from robinauts.application import Turns
@@ -88,6 +88,7 @@ def deployment(
         clock=clock,
         ids=ids,
         agents={agent.id: agent},
+        models=MODELS.models,
         engines=both_engines(said),
         executor=AsyncioRunExecutor(),
         signals=MemoryRunSignals(),
@@ -229,6 +230,38 @@ async def test_an_answer_is_stored_the_same_way_whichever_engine_wrote_it() -> N
     assert set(written[0]) == set(written[1]) == set(by_langgraph) | _ITS_OWN
     assert by_langgraph["parts"] == [{"kind": "text", "text": ANSWERED}]
     assert by_langgraph["format_version"] == FORMAT_VERSION
+
+
+@asyncio_test
+async def test_a_conversation_moved_to_another_model_runs_on_it_under_either_engine() -> None:
+    # The engine is the agent's and the model is the conversation's, and they
+    # change apart: each engine is handed the model the run was begun on, and
+    # builds its client for that, not for the agent's default.
+    said = scripts(ANSWERED)
+    store = MemoryConversationStore()
+    clock, ids = FakeClock(now=NOW), CountingIdSource()
+    first = await answered(deployment(store, Engine.LANGGRAPH, said, clock, ids), ASKED[0], None)
+    clock.advance(BETWEEN_TURNS)
+    await deployment(store, Engine.LANGGRAPH, said, clock, ids).set_model(
+        AUTHOR, first.conversation_id, OTHER_MODEL
+    )
+    for engine, asked in ((Engine.PYDANTIC_AI, ASKED[1]), (Engine.LANGGRAPH, ASKED[2])):
+        messages = await stored_messages(store, first.conversation_id)
+        await answered(deployment(store, engine, said, clock, ids), asked, messages[-1])
+        clock.advance(BETWEEN_TURNS)
+
+    messages = await stored_messages(store, first.conversation_id)
+    assert said.built == [
+        (Engine.LANGGRAPH, MODEL),
+        (Engine.PYDANTIC_AI, OTHER_MODEL),
+        (Engine.LANGGRAPH, OTHER_MODEL),
+    ]
+    # And every answer records the model that produced it.
+    assert [
+        (message.provenance.engine, message.provenance.model)
+        for message in messages
+        if message.provenance is not None
+    ] == said.built
 
 
 def _shared(document: dict[str, Any]) -> dict[str, Any]:

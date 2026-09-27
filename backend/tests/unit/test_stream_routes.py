@@ -35,7 +35,7 @@ import pytest
 from ag_ui.core import EventType
 
 from aio import asyncio_test
-from conversations import AGENT
+from conversations import AGENT, MODEL, OTHER_MODEL, conversation
 from fakes import Gate, MemoryConversationStore, Step, says
 from robinauts.api import (
     CONVERSATION_ID_HEADER,
@@ -55,6 +55,7 @@ from robinauts.api import (
     QUIET_RUN_DETAIL,
     RUN_ID_HEADER,
     SSE_MEDIA_TYPE,
+    UNKNOWN_FIELD,
     UNREADABLE_POSITION,
     UNREADABLE_RULES,
     NewChatRequest,
@@ -844,10 +845,13 @@ def test_every_field_of_a_new_chat_carries_the_bound_of_the_record_it_becomes() 
     one is a key into what the operator configured.
     """
     agent = NewChatRequest.model_fields["agent_id"].metadata
+    model = NewChatRequest.model_fields["model_id"].metadata
     text = NewChatRequest.model_fields["text"].metadata
 
     assert MAX_CONFIG_ID_CHARS in [getattr(one, "max_length", None) for one in agent]
     assert 1 in [getattr(one, "min_length", None) for one in agent]
+    assert MAX_CONFIG_ID_CHARS in [getattr(one, "max_length", None) for one in model]
+    assert 1 in [getattr(one, "min_length", None) for one in model]
     assert MAX_MESSAGE_CHARS in [getattr(one, "max_length", None) for one in text]
 
 
@@ -876,6 +880,120 @@ async def test_an_agent_this_deployment_has_not_got_is_not_there() -> None:
 
     assert refused.status_code == 404
     assert refused.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
+
+
+@asyncio_test
+async def test_a_new_chat_runs_on_the_model_it_names() -> None:
+    """Stored on the conversation, copied onto the run, and handed to the engine."""
+    async with served(*says(ANSWER)) as it:
+        answered = await it.client.post(
+            "/api/turns",
+            json={"agent_id": AGENT, "model_id": OTHER_MODEL, "text": QUESTION},
+            headers=WRITE,
+        )
+        conversation = await it.wiring.store.conversation_by_id(
+            uuid.UUID(answered.headers[CONVERSATION_ID_HEADER])
+        )
+        run = await it.wiring.store.run_by_id(uuid.UUID(answered.headers[RUN_ID_HEADER]))
+
+    assert answered.status_code == 200
+    assert conversation is not None and conversation.model == OTHER_MODEL
+    assert run is not None and run.model == OTHER_MODEL
+    assert [asked.model for asked in it.wiring.agent.asked] == [OTHER_MODEL]
+
+
+@pytest.mark.parametrize("body", [{}, {"model_id": None}])
+@asyncio_test
+async def test_a_new_chat_that_names_no_model_runs_on_the_agents_default(
+    body: dict[str, None],
+) -> None:
+    async with served(*says(ANSWER)) as it:
+        answered = await it.client.post(
+            "/api/turns", json={"agent_id": AGENT, "text": QUESTION, **body}, headers=WRITE
+        )
+        conversation = await it.wiring.store.conversation_by_id(
+            uuid.UUID(answered.headers[CONVERSATION_ID_HEADER])
+        )
+
+    assert answered.status_code == 200
+    assert conversation is not None and conversation.model == MODEL
+    assert [asked.model for asked in it.wiring.agent.asked] == [MODEL]
+
+
+@asyncio_test
+async def test_a_model_this_deployment_has_not_got_is_not_there() -> None:
+    """404, like an agent that is not there, and before anything is written."""
+    async with served(*says(ANSWER)) as it:
+        refused = await it.client.post(
+            "/api/turns",
+            json={"agent_id": AGENT, "model_id": "haiku", "text": QUESTION},
+            headers=WRITE,
+        )
+        page = await it.wiring.store.conversations_of(it.user.id, limit=10)
+
+    assert refused.status_code == 404
+    assert refused.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
+    assert page.conversations == ()
+    assert not it.wiring.agent.asked
+
+
+@asyncio_test
+async def test_a_conversation_whose_model_was_removed_is_not_answered() -> None:
+    """The model is the conversation's, and one no longer offered is not there.
+
+    404, like a removed agent, and not an answer from some other model:
+    whoever reads it has to know which model answered.
+    """
+    async with served(*says(ANSWER)) as it:
+        kept = conversation(id=uuid.uuid4(), owner_id=it.user.id, model="retired")
+        await it.wiring.store.add_conversation(kept)
+
+        refused = await it.client.post(
+            f"/api/conversations/{kept.id}/turns", json={"text": "And?"}, headers=WRITE
+        )
+
+    assert refused.status_code == 404
+    assert refused.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
+    assert not it.wiring.agent.asked
+
+
+@asyncio_test
+async def test_a_model_id_longer_than_one_could_be_is_refused_by_the_schema() -> None:
+    async with served(*says(ANSWER)) as it:
+        refused = await it.client.post(
+            "/api/turns",
+            json={"agent_id": AGENT, "model_id": "m" * (MAX_CONFIG_ID_CHARS + 1), "text": QUESTION},
+            headers=WRITE,
+        )
+
+    assert refused.status_code == 422
+    assert refused.json() == {
+        "error": "InvalidValueError",
+        "detail": f"body.model_id: {UNREADABLE_RULES['string_too_long']}",
+    }
+
+
+@asyncio_test
+async def test_a_turn_in_a_conversation_names_no_model() -> None:
+    """The conversation's model is moved by its own route, never by a turn.
+
+    So ``model_id`` is a field a turn's body does not know, and is refused as
+    one -- the same 422, and the same sentence, as any other.
+    """
+    async with served(*says(ANSWER)) as it:
+        started = await it.begun()
+        await settled(it.wiring, started.run)
+
+        refused = await it.client.post(
+            f"/api/conversations/{started.conversation.id}/turns",
+            json={"text": "And?", "parent_id": None, "model_id": OTHER_MODEL},
+            headers=WRITE,
+        )
+        kept = await it.wiring.store.conversation_by_id(started.conversation.id)
+
+    assert refused.status_code == 422
+    assert refused.json() == {"error": "InvalidValueError", "detail": f"body: {UNKNOWN_FIELD}"}
+    assert kept is not None and kept.model == MODEL
 
 
 @asyncio_test

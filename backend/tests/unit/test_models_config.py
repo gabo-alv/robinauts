@@ -29,6 +29,7 @@ from robinauts.domain import (
     MAX_ENV_NAME_CHARS,
     MAX_MODEL_NAME_CHARS,
     MAX_MODEL_TIMEOUT_SECONDS,
+    MAX_MODEL_TITLE_CHARS,
     MAX_OUTPUT_TOKENS,
     MAX_SYSTEM_PROMPT_CHARS,
     AgentDefinition,
@@ -37,7 +38,9 @@ from robinauts.domain import (
     InvalidValueError,
     ModelConfig,
     ModelProviderConfig,
+    ModelsConfig,
     ProviderKind,
+    UnknownModelError,
     is_endpoint_url,
 )
 
@@ -153,8 +156,8 @@ def test_the_lookups_are_whole_by_construction() -> None:
     config = parse_models_config(data())
 
     definition = config.agents["assistant"]
-    assert config.model_for(definition).name == "claude-sonnet-5"
-    assert config.provider_for(config.model_for(definition)).kind is ProviderKind.ANTHROPIC
+    assert config.model_by_id(definition.model).name == "claude-sonnet-5"
+    assert config.provider_for(config.model_by_id(definition.model)).kind is ProviderKind.ANTHROPIC
 
 
 def test_an_openai_compatible_provider_carries_its_base_url() -> None:
@@ -449,6 +452,32 @@ def test_a_model_says_what_the_vendor_calls_it() -> None:
     )
 
 
+def test_a_model_may_have_a_title_to_be_picked_by() -> None:
+    config = parse_models_config(data(models={"sonnet": {**SONNET, "title": "Claude Sonnet 5"}}))
+
+    assert config.models["sonnet"].title == "Claude Sonnet 5"
+
+
+def test_a_model_with_no_title_is_named_after_its_id() -> None:
+    assert parse_models_config(data()).models["sonnet"].title == "sonnet"
+
+
+@pytest.mark.parametrize("title", ["", 5, None])
+def test_a_model_s_title_is_text_when_it_is_given(title: Any) -> None:
+    assert only(model(title=title)) == "models.sonnet.title: missing, or not a non-empty string"
+
+
+def test_a_model_s_title_is_bounded() -> None:
+    assert only(model(title="C" * (MAX_MODEL_TITLE_CHARS + 1))) == (
+        f"models.sonnet.title: at most {MAX_MODEL_TITLE_CHARS} characters"
+    )
+
+
+def test_a_model_title_the_record_refuses_is_reported_as_a_problem_like_any_other() -> None:
+    assert only(model(title="Claude\nSonnet")).startswith("models.sonnet: ")
+    assert only(model(title="   ")).startswith("models.sonnet: ")
+
+
 def test_a_vendor_s_name_for_a_model_is_bounded() -> None:
     assert only(model(name="c" * (MAX_MODEL_NAME_CHARS + 1))) == (
         f"models.sonnet.name: at most {MAX_MODEL_NAME_CHARS} characters"
@@ -469,6 +498,26 @@ def test_a_ceiling_on_an_answer_is_a_whole_number_inside_its_bounds(tokens: Any)
     assert only(model(max_output_tokens=tokens)).startswith(
         "models.sonnet.max_output_tokens: a whole number of tokens over 0 and at most"
     )
+
+
+def test_a_model_is_found_by_the_id_a_conversation_carries() -> None:
+    config = parse_models_config(data())
+
+    assert config.model_by_id("sonnet") is config.models["sonnet"]
+
+
+def test_a_model_the_deployment_does_not_offer_is_named_as_such() -> None:
+    # What a conversation whose model the operator removed meets at its next
+    # turn: refused by name, never answered by some other model.
+    with pytest.raises(UnknownModelError) as raised:
+        parse_models_config(data()).model_by_id("gpt-5-5")
+
+    assert str(raised.value) == "no model 'gpt-5-5' is configured in this deployment"
+
+
+def test_a_model_id_that_is_not_spelt_like_one_is_refused_before_it_is_looked_up() -> None:
+    with pytest.raises(InvalidValueError):
+        ModelsConfig().model_by_id("Claude Sonnet!")
 
 
 # --- an agent ---------------------------------------------------------------
@@ -683,3 +732,16 @@ def test_a_record_holds_a_configured_endpoint_to_the_same_rule_as_the_parser() -
         )
 
     assert str(raised.value).startswith("base_url is an https:// endpoint")
+
+
+# --- the record's own rules about a model's title --------------------------
+
+
+def test_a_model_record_built_without_a_title_is_named_after_its_id() -> None:
+    assert ModelConfig(id="sonnet", provider="anthropic", name="claude-sonnet-5").title == "sonnet"
+
+
+@pytest.mark.parametrize("title", ["   ", "two\nlines", 5, "C" * (MAX_MODEL_TITLE_CHARS + 1)])
+def test_a_model_record_refuses_a_title_nobody_could_pick_it_by(title: Any) -> None:
+    with pytest.raises(InvalidValueError):
+        ModelConfig(id="sonnet", provider="anthropic", name="claude-sonnet-5", title=title)

@@ -164,6 +164,15 @@ class AgentContract:
         """The agent it is asked to run. Override for an engine that needs its own."""
         return agent_definition()
 
+    def model_id(self) -> str:
+        """The model it is told to run on: the agent's default, unless overridden.
+
+        A keyword of its own and not read off the agent, because the model is
+        the run's (``robinauts.ports.agents``); an engine's own suite is where
+        a turn on a model other than the agent's default is looked at.
+        """
+        return self.definition().model
+
     def history(self) -> tuple[Message, ...]:
         """The history it is given: a path ending in the question to answer."""
         return (question("What is a robinaut?"),)
@@ -172,7 +181,7 @@ class AgentContract:
         """Every event of one turn, run to its end."""
         agent = self.new_agent(script)
         seen: list[EngineEvent] = []
-        events = agent.run_turn(self.definition(), self.history())
+        events = agent.run_turn(self.definition(), self.history(), model=self.model_id())
         # The application closes the stream to release what the engine holds,
         # so the stream must be closeable: that is part of the port.
         assert hasattr(events, "aclose")
@@ -230,7 +239,9 @@ class AgentContract:
         seen: list[EngineEvent] = []
 
         with pytest.raises(Exception) as failure:  # noqa: B017 - an engine raises what it likes
-            async with aclosing(agent.run_turn(self.definition(), self.history())) as events:
+            async with aclosing(
+                agent.run_turn(self.definition(), self.history(), model=self.model_id())
+            ) as events:
                 async for event in events:
                     seen.append(event)
 
@@ -248,7 +259,9 @@ class AgentContract:
         arrived = asyncio.Event()
 
         async def watch() -> None:
-            async with aclosing(agent.run_turn(self.definition(), self.history())) as events:
+            async with aclosing(
+                agent.run_turn(self.definition(), self.history(), model=self.model_id())
+            ) as events:
                 async for event in events:
                     seen.append(event)
                     arrived.set()

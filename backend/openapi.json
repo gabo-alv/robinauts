@@ -19,13 +19,17 @@
         "type": "object"
       },
       "AgentSummary": {
-        "description": "One agent, as the picker on an empty chat offers it.\n\nThree fields, and deliberately no more: **no system prompt** -- it is the\noperator's, it is not a message and it never leaves the process\n(``docs/specs/conversations.md``) -- and no vendor, endpoint or key. The\nmodel is not here either: which model an agent runs is the operator's\nchoice and shows on the answers it produced (``ProvenanceView``), where it\nis a fact about what happened rather than something to pick by.",
+        "description": "One agent, as the picker on an empty chat offers it.\n\nFour fields, and deliberately no more: **no system prompt** -- it is the\noperator's, it is not a message and it never leaves the process\n(``docs/specs/conversations.md``) -- and no vendor, endpoint or key.\n\n``model`` is the agent's **default**: the platform's id of the model a new\nconversation with it starts on unless its author picks another\n(``ModelSummary``). It was once left out, as the operator's choice and\nnothing to pick by; now that a person picks the model, the picker has to\nknow which one to select when the agent is chosen.",
         "properties": {
           "engine": {
             "$ref": "#/components/schemas/Engine"
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
             "type": "string"
           },
           "title": {
@@ -36,7 +40,8 @@
         "required": [
           "id",
           "title",
-          "engine"
+          "engine",
+          "model"
         ],
         "title": "AgentSummary",
         "type": "object"
@@ -99,7 +104,7 @@
         "type": "object"
       },
       "ConversationSummary": {
-        "description": "A conversation as the panel lists it and as a write answers with it.\n\nNo owner: it is the person asking, on every route there is\n(``docs/specs/privacy.md``).",
+        "description": "A conversation as the panel lists it and as a write answers with it.\n\nNo owner: it is the person asking, on every route there is\n(``docs/specs/privacy.md``).\n\n``model`` is the id of the model its next turn runs on -- the one its\nauthor picked, or its agent's default when it began -- and may be one the\ndeployment no longer offers, which is what a picker shows so that it can\nbe changed (``docs/specs/agents.md``). What produced an answer already\ngiven is on the answer (``ProvenanceView``).",
         "properties": {
           "agent": {
             "title": "Agent",
@@ -113,6 +118,10 @@
           "id": {
             "format": "uuid",
             "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
             "type": "string"
           },
           "title": {
@@ -129,6 +138,7 @@
           "id",
           "title",
           "agent",
+          "model",
           "created_at",
           "updated_at"
         ],
@@ -259,6 +269,42 @@
           "provenance"
         ],
         "title": "MessageView",
+        "type": "object"
+      },
+      "ModelListResponse": {
+        "description": "Every model a conversation of this deployment may run on, in configuration order.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ModelSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ModelListResponse",
+        "type": "object"
+      },
+      "ModelSummary": {
+        "description": "One model, as the picker offers it: the id to ask for, and what to call it.\n\nTwo fields, and deliberately no more: the provider it is reached through\nand the vendor's name for it are the operator's, and so is how long a call\nto it may take (``domain.ModelConfig``). The id is the platform's own,\nthe one a conversation and an answer's provenance carry.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "ModelSummary",
         "type": "object"
       },
       "OpenedConversationResponse": {
@@ -515,6 +561,23 @@
         "title": "SessionResponse",
         "type": "object"
       },
+      "SetModelRequest": {
+        "additionalProperties": false,
+        "description": "The model a conversation's next turn is to run on.\n\nIts id, as ``GET /api/models`` lists it. The bound is a configured id's\n(``domain.MAX_CONFIG_ID_CHARS``), said here so that it is in the document;\nwhether the deployment offers that model is the application's to say\n(``application.Turns.set_model``).",
+        "properties": {
+          "model_id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id"
+        ],
+        "title": "SetModelRequest",
+        "type": "object"
+      },
       "UserSummary": {
         "description": "Who is signed in, as the interface shows them in the profile block.",
         "properties": {
@@ -568,7 +631,7 @@
   "paths": {
     "/api/agents": {
       "get": {
-        "description": "The agents this deployment is configured with, for the picker.\n\nThe id to start a conversation with, the title to show, and the engine it\nruns on. **Not the system prompt**, which is the operator's and is not a\nmessage, and nothing about a vendor or a key (``docs/specs/agents.md``).\n\nDeclared rather than injected: the list is the deployment's and is the\nsame for everybody signed in, so the route needs the declaration and not\nthe person.\n\nThey are fixed at start-up in this version: the configuration is read once\nby the composition root, so an agent added or removed shows here after a\nrestart.",
+        "description": "The agents this deployment is configured with, for the picker.\n\nThe id to start a conversation with, the title to show, the engine it\nruns on and the model a conversation with it starts on unless another is\npicked. **Not the system prompt**, which is the operator's and is not a\nmessage, and nothing about a vendor or a key (``docs/specs/agents.md``).\n\nDeclared rather than injected: the list is the deployment's and is the\nsame for everybody signed in, so the route needs the declaration and not\nthe person.\n\nThey are fixed at start-up in this version: the configuration is read once\nby the composition root, so an agent added or removed shows here after a\nrestart.",
         "operationId": "list_agents_api_agents_get",
         "responses": {
           "200": {
@@ -1011,6 +1074,120 @@
         ]
       }
     },
+    "/api/conversations/{conversation_id}/model": {
+      "put": {
+        "description": "Move a conversation to another model; the conversation as it then is.\n\nIts next turn runs on that model, and so does every one after it until it\nis moved again (``docs/specs/agents.md``). **A run in flight is no reason\nto refuse**: it keeps the model it started with, which is what its answer\nrecords, and the change is what the next turn runs on.\n\nA ``PUT``, because the body is the whole of the conversation's model\nrather than a change to it.\n\n**A model the deployment does not offer is 422 here**, naming the field,\nwhere the turn routes answer 404 for it as for an agent that is not\nthere. The model is the one value this route takes, so a request naming\none the picker could not have offered is a body this route cannot take --\nand a 404 at a path that names a conversation would read as the\nconversation not being there.\n\n**The model is checked first**, before the conversation is looked up, as\na rename checks its title: nothing is read for a value that is refused\nanyway. So a model the deployment does not offer is 422 whatever the\nconversation -- one that is not there and one that is somebody else's\nincluded -- which says nothing about the conversation, because the answer\ndoes not depend on it. With a model that is offered, a conversation that\nis not there, or not this person's, is the 404 every route here answers.",
+        "operationId": "set_model_api_conversations__conversation_id__model_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "any other refusal, in the same shape: 400, 405, 500"
+          }
+        },
+        "summary": "Set Model",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
     "/api/conversations/{conversation_id}/runs/{run_id}/cancel": {
       "post": {
         "description": "Stop the run answering in that conversation; the run as it then is.\n\n**Asking is not the same as having happened.** A run this process is\nexecuting is cancelled by cancelling its work, and the end is written a\nmoment later under a shield, so what comes back may still say ``running``;\na client learns that it ended from the run's own stream, or by opening the\nconversation again. A run no process here is executing -- after a restart\n-- is ended in the store instead, and comes back ``cancelled``. A run that\nhas already ended is not an error (``docs/specs/runs.md``).\n\nThe URL names both the conversation and the run, and the application\nchecks that the run is that conversation's: a run of another conversation\nanswers exactly like a run that does not exist, as one of somebody else's\ndoes.",
@@ -1123,6 +1300,58 @@
         "tags": [
           "conversations",
           "runs"
+        ]
+      }
+    },
+    "/api/models": {
+      "get": {
+        "description": "The models a conversation of this deployment may run on, for the picker.\n\nThe id to pick one by and the title to show. Nothing about the provider\nit is reached through or the vendor's name for it, which are the\noperator's (``docs/specs/agents.md``). Every agent's default is among\nthem, because a deployment that configured it otherwise does not start\n(``application.Turns``).\n\n**In configuration order**, as the agents are: the operator wrote the\nlist, so the order they wrote it in is the one thing about its order that\nmeans something -- and it is the same on every request, so a picker does\nnot reshuffle. A client that wants them sorted by title sorts them.\n\nDeclared rather than injected, and fixed at start-up, for the reasons\n``list_agents`` gives.",
+        "operationId": "list_models_api_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "any other refusal, in the same shape: 400, 405, 500"
+          }
+        },
+        "summary": "List Models",
+        "tags": [
+          "models"
         ]
       }
     },

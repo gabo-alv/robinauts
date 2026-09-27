@@ -8,13 +8,14 @@
     GET    /api/conversations                          the panel's list, paged
     GET    /api/conversations/{id}                     open one: its thread and the run
     PATCH  /api/conversations/{id}                     rename
+    PUT    /api/conversations/{id}/model               move it to another model
     DELETE /api/conversations/{id}                     delete, for good
     POST   /api/conversations/{id}/runs/{run_id}/cancel  stop the answer
 
 Everything a chat client does but write in a conversation: starting a turn and
 watching one arrive are the streaming half of the wire and are not here
-(``docs/specs/wire.md``), and the agents a conversation can be started with
-are ``robinauts.api.agent_routes``. There is nothing browser-shaped about any
+(``docs/specs/wire.md``), and the agents and models a conversation can be
+started with are ``robinauts.api.agent_routes``. There is nothing browser-shaped about any
 of them -- one API, for every channel (``docs/specs/channels.md``).
 
 **Every route here may also answer 400, 405 and 500**, in the same
@@ -91,9 +92,10 @@ from robinauts.api.schemas import (
     OpenedConversationResponse,
     RenameRequest,
     RunView,
+    SetModelRequest,
 )
 from robinauts.application import DEFAULT_PAGE, MAX_PAGE
-from robinauts.domain import InvalidCursorError, InvalidValueError
+from robinauts.domain import InvalidCursorError, InvalidValueError, UnknownModelError
 
 conversation_router = APIRouter(prefix="/api", tags=["conversations"])
 
@@ -200,6 +202,59 @@ async def rename_conversation(
         # ``NotFoundError`` and not this. So a refused value is the title's.
         raise InvalidValueError(f"body.title: {refused}") from refused
     return ConversationSummary.of(renamed)
+
+
+NOT_OFFERED = "body.model_id: is not a model this deployment offers"
+"""What a request for a model the deployment does not offer is refused with.
+
+Fixed, and naming the field and not the id: the id is the request's, and a
+body never repeats what the request carried (``robinauts.api.errors``).
+"""
+
+
+@conversation_router.put("/conversations/{conversation_id}/model", responses=WRITING)
+async def set_model(
+    request: Request,
+    user: SignedIn,
+    conversation_id: uuid.UUID,
+    asked: SetModelRequest,
+    read_once: StrictJson,
+) -> ConversationSummary:
+    """Move a conversation to another model; the conversation as it then is.
+
+    Its next turn runs on that model, and so does every one after it until it
+    is moved again (``docs/specs/agents.md``). **A run in flight is no reason
+    to refuse**: it keeps the model it started with, which is what its answer
+    records, and the change is what the next turn runs on.
+
+    A ``PUT``, because the body is the whole of the conversation's model
+    rather than a change to it.
+
+    **A model the deployment does not offer is 422 here**, naming the field,
+    where the turn routes answer 404 for it as for an agent that is not
+    there. The model is the one value this route takes, so a request naming
+    one the picker could not have offered is a body this route cannot take --
+    and a 404 at a path that names a conversation would read as the
+    conversation not being there.
+
+    **The model is checked first**, before the conversation is looked up, as
+    a rename checks its title: nothing is read for a value that is refused
+    anyway. So a model the deployment does not offer is 422 whatever the
+    conversation -- one that is not there and one that is somebody else's
+    included -- which says nothing about the conversation, because the answer
+    does not depend on it. With a model that is offered, a conversation that
+    is not there, or not this person's, is the 404 every route here answers.
+    """
+    try:
+        moved = await turning(request).set_model(user, conversation_id, asked.model_id)
+    except UnknownModelError as refused:
+        raise InvalidValueError(NOT_OFFERED) from refused
+    except InvalidValueError as refused:
+        # The model's id is the only value this route hands ``set_model``, as
+        # the title is ``rename``'s: the conversation's id is a uuid the
+        # document parsed, and the person is the session's.
+        raise InvalidValueError(f"body.model_id: {refused}") from refused
+    return ConversationSummary.of(moved)
 
 
 @conversation_router.delete(

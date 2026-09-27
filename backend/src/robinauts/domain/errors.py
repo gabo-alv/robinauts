@@ -114,6 +114,21 @@ class UnknownAgentError(NotFoundError):
     """
 
 
+class UnknownModelError(NotFoundError):
+    """No model of that id is configured in this deployment.
+
+    The model's twin of ``UnknownAgentError``, and under ``NotFoundError`` for
+    the same reasons: a model's id is not a secret -- the picker lists the ones
+    there are -- and a name that reaches nothing answers like everything else
+    that is not there. It is what a person picking a model that is not offered
+    meets, and what a conversation whose model the operator has since removed
+    meets at its next turn: that turn is refused rather than answered by
+    another model, because the point of choosing is knowing who answers
+    (``docs/specs/agents.md``). The detail, which reaches the log alone, says
+    which of the two it was.
+    """
+
+
 class NotTheOwnerError(RobinautsError):
     """A conversation belongs to somebody else.
 

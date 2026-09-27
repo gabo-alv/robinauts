@@ -164,10 +164,18 @@ CREATE INDEX IF NOT EXISTS pending_logins_expires_at_idx ON pending_logins (expi
 -- Conversations.
 -- ---------------------------------------------------------------------------
 
--- A conversation: one owner, one agent, a title and its times
+-- A conversation: one owner, one agent, a model, a title and its times
 -- (docs/specs/conversations.md). The id is the application's, never the
 -- server's: a turn builds the conversation, its first message and its run
 -- together, before any of them is stored, so nothing here may mint one.
+--
+-- `model` is NOT NULL: the agent's default is copied in when the conversation
+-- starts, unless its author picked another, so what a conversation runs on is
+-- read off this row alone and never off whatever the agent says today
+-- (docs/specs/agents.md). Like `agent`, it is an id of the configuration and
+-- not a foreign key: the operator may remove the model, and the conversation
+-- then keeps its row and its next turn is refused as not found, as a removed
+-- agent's is.
 --
 -- `owner_id` cascades. Deleting a user deletes their conversations, with the
 -- messages, runs and events under them, by the chain of foreign keys below.
@@ -186,6 +194,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     owner_id uuid NOT NULL
         CONSTRAINT conversations_owner_id_fkey REFERENCES users (id) ON DELETE CASCADE,
     agent text NOT NULL,
+    model text NOT NULL,
     title text NOT NULL,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL

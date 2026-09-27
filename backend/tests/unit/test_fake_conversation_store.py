@@ -64,6 +64,7 @@ class RacyContract(MemoryStoreContract):
 
 NOT_ATOMIC = {
     "test_a_rename_and_an_append_at_once_keep_both",
+    "test_a_model_change_and_an_append_at_once_keep_both",
     "test_one_of_several_runs_started_at_once_is_the_one_that_runs",
     "test_one_of_several_events_offered_a_position_at_once_is_stored",
     "test_a_delete_and_a_run_beginning_at_once_leave_no_orphan",

@@ -124,6 +124,7 @@ from robinauts.domain import (
     Engine,
     InvalidValueError,
     LocalMode,
+    ModelConfig,
     ModelsConfig,
     ProviderKind,
     SignInConfig,
@@ -384,6 +385,7 @@ class Deployment:
         secrets: SecretSource | None = None,
         secret_for: SecretLookup = environment,
         agents: Mapping[str, AgentDefinition] | None = None,
+        models: Mapping[str, ModelConfig] | None = None,
         engines: Mapping[Engine, Agent] | None = None,
         turn_seconds: float = DEFAULT_TURN_SECONDS,
     ) -> None:
@@ -462,6 +464,14 @@ class Deployment:
         allowed and is what a file with no agents -- and the local development
         mode, which has no file -- describes.
         """
+        self._models = dict(models or {})
+        """The models a conversation of this deployment may run on.
+
+        ``configured`` reads them out of the ``[models]`` table, likewise;
+        handing them in is how a test whose agents run on its own engine names
+        the models those agents' conversations run on. Every agent's default
+        is one of them, which the run lifecycle checks when it is built.
+        """
         self._engines = dict(engines or {})
         """The engine of each kind this deployment runs, likewise from ``configured``.
 
@@ -490,6 +500,7 @@ class Deployment:
         clock: Clock | None = None,
         secrets: SecretSource | None = None,
         agents: Mapping[str, AgentDefinition] | None = None,
+        models: Mapping[str, ModelConfig] | None = None,
         engines: Mapping[Engine, Agent] | None = None,
         turn_seconds: float = DEFAULT_TURN_SECONDS,
     ) -> Deployment:
@@ -538,7 +549,7 @@ class Deployment:
             problems.append(NO_DATABASE)
         local = local_development_host is not None
         config: SignInConfig | None = None
-        models = ModelsConfig()
+        configured_models = ModelsConfig()
         if local and not is_loopback_bind_host(local_development_host):
             problems.append(OFF_LOOPBACK % (local_development_host,))
         if not path:
@@ -566,7 +577,7 @@ class Deployment:
                     problems.append(BOTH_MODES)
                     data = {}
                 try:
-                    models = parse_models_config(
+                    configured_models = parse_models_config(
                         data,
                         # What this deployment can actually build, which core
                         # cannot know: the engines wired below, and the
@@ -583,7 +594,7 @@ class Deployment:
                 problems.extend(exc.problems)
         keys: ProviderKeys | None = None
         try:
-            keys = check_api_keys(models, secret_for=secret_for)
+            keys = check_api_keys(configured_models, secret_for=secret_for)
         except ConfigError as exc:
             problems.extend(exc.problems)
         if agents is not None and engines is None:
@@ -606,12 +617,35 @@ class Deployment:
                 f" {definition.model!r}, which is not in the configuration: configure the"
                 f" model, or hand in the engine that is to run the agent"
                 for agent_id, definition in agents.items()
-                if definition.model not in models.models
+                if definition.model not in configured_models.models
+            )
+        if models is not None and engines is None:
+            # The engines built below reach the configuration's models and no
+            # others, so a model handed in beside them would be offered and
+            # then fail in the middle of somebody's turn.
+            problems.append(
+                "models were handed in without the engines to run them: the engines this"
+                " build constructs reach the configuration's models, so configure them,"
+                " or hand in the engines as well"
+            )
+        if engines is not None:
+            # Whatever runs them, a conversation runs on a model this
+            # deployment offers, and one begun on an agent's default would be
+            # refused at its first turn if the default were not among them.
+            offered = models if models is not None else configured_models.models
+            problems.extend(
+                f"the agent {agent_id!r} starts its conversations on model"
+                f" {definition.model!r}, which this deployment does not offer: configure"
+                f" the model, or hand it in beside the agent"
+                for agent_id, definition in (
+                    agents if agents is not None else configured_models.agents
+                ).items()
+                if definition.model not in offered
             )
         if problems or (config is None and local_development_host is None):
             raise ConfigError(problems)
         assert keys is not None  # every failure above is a problem, and we raised
-        if not models.agents:
+        if not configured_models.agents:
             _log.info(NO_AGENTS)
         return cls(
             config,
@@ -623,7 +657,8 @@ class Deployment:
             clock=clock,
             secrets=secrets,
             secret_for=secret_for,
-            agents=agents if agents is not None else models.agents,
+            agents=agents if agents is not None else configured_models.agents,
+            models=models if models is not None else configured_models.models,
             # Built whether or not an agent uses it: it holds nothing -- a
             # graph and a client are made per turn -- and constructing it is
             # what turns hosted tracing off for this process, which is true of
@@ -631,7 +666,7 @@ class Deployment:
             engines=(
                 engines
                 if engines is not None
-                else {name: adapter(models, keys) for name, adapter in ENGINES.items()}
+                else {name: adapter(configured_models, keys) for name, adapter in ENGINES.items()}
             ),
             turn_seconds=turn_seconds,
         )
@@ -695,6 +730,7 @@ class Deployment:
                 clock=self._clock,
                 ids=self._ids,
                 agents=self._agents,
+                models=self._models,
                 engines=self._engines,
                 executor=self._executor,
                 signals=self._signals,
@@ -840,6 +876,7 @@ def create_app(
     clock: Clock | None = None,
     secrets: SecretSource | None = None,
     agents: Mapping[str, AgentDefinition] | None = None,
+    models: Mapping[str, ModelConfig] | None = None,
     engines: Mapping[Engine, Agent] | None = None,
     turn_seconds: float = DEFAULT_TURN_SECONDS,
     ui_dir: Path | None = None,
@@ -889,6 +926,7 @@ def create_app(
         clock=clock,
         secrets=secrets,
         agents=agents,
+        models=models,
         engines=engines,
         turn_seconds=turn_seconds,
     )

@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from aio import asyncio_test
-from conversations import AGENT, agent_definition, at
+from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition, at, offered
 from fakes import CountingIdSource, FakeClock, Gate, MemoryConversationStore, Raise, says
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
 from robinauts.application import Conversations, Turns, Watch
@@ -647,6 +647,48 @@ async def test_the_engine_is_given_the_agent_and_the_path_to_the_question() -> N
 
 
 @asyncio_test
+async def test_the_engine_is_given_the_model_the_conversation_was_moved_to() -> None:
+    # Not the agent's default: the run's, which is the conversation's when the
+    # run was begun -- and the answer says so.
+    wiring = wired(*says(ANSWER))
+    first = await begun(wiring)
+    await wiring.turns.execute(first)
+    await wiring.turns.set_model(AUTHOR, first.conversation_id, OTHER_MODEL)
+    second = await wiring.turns.start(
+        AUTHOR,
+        conversation_id=first.conversation_id,
+        text="And why?",
+        parent_id=(await stored_messages(wiring.store, first.conversation_id))[-1].id,
+    )
+
+    await wiring.turns.execute(second.run)
+
+    assert [asked.model for asked in wiring.agent.asked] == [MODEL, OTHER_MODEL]
+    answers = [
+        message.provenance.model
+        for message in await stored_messages(wiring.store, first.conversation_id)
+        if message.provenance is not None
+    ]
+    assert answers == [MODEL, OTHER_MODEL]
+
+
+@asyncio_test
+async def test_a_run_begun_before_the_model_was_changed_runs_on_the_one_it_began_with() -> None:
+    # The change is for the next turn: the run in flight -- and one taken up
+    # again later -- is handed the model it records, not the conversation's
+    # as it now is.
+    wiring = wired(*says(ANSWER))
+    run = await begun(wiring)
+    await wiring.turns.set_model(AUTHOR, run.conversation_id, OTHER_MODEL)
+
+    await wiring.turns.execute(run)
+
+    assert wiring.agent.asked[-1].model == MODEL
+    answer = (await stored_messages(wiring.store, run.conversation_id))[-1]
+    assert answer.provenance is not None and answer.provenance.model == MODEL
+
+
+@asyncio_test
 async def test_a_history_longer_than_the_limit_drops_whole_turns() -> None:
     wiring = wired(*says("A" * 20), history_chars=50)
     first = await begun(wiring, "Q" * 20)
@@ -818,7 +860,7 @@ async def test_a_run_that_could_not_be_ended_says_so_in_the_log(
 class BreaksWhenLetGo(Agent):
     """An engine whose release fails -- while the turn is being cancelled."""
 
-    def run_turn(self, agent: AgentDefinition, history: Sequence[Message]) -> Any:
+    def run_turn(self, agent: AgentDefinition, history: Sequence[Message], *, model: str) -> Any:
         return self._events()
 
     async def _events(self) -> Any:
@@ -843,7 +885,7 @@ class NeverLetsGo(Agent):
         self.closing = asyncio.Event()
         self.free = asyncio.Event()
 
-    def run_turn(self, agent: AgentDefinition, history: Sequence[Message]) -> Any:
+    def run_turn(self, agent: AgentDefinition, history: Sequence[Message], *, model: str) -> Any:
         return self._events()
 
     async def _events(self) -> Any:
@@ -872,6 +914,7 @@ def over(engine: Agent) -> Wiring:
             clock=clock,
             ids=CountingIdSource(),
             agents={definition.id: definition},
+            models=offered(),
             engines={definition.engine: engine},
             executor=executor,
             signals=signals,
@@ -1344,7 +1387,7 @@ class SlowToClose(Agent):
         self.closing = asyncio.Event()
         self.free = asyncio.Event()
 
-    def run_turn(self, agent: AgentDefinition, history: Sequence[Message]) -> Any:
+    def run_turn(self, agent: AgentDefinition, history: Sequence[Message], *, model: str) -> Any:
         return self._events()
 
     async def _events(self) -> Any:
@@ -1368,7 +1411,7 @@ async def test_a_cancellation_while_a_stream_is_closing_is_not_swallowed(
     # exercises.
     engine = SlowToClose()
     wiring = over(engine)
-    events = engine.run_turn(wiring.definition, ())
+    events = engine.run_turn(wiring.definition, (), model=MODEL)
     assert await anext(events) == AnswerStarted()
     pump = _Pump()
     pump.events = events

@@ -100,6 +100,7 @@ from robinauts.domain import (
     SignInErrorCode,
     StoredDataError,
     UnknownAgentError,
+    UnknownModelError,
     UnknownProviderError,
     UnsupportedContentError,
     UnsupportedFormatError,
@@ -260,6 +261,12 @@ STATUS_OF: dict[type[RobinautsError], int] = {
     # since it is under `NotFoundError` and there is one answer for everything
     # that is not there.
     UnknownAgentError: 404,
+    # A model id that names no configured model: the same, for the same
+    # reasons. A conversation whose model the operator has since removed meets
+    # it at its next turn. The one route whose body is nothing but a model --
+    # `PUT /api/conversations/{id}/model` -- answers it as the unreadable
+    # field it is there instead (422), and says so itself.
+    UnknownModelError: 404,
     # The conversation is busy answering, or the run has moved on: the state
     # of something else is what refuses, and trying again may well work.
     RunAlreadyActiveError: 409,

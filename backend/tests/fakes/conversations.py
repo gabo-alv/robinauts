@@ -67,6 +67,7 @@ from robinauts.domain import (
     RunEvent,
     RunNotFoundError,
     RunState,
+    checked_config_id,
     checked_line,
 )
 from robinauts.ports import (
@@ -176,6 +177,21 @@ class MemoryConversationStore(ConversationStore):
             if found is None:
                 return None
             written = replace(found, title=title, updated_at=now)
+            self._conversations[conversation_id] = written
+            return written
+
+    async def set_model(
+        self, conversation_id: uuid.UUID, model: str, *, now: datetime
+    ) -> Conversation | None:
+        # Kept before the write, as the title is on a rename.
+        checked_config_id(model, "a model's id")
+        _instant(now)
+        async with self._locked():
+            found = self._conversations.get(conversation_id)
+            await _a_turn()
+            if found is None:
+                return None
+            written = replace(found, model=model, updated_at=now)
             self._conversations[conversation_id] = written
             return written
 

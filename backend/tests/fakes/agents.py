@@ -86,6 +86,8 @@ class Asked:
 
     agent: AgentDefinition
     history: tuple[Message, ...]
+    model: str
+    """The model it was told to run on: the run's, which is not always the agent's."""
 
 
 class ScriptedAgent(Agent):
@@ -101,11 +103,11 @@ class ScriptedAgent(Agent):
         self._open = 0
 
     def run_turn(
-        self, agent: AgentDefinition, history: Sequence[Message]
+        self, agent: AgentDefinition, history: Sequence[Message], *, model: str
     ) -> AsyncIterator[EngineEvent]:
         # Recorded here rather than inside the iteration: what a turn was asked
         # is true the moment it is asked, whether or not anybody iterates.
-        self.asked.append(Asked(agent=agent, history=tuple(history)))
+        self.asked.append(Asked(agent=agent, history=tuple(history), model=model))
         return self._events(tuple(self.steps))
 
     async def _events(self, steps: tuple[Step, ...]) -> AsyncIterator[EngineEvent]:

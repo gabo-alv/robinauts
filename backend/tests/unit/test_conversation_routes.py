@@ -37,7 +37,16 @@ import pytest
 from starlette.requests import Request
 
 from aio import asyncio_test
-from conversations import AGENT, answer, at, conversation, question
+from conversations import (
+    AGENT,
+    MODEL,
+    OTHER_MODEL,
+    answer,
+    at,
+    conversation,
+    model_config,
+    question,
+)
 from fakes import Gate, MemoryConversationStore, Step, says
 from robinauts.api import (
     BODY_TOO_DEEP,
@@ -46,6 +55,7 @@ from robinauts.api import (
     INTERNAL_ERROR,
     NOT_FOUND_DETAIL,
     NOT_FOUND_ERROR,
+    NOT_OFFERED,
     NOT_WIRED,
     UNKNOWN_FIELD,
     UNREADABLE_RULES,
@@ -69,6 +79,7 @@ from robinauts.domain import (
     Conversation,
     InvalidValueError,
     Message,
+    ModelConfig,
     PartKind,
     ReasoningPart,
     Role,
@@ -103,6 +114,7 @@ NEW_TITLE = "What a robinaut is"
 
 WRITES: tuple[tuple[str, str, dict[str, object] | None], ...] = (
     ("PATCH", "", {"title": NEW_TITLE}),
+    ("PUT", "/model", {"model_id": OTHER_MODEL}),
     ("DELETE", "", None),
     ("POST", f"/runs/{NOWHERE}/cancel", None),
 )
@@ -157,7 +169,9 @@ class Served:
 
 @asynccontextmanager
 async def served(
-    *steps: Step, store: MemoryConversationStore | None = None
+    *steps: Step,
+    store: MemoryConversationStore | None = None,
+    models: dict[str, ModelConfig] | None = None,
 ) -> AsyncIterator[Served]:
     """The real application with a session open, over services on the fakes.
 
@@ -167,7 +181,7 @@ async def served(
     """
     deployment = wired()
     secret, user = await open_session(deployment)
-    services = wired_services(*steps, store=store)
+    services = wired_services(*steps, store=store, models=models)
     async with serving(
         deployment.sign_in,
         conversations=services.conversations,
@@ -959,6 +973,7 @@ def test_every_route_with_a_body_reads_it_once() -> None:
         route.path for route in api_routes(create_api().router) if route.body_field is not None
     ] == [
         "/api/conversations/{conversation_id}",
+        "/api/conversations/{conversation_id}/model",
         "/api/turns",
         "/api/conversations/{conversation_id}/turns",
     ]
@@ -1131,11 +1146,181 @@ async def test_the_agents_are_offered_without_what_the_operator_wrote() -> None:
 
     assert offered.status_code == 200
     assert offered.json() == {
-        "items": [{"id": AGENT, "title": "Assistant", "engine": "pydantic-ai"}]
+        "items": [{"id": AGENT, "title": "Assistant", "engine": "pydantic-ai", "model": MODEL}]
     }
     # The system prompt is the operator's, and it is not a message.
     assert it.wiring.definition.system_prompt not in offered.text
     assert "prompt" not in offered.text
+
+
+# --- the models --------------------------------------------------------------
+
+
+@asyncio_test
+async def test_the_models_are_offered_by_title_in_the_order_they_were_configured() -> None:
+    """The id to pick by and the name to show, and nothing of the operator's.
+
+    Configuration order, which is the operator's: ``OTHER_MODEL`` first here
+    although it sorts after ``MODEL`` by id and by title. One with no title
+    of its own is called by its id.
+    """
+    models = {
+        OTHER_MODEL: model_config(OTHER_MODEL, name="vendor-opus-9", title="Claude Opus"),
+        MODEL: model_config(MODEL, name="vendor-sonnet-9"),
+    }
+
+    async with served(models=models) as it:
+        offered = await it.client.get("/api/models")
+
+    assert offered.status_code == 200
+    assert offered.json() == {
+        "items": [
+            {"id": OTHER_MODEL, "title": "Claude Opus"},
+            {"id": MODEL, "title": MODEL},
+        ]
+    }
+    # Which provider a model is reached through and what the vendor calls it
+    # are the operator's.
+    assert "vendor-" not in offered.text
+    assert "anthropic" not in offered.text
+
+
+@asyncio_test
+async def test_moving_to_another_model_answers_the_conversation_the_store_wrote() -> None:
+    async with served() as it:
+        kept = await it.written()
+
+        moved = await it.client.put(
+            f"/api/conversations/{kept.id}/model", json={"model_id": OTHER_MODEL}, headers=WRITE
+        )
+        listed = await it.client.get("/api/conversations")
+        opened = await it.client.get(f"/api/conversations/{kept.id}")
+
+        stored = await it.stored(kept.id)
+
+    assert kept.model == MODEL
+    assert moved.status_code == 200
+    assert moved.json()["model"] == OTHER_MODEL
+    assert stored is not None and stored.model == OTHER_MODEL
+    # The store dated it, as a rename is, and what came back is what it wrote.
+    assert moved.json()["updated_at"] == "2026-09-21T09:01:40Z"
+    # And every other answer that carries the conversation says so too.
+    assert listed.json()["items"][0]["model"] == OTHER_MODEL
+    assert opened.json()["conversation"]["model"] == OTHER_MODEL
+
+
+@asyncio_test
+async def test_a_model_the_deployment_does_not_offer_is_refused_as_the_field_it_is() -> None:
+    """422 naming the field, never the id -- and the 404 is the conversation's alone."""
+    async with served() as it:
+        kept = await it.written()
+
+        refused = await it.client.put(
+            f"/api/conversations/{kept.id}/model", json={"model_id": "haiku"}, headers=WRITE
+        )
+
+        stored = await it.stored(kept.id)
+
+    assert refused.status_code == 422
+    assert refused.json() == {"error": "InvalidValueError", "detail": NOT_OFFERED}
+    assert "haiku" not in refused.text
+    assert stored == kept
+
+
+@asyncio_test
+async def test_a_model_not_offered_is_refused_before_the_conversation_is_looked_for() -> None:
+    """422 whatever the conversation: somebody else's and one that never existed alike.
+
+    The answer does not depend on the conversation, so it says nothing about
+    it -- and the stranger's conversation is not touched.
+    """
+    async with served() as it:
+        theirs = conversation(id=uuid.uuid4(), owner_id=SOMEBODY_ELSE.id, title="not mine")
+        await it.wiring.store.add_conversation(theirs)
+
+        asked = await it.client.put(
+            f"/api/conversations/{theirs.id}/model", json={"model_id": "haiku"}, headers=WRITE
+        )
+        absent = await it.client.put(
+            f"/api/conversations/{NOWHERE}/model", json={"model_id": "haiku"}, headers=WRITE
+        )
+
+        stored = await it.stored(theirs.id)
+
+    assert refusal(asked) == refusal(absent)
+    assert asked.status_code == 422
+    assert asked.json() == {"error": "InvalidValueError", "detail": NOT_OFFERED}
+    assert stored == theirs
+
+
+@asyncio_test
+async def test_a_model_id_no_model_could_have_is_refused_naming_the_rule() -> None:
+    """The shape of a configured id is the application's rule, and it says so.
+
+    The document holds only the length; the rest -- lower case, digits,
+    ``-`` and ``_`` -- is ``domain.checked_config_id``'s, whose sentence
+    describes what it refused without repeating it.
+    """
+    async with served() as it:
+        kept = await it.written()
+
+        refused = await it.client.put(
+            f"/api/conversations/{kept.id}/model", json={"model_id": "Secret Sauce"}, headers=WRITE
+        )
+
+        stored = await it.stored(kept.id)
+
+    assert refused.status_code == 422
+    assert refused.json()["error"] == "InvalidValueError"
+    assert refused.json()["detail"].startswith("body.model_id: a model's id is a name")
+    assert "Sauce" not in refused.text
+    assert stored == kept
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        ({}, f"body.model_id: {UNREADABLE_RULES['missing']}"),
+        ({"model_id": None}, f"body.model_id: {UNREADABLE_RULES['string_type']}"),
+        ({"model_id": ""}, f"body.model_id: {UNREADABLE_RULES['string_too_short']}"),
+        ({"model_id": "m" * 41}, f"body.model_id: {UNREADABLE_RULES['string_too_long']}"),
+        ({"model_id": OTHER_MODEL, "model": MODEL}, f"body: {UNKNOWN_FIELD}"),
+    ],
+)
+@asyncio_test
+async def test_a_body_that_is_no_model_is_refused_by_the_document(
+    body: dict[str, object], detail: str
+) -> None:
+    async with served() as it:
+        kept = await it.written()
+
+        refused = await it.client.put(
+            f"/api/conversations/{kept.id}/model", json=body, headers=WRITE
+        )
+
+        stored = await it.stored(kept.id)
+
+    assert refused.status_code == 422
+    assert refused.json() == {"error": "InvalidValueError", "detail": detail}
+    assert stored == kept
+
+
+@asyncio_test
+async def test_a_conversation_still_answering_is_moved_and_its_run_keeps_its_model() -> None:
+    """Not refused like a delete: the change is what the **next** turn runs on."""
+    async with served() as it:
+        kept = await it.answering()
+
+        moved = await it.client.put(
+            f"/api/conversations/{kept.id}/model", json={"model_id": OTHER_MODEL}, headers=WRITE
+        )
+
+        snapshot = await it.wiring.store.conversation_snapshot(kept.id)
+
+    assert moved.status_code == 200
+    assert moved.json()["model"] == OTHER_MODEL
+    assert snapshot.active_run is not None
+    assert snapshot.active_run.model == MODEL
 
 
 # --- ownership, and everything else about a route ----------------------------
@@ -1184,6 +1369,7 @@ async def test_no_route_here_is_reached_without_a_session() -> None:
         for method, where, body in [
             ("GET", "/api/conversations", None),
             ("GET", "/api/agents", None),
+            ("GET", "/api/models", None),
             *paths(kept.id),
         ]:
             refused = await it.client.request(method, where, json=body, headers=WRITE)
@@ -1206,7 +1392,7 @@ async def test_a_write_from_another_site_never_reaches_the_service() -> None:
         # **reach the service** if the protection let it through -- two of
         # them to be refused there, by a run id and a message id that are not
         # this conversation's. What answers here is the protection, in front
-        # of all four.
+        # of every one.
         kept = await it.written(question(seconds=1))
         before = await it.stored(kept.id)
 
@@ -1276,8 +1462,9 @@ async def test_a_route_asked_for_before_start_up_says_nothing_about_it(
 
             listed = await client.get("/api/conversations")
             offered = await client.get("/api/agents")
+            models = await client.get("/api/models")
 
-    assert listed.status_code == offered.status_code == 500
+    assert listed.status_code == offered.status_code == models.status_code == 500
     assert listed.json() == {"error": INTERNAL_ERROR, "detail": GENERIC_DETAIL}
     assert NOT_WIRED in caplog.text
     assert "app.state.conversations" in caplog.text

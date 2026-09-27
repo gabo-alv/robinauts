@@ -25,7 +25,7 @@ What is here is what only a database can be asked:
   nothing without them;
 - that deleting a user takes their conversations, which is a chain of foreign
   keys and not a line of Python;
-- that the lock order holds: five methods run at once on one conversation,
+- that the lock order holds: six methods run at once on one conversation,
   many times over, and no deadlock escapes;
 - and that the whole of ``application.Turns`` runs a turn against **this**
   store, with the stored stream and the stored tree read back afterwards.
@@ -71,6 +71,7 @@ from conversations import (
     answer,
     at,
     conversation,
+    offered,
     provenance,
     question,
     run,
@@ -329,6 +330,8 @@ async def test_a_naive_time_is_refused_rather_than_read_as_utc() -> None:
         with pytest.raises(ValueError, match="aware datetime"):
             await store.rename_conversation(CONVERSATION, "Mine", now=naive)
         with pytest.raises(ValueError, match="aware datetime"):
+            await store.set_model(CONVERSATION, "gpt-5-5", now=naive)
+        with pytest.raises(ValueError, match="aware datetime"):
             await store.touch_conversation(CONVERSATION, now=naive)
         with pytest.raises(ValueError, match="aware datetime"):
             await store.append_message(asked, message_to_data(asked), now=naive)
@@ -505,17 +508,19 @@ async def test_a_runs_stream_ends_once_whatever_anybody_writes() -> None:
 
 
 @asyncio_test
-async def test_five_methods_at_once_on_one_conversation_never_deadlock(
+async def test_six_methods_at_once_on_one_conversation_never_deadlock(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Every writing method takes the conversation's row first and the run's
     # second, which is what stops two of them closing a cycle. Nothing proves
     # an order is consistent except running them together, so this runs the
-    # five that meet on one conversation -- completing a message, ending the
-    # run, deleting, starting another run, renaming -- many times over, and
-    # then runs the same five over a conversation whose run has **ended**,
-    # where the delete is not refused and really cascades through the
-    # messages, the runs and the events while the others are writing.
+    # six that meet on one conversation -- completing a message, ending the
+    # run, deleting, starting another run, renaming, changing the model --
+    # many times over, and then runs the ones that meet a conversation whose
+    # run has **ended** -- deleting, appending, renaming, changing the model,
+    # starting a run -- where the delete is not refused and really cascades
+    # through the messages, the runs and the events while the others are
+    # writing.
     #
     # Two things are asked of every round: that nothing came out of the store
     # but its own refusals, and that what is left can be read back. And one
@@ -557,6 +562,7 @@ async def _while_answering(store: ConversationStore) -> None:
             now=at(5),
         ),
         store.rename_conversation(here, "Renamed", now=at(6)),
+        store.set_model(here, "gpt-5-5", now=at(7)),
         return_exceptions=True,
     )
 
@@ -590,6 +596,7 @@ async def _after_the_answer(store: ConversationStore) -> None:
         store.delete_conversation(here, now=at(9)),
         store.append_message(again, message_to_data(again), now=at(5)),
         store.rename_conversation(here, "Renamed", now=at(6)),
+        store.set_model(here, "gpt-5-5", now=at(6)),
         store.start_run(
             conversation=None,
             message=None,
@@ -702,6 +709,7 @@ async def test_a_whole_turn_runs_against_this_store() -> None:
             clock=FakeClock(now=at(100)),
             ids=CountingIdSource(),
             agents={definition.id: definition},
+            models=offered(),
             engines={definition.engine: ScriptedAgent(*says("Someone who plays fair."))},
             executor=AsyncioRunExecutor(),
             signals=MemoryRunSignals(),

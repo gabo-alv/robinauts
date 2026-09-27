@@ -19,8 +19,8 @@ import {
 } from "./AgentPicker";
 
 const AGENTS: Agent[] = [
-  { id: "helper", title: "Helper", engine: "langgraph" },
-  { id: "writer", title: "Writer", engine: "pydantic-ai" },
+  { id: "helper", title: "Helper", engine: "langgraph", model: "sonnet" },
+  { id: "writer", title: "Writer", engine: "pydantic-ai", model: "sonnet" },
 ];
 
 const ready = (items: Agent[]): Agents => ({ status: "ready", items });

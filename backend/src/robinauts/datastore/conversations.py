@@ -129,6 +129,7 @@ from robinauts.domain import (
     RunEvent,
     RunNotFoundError,
     RunState,
+    checked_config_id,
     checked_line,
     reading_stored,
 )
@@ -243,7 +244,7 @@ reached, so a violation means something is wrong here rather than with the
 call, and it propagates.
 """
 
-_CONVERSATION_COLUMNS = "id, owner_id, agent, title, created_at, updated_at"
+_CONVERSATION_COLUMNS = "id, owner_id, agent, model, title, created_at, updated_at"
 _RUN_COLUMNS = (
     "id, conversation_id, message_id, agent, engine, model, state,"
     " created_at, started_at, finished_at, error"
@@ -251,7 +252,7 @@ _RUN_COLUMNS = (
 
 _INSERT_CONVERSATION = f"""
 INSERT INTO conversations ({_CONVERSATION_COLUMNS})
-VALUES ($1, $2, $3, $4, $5, $6)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 """
 
 _LOCK_CONVERSATION = "SELECT agent FROM conversations WHERE id = $1 FOR UPDATE"
@@ -267,9 +268,9 @@ UPDATE conversations SET updated_at = $2 WHERE id = $1
 """
 """Date it: the one column an append moves.
 
-Named columns, never the whole row read back and written again: a rename
-landing between the read and the write would be lost, and the contract has a
-test that is exactly that.
+Named columns, never the whole row read back and written again: a rename or a
+model change landing between the read and the write would be lost, and the
+contract has a test for each.
 """
 
 _TOUCH_CONVERSATION = "UPDATE conversations SET updated_at = $2 WHERE id = $1"
@@ -399,6 +400,24 @@ class PostgresConversationStore(ConversationStore):
             """,
             conversation_id,
             title,
+            now,
+        )
+        return None if row is None else _conversation(row)
+
+    async def set_model(
+        self, conversation_id: uuid.UUID, model: str, *, now: datetime
+    ) -> Conversation | None:
+        # The record's rule, kept before the statement, for the reason the
+        # rename gives: the column is plain text and would take anything.
+        checked_config_id(model, "a model's id")
+        _instant(now, "now")
+        row = await self._pool.fetchrow(
+            f"""
+            UPDATE conversations SET model = $2, updated_at = $3 WHERE id = $1
+            RETURNING {_CONVERSATION_COLUMNS}
+            """,
+            conversation_id,
+            model,
             now,
         )
         return None if row is None else _conversation(row)
@@ -888,6 +907,7 @@ def _conversation(row: asyncpg.Record) -> Conversation:
             id=row["id"],
             owner_id=row["owner_id"],
             agent=row["agent"],
+            model=row["model"],
             title=row["title"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -916,6 +936,7 @@ def _conversation_values(conversation: Conversation) -> tuple[object, ...]:
         conversation.id,
         conversation.owner_id,
         conversation.agent,
+        conversation.model,
         conversation.title,
         conversation.created_at,
         conversation.updated_at,

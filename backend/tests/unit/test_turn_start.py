@@ -22,7 +22,15 @@ import uuid
 import pytest
 
 from aio import asyncio_test
-from conversations import AGENT, OTHER_CONVERSATION, agent_definition
+from conversations import (
+    AGENT,
+    MODEL,
+    OTHER_CONVERSATION,
+    OTHER_MODEL,
+    agent_definition,
+    model_config,
+    offered,
+)
 from fakes import CountingIdSource, FakeClock, MemoryConversationStore, ScriptedAgent, says
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
 from robinauts.application import Turns
@@ -32,13 +40,16 @@ from robinauts.domain import (
     Engine,
     InvalidMessageTreeError,
     InvalidValueError,
+    Message,
     MessageNotFoundError,
+    Run,
     RunAlreadyActiveError,
     RunState,
     TextPart,
     UnknownAgentError,
+    UnknownModelError,
 )
-from turns import AUTHOR, NOW, SOMEBODY_ELSE, begun, stored_messages, wired
+from turns import AUTHOR, NOW, SOMEBODY_ELSE, Wiring, begun, stored_messages, wired
 
 ANSWER = "Someone who plays fair."
 
@@ -84,6 +95,9 @@ async def test_a_new_chat_stores_the_conversation_the_question_and_the_run_at_on
     assert stored is not None
     assert stored.owner_id == AUTHOR.id
     assert stored.agent == AGENT
+    # The agent's default is copied in: the conversation names its model
+    # from the start rather than deferring to the agent (docs/specs/agents.md).
+    assert stored.model == begun_turn.conversation.model == wiring.definition.model
     assert [message.text for message in await stored_messages(wiring.store, stored.id)] == [
         "What is a robinaut?"
     ]
@@ -380,6 +394,189 @@ async def test_once_the_run_has_ended_the_next_turn_begins() -> None:
     assert not [run for run in await wiring.store.runs_in(ACTIVE_RUN_STATES) if run.id == first.id]
 
 
+# --- the conversation's model ------------------------------------------------
+
+
+@asyncio_test
+async def test_a_new_chat_runs_on_the_model_its_author_picked() -> None:
+    wiring = wired()
+
+    begun_turn = await wiring.turns.start(
+        AUTHOR, agent_id=AGENT, model_id=OTHER_MODEL, text="What is a robinaut?"
+    )
+
+    stored = await wiring.store.conversation_by_id(begun_turn.conversation.id)
+    assert stored is not None and stored.model == OTHER_MODEL
+    assert begun_turn.run.model == OTHER_MODEL
+    # The agent is the one asked for; only the model moved.
+    assert stored.agent == AGENT
+
+
+@asyncio_test
+async def test_no_model_picked_is_the_agent_s_default() -> None:
+    wiring = wired()
+
+    begun_turn = await wiring.turns.start(
+        AUTHOR, agent_id=AGENT, model_id=None, text="What is a robinaut?"
+    )
+
+    assert begun_turn.conversation.model == begun_turn.run.model == MODEL
+
+
+@asyncio_test
+async def test_a_model_this_deployment_does_not_offer_begins_nothing() -> None:
+    wiring = wired(store=Watched())
+
+    with pytest.raises(UnknownModelError):
+        await wiring.turns.start(AUTHOR, agent_id=AGENT, model_id="gpt-5-5", text="Hello?")
+    # A name that is not an id at all is refused as a value.
+    with pytest.raises(InvalidValueError):
+        await wiring.turns.start(AUTHOR, agent_id=AGENT, model_id="GPT 5.5", text="Hello?")
+
+    assert wiring.store.wrote == []  # type: ignore[attr-defined]
+
+
+@asyncio_test
+async def test_a_model_is_picked_for_a_new_conversation_and_not_by_a_turn_in_one() -> None:
+    wiring = wired()
+    first = await begun(wiring)
+
+    with pytest.raises(InvalidValueError):
+        await wiring.turns.start(
+            AUTHOR, conversation_id=first.conversation_id, model_id=OTHER_MODEL, text="And?"
+        )
+
+    assert len(await stored_messages(wiring.store, first.conversation_id)) == 1
+
+
+@asyncio_test
+async def test_setting_the_model_writes_it_and_dates_the_conversation() -> None:
+    wiring = wired()
+    first = await begun(wiring)
+    wiring.clock.advance(60)
+
+    changed = await wiring.turns.set_model(AUTHOR, first.conversation_id, OTHER_MODEL)
+
+    assert changed.model == OTHER_MODEL
+    assert changed.updated_at == wiring.clock.now()
+    # What came back is what the store holds.
+    assert await wiring.store.conversation_by_id(first.conversation_id) == changed
+
+
+@asyncio_test
+async def test_the_next_turn_runs_on_the_model_the_conversation_was_moved_to() -> None:
+    wiring = wired(*says(ANSWER))
+    first = await begun(wiring)
+    await wiring.turns.execute(first)
+    await wiring.turns.set_model(AUTHOR, first.conversation_id, OTHER_MODEL)
+
+    followed = await wiring.turns.start(
+        AUTHOR, conversation_id=first.conversation_id, text="And why?"
+    )
+
+    assert followed.run.model == OTHER_MODEL
+    # The first run is a record of what it ran on, and that has not moved.
+    assert (await wiring.store.run_by_id(first.id)).model == MODEL  # type: ignore[union-attr]
+
+
+@asyncio_test
+async def test_a_model_this_deployment_does_not_offer_is_not_set() -> None:
+    wiring = wired()
+    first = await begun(wiring)
+
+    with pytest.raises(UnknownModelError):
+        await wiring.turns.set_model(AUTHOR, first.conversation_id, "gpt-5-5")
+    # A name that is not an id at all is refused as a value, and so is a
+    # conversation id that is not one.
+    with pytest.raises(InvalidValueError):
+        await wiring.turns.set_model(AUTHOR, first.conversation_id, "GPT 5.5")
+    with pytest.raises(InvalidValueError):
+        await wiring.turns.set_model(AUTHOR, "not-a-uuid", OTHER_MODEL)  # type: ignore[arg-type]
+
+    stored = await wiring.store.conversation_by_id(first.conversation_id)
+    assert stored is not None and stored.model == MODEL and stored.updated_at == NOW
+
+
+@asyncio_test
+async def test_only_its_author_sets_a_conversation_s_model() -> None:
+    wiring = wired()
+    first = await begun(wiring)
+
+    with pytest.raises(ConversationNotFoundError) as theirs:
+        await wiring.turns.set_model(SOMEBODY_ELSE, first.conversation_id, OTHER_MODEL)
+    with pytest.raises(ConversationNotFoundError) as missing:
+        await wiring.turns.set_model(AUTHOR, OTHER_CONVERSATION, OTHER_MODEL)
+
+    # Somebody else's is answered exactly like one that is not there.
+    assert type(theirs.value) is type(missing.value)
+    stored = await wiring.store.conversation_by_id(first.conversation_id)
+    assert stored is not None and stored.model == MODEL
+
+
+@asyncio_test
+async def test_the_model_may_be_changed_while_a_run_is_going_and_the_run_keeps_its_own() -> None:
+    wiring = wired()
+    going = await begun(wiring)
+
+    changed = await wiring.turns.set_model(AUTHOR, going.conversation_id, OTHER_MODEL)
+
+    assert changed.model == OTHER_MODEL
+    still = await wiring.store.active_run_of(going.conversation_id)
+    assert still is not None and still.id == going.id and still.model == MODEL
+
+
+async def _on_a_model_since_removed() -> tuple[Wiring, Run, Message]:
+    """A conversation on ``OTHER_MODEL``, answered, and then a restart whose
+    configuration no longer has that model: the same store, fewer models."""
+    before = wired(*says(ANSWER))
+    first = (
+        await before.turns.start(
+            AUTHOR, agent_id=AGENT, model_id=OTHER_MODEL, text="What is a robinaut?"
+        )
+    ).run
+    await before.turns.execute(first)
+    answered = (await stored_messages(before.store, first.conversation_id))[-1]
+    after = wired(*says(ANSWER), store=before.store, models=offered())
+    return after, first, answered
+
+
+@asyncio_test
+async def test_a_model_the_deployment_no_longer_offers_refuses_every_kind_of_turn() -> None:
+    # No falling back to the agent's default: the point of choosing is knowing
+    # who answers (docs/specs/agents.md). A continuation, an edit and a
+    # regeneration are refused alike, and none of them writes anything.
+    wiring, first, answered = await _on_a_model_since_removed()
+    conversation_id = first.conversation_id
+
+    with pytest.raises(UnknownModelError):
+        await wiring.turns.start(
+            AUTHOR, conversation_id=conversation_id, text="And why?", parent_id=answered.id
+        )
+    with pytest.raises(UnknownModelError):
+        await wiring.turns.start(AUTHOR, conversation_id=conversation_id, text="Rather, who?")
+    with pytest.raises(UnknownModelError):
+        await wiring.turns.regenerate(
+            AUTHOR, conversation_id=conversation_id, message_id=answered.id
+        )
+
+    assert len(await stored_messages(wiring.store, conversation_id)) == 2
+    assert len(await wiring.store.runs_of(conversation_id)) == 1
+    stored = await wiring.store.conversation_by_id(conversation_id)
+    assert stored is not None and stored.model == OTHER_MODEL
+
+
+@asyncio_test
+async def test_a_conversation_on_a_removed_model_carries_on_once_moved_to_one_on_offer() -> None:
+    wiring, first, answered = await _on_a_model_since_removed()
+
+    await wiring.turns.set_model(AUTHOR, first.conversation_id, MODEL)
+    followed = await wiring.turns.start(
+        AUTHOR, conversation_id=first.conversation_id, text="And why?", parent_id=answered.id
+    )
+
+    assert followed.run.model == MODEL
+
+
 # --- wiring ------------------------------------------------------------------
 
 
@@ -394,6 +591,7 @@ def test_an_agent_whose_engine_is_not_wired_is_a_deployment_that_does_not_start(
             clock=FakeClock(),
             ids=CountingIdSource(),
             agents={definition.id: definition},
+            models=offered(),
             engines={Engine.PYDANTIC_AI: ScriptedAgent()},
             executor=AsyncioRunExecutor(),
             signals=MemoryRunSignals(),
@@ -409,6 +607,40 @@ def test_an_agent_filed_under_a_name_that_is_not_its_own_is_refused() -> None:
             clock=FakeClock(),
             ids=CountingIdSource(),
             agents={"somebody-else": definition},
+            models=offered(),
+            engines={definition.engine: ScriptedAgent()},
+            executor=AsyncioRunExecutor(),
+            signals=MemoryRunSignals(),
+        )
+
+
+def test_an_agent_whose_default_model_is_not_offered_is_a_deployment_that_does_not_start() -> None:
+    # Every conversation it began would be refused at its first turn.
+    definition = agent_definition(model="haiku")
+
+    with pytest.raises(InvalidValueError):
+        Turns(
+            store=MemoryConversationStore(),
+            clock=FakeClock(),
+            ids=CountingIdSource(),
+            agents={definition.id: definition},
+            models=offered(),
+            engines={definition.engine: ScriptedAgent()},
+            executor=AsyncioRunExecutor(),
+            signals=MemoryRunSignals(),
+        )
+
+
+def test_a_model_filed_under_a_name_that_is_not_its_own_is_refused() -> None:
+    definition = agent_definition()
+
+    with pytest.raises(InvalidValueError):
+        Turns(
+            store=MemoryConversationStore(),
+            clock=FakeClock(),
+            ids=CountingIdSource(),
+            agents={definition.id: definition},
+            models={MODEL: model_config(), "somebody-else": model_config(OTHER_MODEL)},
             engines={definition.engine: ScriptedAgent()},
             executor=AsyncioRunExecutor(),
             signals=MemoryRunSignals(),

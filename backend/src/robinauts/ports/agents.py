@@ -4,14 +4,18 @@
 """Running one turn: the seam between the platform and an agent framework.
 
 **One method, because a turn is one thing** (``docs/specs/agents.md``): given
-the agent the operator defined and the history to answer, stream what the
-model said. Everything else about a turn -- which ids the messages get, what
-they hang under, what is written down, what a watcher is told -- belongs to
-the application, which is why none of it is in this signature.
+the agent the operator defined, the model the turn runs on and the history to
+answer, stream what the model said. Everything else about a turn -- which
+ids the messages get, what they hang under, what is written down, what a
+watcher is told -- belongs to the application, which is why none of it is in
+this signature.
 
-**What crosses.** In: an ``AgentDefinition`` (the system prompt, the model and
-the engine, read afresh every turn, because editing an agent takes effect at
-the next turn of its existing conversations) and a **history**: the path from a
+**What crosses.** In: an ``AgentDefinition`` (the system prompt and the
+engine, read afresh every turn, because editing an agent takes effect at the
+next turn of its existing conversations); the **model**, by the platform's id
+for it, which is the run's and not the agent's -- the agent's model is only
+the default a conversation starts with, and the conversation's may have been
+changed since (``docs/specs/agents.md``); and a **history**: the path from a
 root to the user message being answered, already trimmed to what the model
 will take (``robinauts.core.trim_history``). Trimming is above the port on
 purpose -- both engines must behave the same, and a policy inside an adapter
@@ -82,14 +86,21 @@ class Agent(ABC):
 
     @abstractmethod
     def run_turn(
-        self, agent: AgentDefinition, history: Sequence[Message]
+        self, agent: AgentDefinition, history: Sequence[Message], *, model: str
     ) -> AsyncGenerator[EngineEvent, None]:
-        """Answer ``history`` as ``agent``, streaming the events of the turn.
+        """Answer ``history`` as ``agent`` on ``model``, streaming the events of the turn.
 
         ``history`` is a path of the conversation ending in the **user
         message being answered**, already trimmed; it is never empty and never
         ends anywhere else. The system prompt is ``agent``'s and is not one of
         the messages (``docs/specs/conversations.md``).
+
+        ``model`` is the id of the model the **run** records
+        (``domain.Run.model``), never ``agent.model``: that is the agent's
+        default, and a conversation may run on another. An id the engine's
+        configuration does not have is a failure of the turn
+        (``domain.UnknownModelError``), raised where the stream is iterated,
+        like any other.
 
         Not a coroutine: it hands back the stream, which is then iterated.
 

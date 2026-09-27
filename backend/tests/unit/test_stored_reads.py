@@ -8,7 +8,7 @@ from datetime import datetime
 
 import pytest
 
-from conversations import AGENT, CONVERSATION, OWNER, RUN, answer, at, question
+from conversations import AGENT, CONVERSATION, MODEL, OWNER, RUN, answer, at, question
 from robinauts.core import message_from_stored, message_to_data
 from robinauts.domain import (
     Conversation,
@@ -24,6 +24,7 @@ ROW = {
     "id": CONVERSATION,
     "owner_id": OWNER,
     "agent": AGENT,
+    "model": MODEL,
     "created_at": at(0),
     "updated_at": at(0),
     "title": "What is a robinaut?",
@@ -45,6 +46,7 @@ def conversation_from_row(row: dict[str, object]) -> Conversation:
             id=row["id"],
             owner_id=row["owner_id"],
             agent=row["agent"],
+            model=row["model"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             title=row["title"],
@@ -62,6 +64,7 @@ def test_a_row_that_is_what_it_should_be_is_read() -> None:
         {"id": "not a uuid"},
         {"owner_id": None},
         {"agent": "An Agent"},
+        {"model": None},
         {"title": "two\nlines"},
         {},
     ],
@@ -87,7 +90,12 @@ def test_a_message_crosses_the_port_as_the_document_core_wrote() -> None:
 def test_the_same_wrapping_serves_every_flat_record() -> None:
     for build in (
         lambda: Conversation(
-            id=CONVERSATION, owner_id=OWNER, agent="An Agent", created_at=at(0), updated_at=at(0)
+            id=CONVERSATION,
+            owner_id=OWNER,
+            agent="An Agent",
+            model=MODEL,
+            created_at=at(0),
+            updated_at=at(0),
         ),
         lambda: Run(
             id=RUN,

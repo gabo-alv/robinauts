@@ -26,6 +26,12 @@
   under whatever the old answer happened to follow.
 - A conversation belongs to one user, optionally inside a project, and is
   bound to an agent ([privacy.md](privacy.md), [agents.md](agents.md)).
+- **It has a model**: its agent's default at the moment it started, unless
+  its author picked another of the configured models, and changeable by its
+  author at any point. A change applies from the next turn; a run keeps the
+  model it started with ([agents.md](agents.md)). The conversation always
+  names one — never "whatever the agent says" — so a later change to the
+  agent's default does not reach it.
 - Asking for a conversation that is not there and asking for one that
   belongs to somebody else are answered identically, in status, in words
   and in every header: which of the two it was is a difference only an

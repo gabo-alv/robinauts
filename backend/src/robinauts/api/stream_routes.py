@@ -217,8 +217,10 @@ async def begin_chat(
     is the stream of that run from its first event. The conversation's id is in
     the response's headers, since there was none to name in the request.
 
-    An agent this deployment has not got is 404, like everything else that is
-    not there; a message with nothing in it is 422.
+    The conversation runs on ``model_id``, or on the agent's default when the
+    body names none (``schemas.NewChatRequest``). An agent or a model this
+    deployment has not got is 404, like everything else that is not there; a
+    message with nothing in it is 422.
 
     **Both services are taken before the turn is begun.** A deployment whose
     lifespan has not run has neither (``access.NOT_WIRED``), and finding that
@@ -226,7 +228,9 @@ async def begin_chat(
     answering a question nobody was told about.
     """
     watch, turns = watching(request), turning(request)
-    started = await turns.begin(user, agent_id=asked.agent_id, text=asked.text)
+    started = await turns.begin(
+        user, agent_id=asked.agent_id, model_id=asked.model_id, text=asked.text
+    )
     return _streaming(watch, user, started.run.id, started.conversation.id, after=0)
 
 
@@ -252,7 +256,11 @@ async def begin_turn(
 
     A conversation that is not there, one that is somebody else's, and a parent
     or an answer that is no message of it all answer the same 404: the rule is
-    the application's and no route here looks at an owner.
+    the application's and no route here looks at an owner. So does a
+    conversation whose model the operator has since removed
+    (``UnknownModelError``): the turn is refused rather than answered by
+    another model, and its author moves it to one that is offered
+    (``PUT /api/conversations/{id}/model``).
     """
     if (asked.text is None) == (asked.regenerate is None):
         raise InvalidValueError(ONE_FORM)

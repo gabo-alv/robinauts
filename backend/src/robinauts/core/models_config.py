@@ -17,6 +17,7 @@ problem is reported at once**, so that a deployment is fixed in one pass.
     [models.sonnet]
     provider = "anthropic"
     name = "claude-sonnet-5"
+    title = "Claude Sonnet 5"
     timeout_seconds = 120
     max_output_tokens = 8192
 
@@ -29,6 +30,9 @@ problem is reported at once**, so that a deployment is fixed in one pass.
 ``model_providers`` and not ``providers``: the latter is already the identity
 providers people sign in with, and the two live in one file
 (``docs/specs/agents.md``).
+
+A ``title``, an agent's or a model's, is what a person picks it by, and is
+optional: left out, it is the entry's id.
 
 ``base_url`` belongs to the kinds that name a **protocol** rather than a vendor
 (``domain.KINDS_WITH_BASE_URL``): it is required there, because there is no
@@ -69,6 +73,7 @@ from robinauts.domain import (
     MAX_ENV_NAME_CHARS,
     MAX_MODEL_NAME_CHARS,
     MAX_MODEL_TIMEOUT_SECONDS,
+    MAX_MODEL_TITLE_CHARS,
     MAX_OUTPUT_TOKENS,
     MAX_SYSTEM_PROMPT_CHARS,
     AgentDefinition,
@@ -85,7 +90,7 @@ from robinauts.domain import (
 )
 
 MODEL_PROVIDER_KEYS = frozenset({"kind", "api_key_env", "base_url"})
-MODEL_ENTRY_KEYS = frozenset({"provider", "name", "timeout_seconds", "max_output_tokens"})
+MODEL_ENTRY_KEYS = frozenset({"provider", "name", "title", "timeout_seconds", "max_output_tokens"})
 AGENT_KEYS = frozenset({"title", "model", "engine", "system_prompt"})
 
 _KINDS = {kind.value: kind for kind in ProviderKind}
@@ -263,6 +268,9 @@ def _model(
     if provider_id and provider_id not in declared:
         problems.append(f"{where}.provider: {provider_id!r} is not one of [model_providers]")
     name = _string(table, "name", where, problems, limit=MAX_MODEL_NAME_CHARS)
+    title = _string(
+        table, "title", where, problems, default=str(model_id), limit=MAX_MODEL_TITLE_CHARS
+    )
 
     given: dict[str, Any] = {}
     seconds = _seconds(table, where, problems)
@@ -275,7 +283,14 @@ def _model(
     if len(problems) > before:
         return None
     return _built(
-        where, problems, ModelConfig, id=model_id, provider=provider_id, name=name, **given
+        where,
+        problems,
+        ModelConfig,
+        id=model_id,
+        provider=provider_id,
+        name=name,
+        title=title,
+        **given,
     )
 
 

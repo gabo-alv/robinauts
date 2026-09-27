@@ -22,7 +22,7 @@ chat client reads.
 What is here: the ``/auth`` routes and ``/health`` (``auth_routes``,
 ``web``), the conversation routes (``conversation_routes``), the streaming
 ones that start a turn and follow one (``stream_routes``, ``agui``) and the
-agents a conversation is started with (``agent_routes``), the built interface
+agents and models a conversation is started with (``agent_routes``), the built interface
 under ``/ui/`` and the redirects that lead to it (``ui``), what each of them
 can refuse with as the OpenAPI document says it (``refusals``), the cookies a sign-in
 uses (``cookies``), who is asking and what each route needs of them
@@ -54,7 +54,7 @@ from robinauts.api.access import (
     unknown_route_lists,
     watching,
 )
-from robinauts.api.agent_routes import agent_router, list_agents
+from robinauts.api.agent_routes import agent_router, list_agents, list_models
 from robinauts.api.agui import (
     ENDED_BADLY,
     GONE_CODE,
@@ -71,7 +71,7 @@ from robinauts.api.agui import (
     sse,
 )
 from robinauts.api.auth_routes import SIGN_IN_PAGE, auth_router
-from robinauts.api.conversation_routes import conversation_router
+from robinauts.api.conversation_routes import NOT_OFFERED, conversation_router
 from robinauts.api.cookies import (
     HOST_PREFIX,
     LOGIN_COOKIE,
@@ -139,7 +139,7 @@ from robinauts.api.protection import (
 from robinauts.api.refusals import (
     ANYTHING_ELSE,
     DELETING,
-    LISTING_AGENTS,
+    LISTING_OFFERED,
     NO_SESSION,
     NOT_JSON,
     NOT_OURS,
@@ -162,6 +162,8 @@ from robinauts.api.schemas import (
     ErrorResponse,
     HealthResponse,
     MessageView,
+    ModelListResponse,
+    ModelSummary,
     NewChatRequest,
     OpenedConversationResponse,
     ProvenanceView,
@@ -173,6 +175,7 @@ from robinauts.api.schemas import (
     SentKind,
     SentRole,
     SessionResponse,
+    SetModelRequest,
     TurnRequest,
     UserSummary,
     utc,
@@ -272,7 +275,7 @@ __all__ = [
     "KEEP_ALIVE",
     "LAST_EVENT_ID",
     "LENGTH_HEADER",
-    "LISTING_AGENTS",
+    "LISTING_OFFERED",
     "LOGIN_COOKIE",
     "LOOPBACK_DETAIL",
     "MAX_BODY_BYTES",
@@ -291,6 +294,7 @@ __all__ = [
     "NOT_FOUND_DETAIL",
     "NOT_FOUND_ERROR",
     "NOT_JSON",
+    "NOT_OFFERED",
     "NOT_OURS",
     "NOT_SIGNED_IN",
     "NOT_THERE",
@@ -352,6 +356,8 @@ __all__ = [
     "ErrorResponse",
     "HealthResponse",
     "MessageView",
+    "ModelListResponse",
+    "ModelSummary",
     "NewChatRequest",
     "NotBuilt",
     "NothingHidden",
@@ -369,6 +375,7 @@ __all__ = [
     "SentKind",
     "SentRole",
     "SessionResponse",
+    "SetModelRequest",
     "SignedIn",
     "StrictJson",
     "TurnRequest",
@@ -399,6 +406,7 @@ __all__ = [
     "http_refusal",
     "install_handlers",
     "list_agents",
+    "list_models",
     "local_access",
     "login_cookie",
     "openapi_document",
