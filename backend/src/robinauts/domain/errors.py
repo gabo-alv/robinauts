@@ -325,7 +325,7 @@ class SchemaError(RobinautsError):
     """
 
     ADVICE = (
-        f"`{DB_INIT_COMMAND}` creates the schema, and until there are migrations it works"
+        f"`{DB_INIT_COMMAND}` creates the schema, and until the first release it works"
         " on an empty database only: a database of any other version is made again"
     )
 

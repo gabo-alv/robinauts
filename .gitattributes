@@ -2,7 +2,7 @@
 #
 # `datastore/schema.sql` is hashed, and the hash is pinned beside the schema
 # version: it is what makes every schema edit deliberate before the first
-# release, and what forbids one after it. A checkout that turned its newlines
+# release. A checkout that turned its newlines
 # into CRLF would change that hash and fail the check for a reason that has
 # nothing to do with the schema -- so the file is LF everywhere, as are the
 # shell scripts, which a CRLF checkout would stop being able to run at all.

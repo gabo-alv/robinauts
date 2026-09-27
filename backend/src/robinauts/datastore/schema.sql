@@ -23,8 +23,8 @@
 -- **Editing this file means updating `SCHEMA_SHA256` in schema.py**, and
 -- nothing else: a test pins the SHA-256 of this file, so every edit is
 -- deliberate and visible in review, and the version is not bumped. After
--- the first release the file as released is frozen, and a change is a
--- migration; the pin is then what catches an edit made instead of one.
+-- the first release a change is a migration; freezing the file as released
+-- comes with that work.
 --
 -- A later step adds the usage tables to the bottom of this file, as the
 -- conversation and run tables were added. Keep each table's block

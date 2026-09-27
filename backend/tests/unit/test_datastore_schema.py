@@ -175,10 +175,10 @@ def test_the_version_in_the_file_is_the_version_in_the_code() -> None:
 def test_the_schema_file_matches_its_pin() -> None:
     # The whole guard for a schema that is edited in place. There is no
     # migration to write and therefore nothing else that would notice; this
-    # pin is what makes every edit deliberate and visible in review. After
-    # the first release it is what catches an edit made instead of a
-    # migration. Line endings are normalised so that a checkout on Windows
-    # does not fail for a reason that has nothing to do with the schema.
+    # pin is what makes every edit deliberate and visible in review; freezing
+    # the released schema comes with the migrations work. Line endings are
+    # normalised so that a checkout on Windows does not fail for a reason
+    # that has nothing to do with the schema.
     text = SQL.replace("\r\n", "\n")
 
     assert hashlib.sha256(text.encode("utf-8")).hexdigest() == SCHEMA_SHA256, (

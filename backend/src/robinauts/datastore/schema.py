@@ -54,9 +54,8 @@ against". Until the first release it is 1 and stays 1: ``schema.sql`` is one
 definition, edited in place, and a database made from an older edit is
 dropped and made again. ``SCHEMA_SHA256`` is what the file looked like when
 this build was written, so ``tests/unit/test_datastore_schema.py`` fails if
-the file changes and the pin does not. After the first release the released
-file is frozen and every change is a migration; the pin is then what catches
-an edit made instead of one.
+the file changes and the pin does not. After the first release every change
+is a migration; freezing the released file comes with that work.
 """
 
 from __future__ import annotations
@@ -77,15 +76,15 @@ again. The schema as released is version 1, and from then on every change is
 a migration that moves this number (``docs/specs/backend.md``, "Schema").
 """
 
-SCHEMA_SHA256 = "e9cfb48bc9fc445632326c25f29dab5161cc5fa0e3430d5c69d99c8a4def5b42"
+SCHEMA_SHA256 = "6d3425229e6db9d8b6202e6c97e9f42757c86bfcf86f2775a0a791e741694cb6"
 """``schema.sql`` as this build was written against it.
 
 Before the first release every edit to ``schema.sql`` updates this pin and
 leaves the version alone, so a schema change is always visible in review and
 never made by accident: ``tests/unit/test_datastore_schema.py`` fails until
 the hash is brought up to date, and says so in as many words. After the
-first release the released file is frozen and a change is a migration, never
-an edit to the pin. Line endings are normalised to ``\\n`` before hashing,
+first release a change is a migration; freezing the released file comes with
+that work. Line endings are normalised to ``\\n`` before hashing,
 and ``.gitattributes`` keeps the file checked out that way on every platform.
 """
 

@@ -190,8 +190,8 @@ to one already at this version, and refuses every other database there is.
 Every edit to that file updates the `SCHEMA_SHA256` pinned in
 `datastore/schema.py`; `SCHEMA_VERSION` stays at 1, and a test enforces
 both. That pin is the only thing standing where a migration would otherwise
-be, and after the first release it is what catches an edit made instead of
-one. After pulling a schema change, drop your local database and run
+be; freezing the released schema comes with the migrations work. After
+pulling a schema change, drop your local database and run
 `robinauts db init` again; the tests are unaffected, because each creates a
 fresh schema. The file is hashed with `\n` line endings, which
 [.gitattributes](.gitattributes) keeps it checked out with everywhere.

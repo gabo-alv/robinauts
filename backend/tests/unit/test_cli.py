@@ -172,8 +172,9 @@ def test_an_unknown_log_level_is_a_usage_error() -> None:
 
 
 def test_version_says_the_build_and_the_schema_it_wants(capsys: Any) -> None:
-    # The two halves of an upgrade: a wheel whose schema version has moved is a
-    # database to recreate (docs/specs/backend.md).
+    # The two halves of an upgrade. Until the first release the schema version
+    # stays 1, and a wheel whose schema.sql changed is a database to recreate
+    # (docs/specs/backend.md).
     code = cli.run(["version"])
 
     said = capsys.readouterr().out
