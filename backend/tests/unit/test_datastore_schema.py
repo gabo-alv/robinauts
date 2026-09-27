@@ -163,29 +163,47 @@ def test_the_kind_that_ends_a_stream_is_the_name_of_the_record() -> None:
 
 
 def test_the_version_in_the_file_is_the_version_in_the_code() -> None:
-    # The one thing that must be changed twice, and the one thing nobody
-    # remembers to change twice. An edit to schema.sql without a bump of
-    # SCHEMA_VERSION would leave a server happy to run against a schema it
-    # was not written for.
+    # The row is what a server compares SCHEMA_VERSION against before it
+    # agrees to start, so the two must say the same thing -- and until the
+    # first release that thing is 1, in both places.
     recorded = re.search(r"^INSERT INTO schema_version \(version\) VALUES \((\d+)\)$", SQL, re.M)
 
     assert recorded is not None, "schema.sql no longer records a version the way this test reads it"
     assert int(recorded.group(1)) == SCHEMA_VERSION
 
 
-def test_editing_the_schema_without_bumping_the_version_fails_here() -> None:
+def test_the_schema_file_matches_its_pin() -> None:
     # The whole guard for a schema that is edited in place. There is no
     # migration to write and therefore nothing else that would notice; this
-    # pin is what turns "I changed a column and forgot" into a red build.
-    # Line endings are normalised so that a checkout on Windows does not
-    # fail for a reason that has nothing to do with the schema.
+    # pin is what makes every edit deliberate and visible in review; freezing
+    # the released schema comes with the migrations work. Line endings are
+    # normalised so that a checkout on Windows does not fail for a reason
+    # that has nothing to do with the schema.
     text = SQL.replace("\r\n", "\n")
 
     assert hashlib.sha256(text.encode("utf-8")).hexdigest() == SCHEMA_SHA256, (
-        "schema.sql changed: bump SCHEMA_VERSION in datastore/schema.py and update the"
-        " pinned SCHEMA_SHA256 in the same change. There are no migrations yet, so a"
-        " database made from the old file is recreated, not upgraded."
+        "schema.sql changed: update SCHEMA_SHA256 in datastore/schema.py. Do not bump"
+        " SCHEMA_VERSION: until the first release the schema is edited in place and"
+        ' stays at version 1 (docs/specs/backend.md, "Schema"). After the first'
+        " release, schema.sql is frozen and a change is a migration."
     )
+
+
+def test_the_schema_stays_at_version_one_until_the_first_release() -> None:
+    """Delete this test at the first release, when migrations start."""
+    assert SCHEMA_VERSION == 1, (
+        "SCHEMA_VERSION moved: until the first release the schema is one definition"
+        " edited in place at version 1, and an edit updates SCHEMA_SHA256 only"
+        ' (docs/specs/backend.md, "Schema").'
+    )
+
+
+def test_the_hash_is_recorded_by_the_command_and_not_by_the_file() -> None:
+    # A file cannot hold its own hash, so the column is there and the file
+    # leaves it empty: `create_schema` writes it after the file, and a file
+    # applied by hand records nothing and is refused.
+    assert "schema_sha256 text" in TABLES["schema_version"]
+    assert "schema_sha256" not in SQL[SQL.index("INSERT INTO schema_version") :]
 
 
 def test_the_version_is_written_last_and_never_overwritten() -> None:
@@ -283,6 +301,19 @@ def test_a_shadowed_table_is_a_search_path_to_fix_not_a_database_to_remake() -> 
     assert "sessions, users" in str(refused)
     assert "search path" in refused.advice
     assert DB_INIT_COMMAND not in str(refused)
+
+
+def test_a_database_made_from_an_older_file_is_told_to_drop_it() -> None:
+    # The version is 1 for every edit before the first release, so this is
+    # the refusal that stands where a version mismatch would otherwise be.
+    for recorded in ("0" * 64, None):
+        refused = SchemaError.stale(1, recorded)
+
+        assert refused.found == 1
+        assert "made from an older schema.sql" in str(refused)
+        assert "drop it and run" in str(refused) and DB_INIT_COMMAND in str(refused)
+    assert "not by" not in str(SchemaError.stale(1, "0" * 64))
+    assert "not by `robinauts db init`" in str(SchemaError.stale(1, None))
 
 
 def test_a_missing_table_under_the_right_version_names_the_table() -> None:

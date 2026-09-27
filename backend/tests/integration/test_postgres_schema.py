@@ -30,6 +30,7 @@ import pytest
 from aio import asyncio_test
 from postgres import DATABASE_URL, requires_postgres, temporary_schema
 from robinauts.datastore import (
+    SCHEMA_SHA256,
     SCHEMA_TABLES,
     SCHEMA_VERSION,
     check_schema,
@@ -172,6 +173,70 @@ async def test_a_half_applied_file_is_refused_rather_than_finished() -> None:
         assert "records no schema version" in str(refused.value)
         with pytest.raises(SchemaError):
             await create_schema(schema.pool)
+
+
+@asyncio_test
+async def test_a_created_schema_records_the_file_it_was_made_from() -> None:
+    async with temporary_schema(applied=False) as schema:
+        await create_schema(schema.pool)
+
+        assert await schema.pool.fetchval("SELECT schema_sha256 FROM schema_version") == (
+            SCHEMA_SHA256
+        )
+
+
+@asyncio_test
+async def test_a_database_made_from_an_older_file_is_refused_and_told_why() -> None:
+    # The finding this test exists for. Before the first release every edit
+    # of schema.sql is version 1, so a database made from an older edit
+    # passes the version check -- and, missing a column, would fail in the
+    # middle of a request. The hash the command recorded is what tells it
+    # apart, and it is checked before the tables so that the sentence is
+    # "older schema.sql" and not "a table is missing".
+    async with temporary_schema() as schema:
+        await schema.pool.execute("UPDATE schema_version SET schema_sha256 = $1", "0" * 64)
+
+        with pytest.raises(SchemaError) as refused:
+            await check_schema(schema.pool)
+
+        assert refused.value.found == SCHEMA_VERSION
+        assert "made from an older schema.sql" in str(refused.value)
+        assert "drop it and run" in str(refused.value)
+        assert "robinauts db init" in str(refused.value)
+        with pytest.raises(SchemaError):
+            await create_schema(schema.pool)
+        # And left as it was found: not relabelled as this build's.
+        assert await schema.pool.fetchval("SELECT schema_sha256 FROM schema_version") == "0" * 64
+
+
+@asyncio_test
+async def test_a_file_applied_by_hand_records_no_hash_and_is_refused() -> None:
+    # `psql -f schema.sql`, whole: the version row is there, the hash is not,
+    # and there is no telling which edit of the file it was.
+    async with temporary_schema(applied=False) as schema:
+        await schema.pool.execute(schema_sql())
+        assert await schema_version(schema.pool) == SCHEMA_VERSION
+
+        with pytest.raises(SchemaError) as refused:
+            await check_schema(schema.pool)
+
+        assert "made from an older schema.sql" in str(refused.value)
+        assert "not by `robinauts db init`" in str(refused.value)
+        with pytest.raises(SchemaError):
+            await create_schema(schema.pool)
+
+
+@asyncio_test
+async def test_a_version_row_from_before_the_hash_was_recorded_is_refused() -> None:
+    # A database made from an edit of the file that had no `schema_sha256`
+    # column at all: the same refusal, not an error about a column.
+    async with temporary_schema() as schema:
+        await schema.pool.execute("ALTER TABLE schema_version DROP COLUMN schema_sha256")
+
+        with pytest.raises(SchemaError) as refused:
+            await check_schema(schema.pool)
+
+        assert "made from an older schema.sql" in str(refused.value)
 
 
 @asyncio_test

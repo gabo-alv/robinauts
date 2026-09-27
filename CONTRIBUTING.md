@@ -182,18 +182,23 @@ No package that starts a PostgreSQL is a dependency of this project;
 ### Changing the database schema
 
 `backend/src/robinauts/datastore/schema.sql` is the whole schema, and until
-there is a production deployment it is **one definition edited in place**:
-there are no migrations, and a database made from an older definition is
-recreated rather than upgraded ([docs/specs/backend.md](docs/specs/backend.md)).
-So `robinauts db init` applies the file to an **empty** database, does nothing
-to one already at this version, and refuses every other database there is; and
-every edit to that file comes with a bump of `SCHEMA_VERSION` in
-`datastore/schema.py` **and** of the `SCHEMA_SHA256` pinned beside it. A test
-fails until both are done, and says so; that pin is the only thing standing
-where a migration would otherwise be. (The version stays at 1 while nothing
-is deployed, so in practice it is the hash that is updated.) The file is
-hashed with `\n` line endings, which [.gitattributes](.gitattributes) keeps
-it checked out with everywhere.
+the first release it is **one definition edited in place**: there are no
+migrations, and a database made from an older definition is recreated rather
+than upgraded ([docs/specs/backend.md](docs/specs/backend.md)). So
+`robinauts db init` applies the file to an **empty** database, does nothing
+to one already at this version, and refuses every other database there is.
+Every edit to that file updates the `SCHEMA_SHA256` pinned in
+`datastore/schema.py`; `SCHEMA_VERSION` stays at 1, and a test enforces
+both. That pin is the only thing standing where a migration would otherwise
+be; freezing the released schema comes with the migrations work. After
+pulling a schema change, drop your local database and run
+`robinauts db init` again. If you forget, the server and the command refuse
+the database, saying it was made from an older `schema.sql`: `db init`
+records the file's hash in the version row and both compare it, since the
+version alone says nothing about which edit a database was made from. The
+tests are unaffected, because each creates a fresh schema. The file is
+hashed with `\n` line endings, which
+[.gitattributes](.gitattributes) keeps it checked out with everywhere.
 
 Constraint names in that file are part of its interface: the store turns a
 violation of `sessions_secret_hash_key` or `sessions_user_id_fkey` into an

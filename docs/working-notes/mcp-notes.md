@@ -78,10 +78,9 @@ wanted behaviour is in [specs/runs.md](../specs/runs.md),
   follow the same rules (no env-var fallbacks, nothing phones home, no
   request bodies in logs). `ANTHROPIC_LOG=debug` logged whole
   conversations before we pinned the loggers — MCP SDKs may have the same.
-- **Every `schema.sql` edit bumps `SCHEMA_VERSION` and re-pins the hash**,
-  and there are no migrations yet: a tool-call table or new columns means
-  the database is recreated (until the user confirms a production
-  deployment).
+- **Every `schema.sql` edit re-pins the hash and leaves `SCHEMA_VERSION`
+  at 1**, and there are no migrations before the first release: a tool-call
+  table or new columns means the database is recreated.
 - **Reviews find the most in three places**: refusals that reflect input,
   no-ops on re-attach (a `*_START` for an open id, a `*_END` for a closed
   one, a repeated terminal), and anything a hand-written parser or regex

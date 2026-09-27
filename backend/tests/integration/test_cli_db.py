@@ -141,6 +141,23 @@ async def test_a_database_of_another_version_is_refused(monkeypatch: Any, capsys
 
 
 @asyncio_test
+async def test_a_database_made_from_an_older_file_is_refused(monkeypatch: Any, capsys: Any) -> None:
+    # What a developer sees after pulling a schema change: the version is
+    # still 1, so it is the hash that says the database is to be made again.
+    async with schema() as temporary:
+        assert await initialised(monkeypatch, in_schema(temporary.name)) == cli.OK
+        await temporary.pool.execute("UPDATE schema_version SET schema_sha256 = $1", "0" * 64)
+
+        code = await initialised(monkeypatch, in_schema(temporary.name))
+
+        said = capsys.readouterr().err
+        assert code == cli.FAILED
+        assert "Traceback" not in said
+        assert "made from an older schema.sql" in said
+        assert "drop it and run" in said and DB_INIT_COMMAND in said
+
+
+@asyncio_test
 async def test_a_database_that_is_not_there_is_a_failure_and_not_a_traceback(
     monkeypatch: Any, capsys: Any
 ) -> None:

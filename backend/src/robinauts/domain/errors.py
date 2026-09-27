@@ -317,15 +317,15 @@ class SchemaError(RobinautsError):
     told they are looking at, so the shapes are the constructors below and
     the advice is one sentence, written once.
 
-    Until there is a production deployment there are no migrations: a
-    database of any other version is **made again**, not upgraded, and the
+    Until the first release there are no migrations: a database of any
+    other version is **made again**, not upgraded, and the
     command that creates the schema works on an empty database only. Saying
     that in every message is deliberate -- the alternative is an operator
     running the command on the database that already has their data in it.
     """
 
     ADVICE = (
-        f"`{DB_INIT_COMMAND}` creates the schema, and until there are migrations it works"
+        f"`{DB_INIT_COMMAND}` creates the schema, and until the first release it works"
         " on an empty database only: a database of any other version is made again"
     )
 
@@ -372,6 +372,28 @@ class SchemaError(RobinautsError):
     def mismatch(cls, expected: int, found: int) -> SchemaError:
         """There is a schema, of a version this build was not written for."""
         return cls(f"the database is at schema version {found}", expected=expected, found=found)
+
+    @classmethod
+    def stale(cls, expected: int, recorded: str | None) -> SchemaError:
+        """The right version, made from another edit of ``schema.sql``.
+
+        Until the first release the version is 1 whatever edit a database
+        was made from, so the hash ``robinauts db init`` records is what
+        tells them apart. ``None`` is a file applied by hand, which recorded
+        nothing, and is refused the same way: there is no telling which edit
+        it was.
+        """
+        return cls(
+            "the database was made from an older schema.sql"
+            + ("" if recorded else " (or not by `robinauts db init`)"),
+            expected=expected,
+            found=expected,
+            advice=(
+                f"drop it and run `{DB_INIT_COMMAND}` again: until the first release the"
+                " schema is edited in place, and a database made from an older schema.sql"
+                " is made again rather than upgraded"
+            ),
+        )
 
     @classmethod
     def unversioned(cls, expected: int, tables: Iterable[str]) -> SchemaError:
