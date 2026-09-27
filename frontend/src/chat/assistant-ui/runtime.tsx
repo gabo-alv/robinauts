@@ -5,32 +5,37 @@
  * Our state, given to assistant-ui to render.
  *
  * `useExternalStoreRuntime` is the runtime for a host that owns its own
- * messages: the library renders and calls back, and every message, every
- * branch and every byte of a stream is ours (`./state.ts`). None of
- * assistant-ui's own persistence is used -- no `assistant-cloud`, no thread
- * list -- because the conversation lives in our database and nowhere else
- * (ADR 0001).
+ * messages: the library renders and calls back, and every message and every
+ * byte of a stream is ours (`./state.ts`). None of assistant-ui's own
+ * persistence is used -- no `assistant-cloud`, no thread list -- because the
+ * conversation lives in our database and nowhere else (ADR 0001).
  *
  * **What the adapter really offers, having read it** (`@assistant-ui/react`
  * 0.15.19, `ExternalStoreAdapter`):
  *
- * - `messages` is a flat list which the runtime relinks into a chain, so the
- *   branches beside the one being read would exist only once the runtime had
- *   been shown them. `messageRepository` is the other way in and is the one
- *   used here: an `ExportedMessageRepository` is **every message with its
- *   parent, and a head**, which is the shape our API already answers in, so
- *   the branch picker has the whole tree from the first render.
- * - `switchToBranch` is offered when `setMessages` is there, and the list a
- *   switch hands back is not what decides our branch -- the server keeps the
- *   author's position (`PUT /api/conversations/{id}/leaf`). So `setMessages`
- *   is present and does nothing, and the switch is heard through
- *   `unstable_onBranchChange`, which fires on a branch picker's click and on
- *   nothing else.
+ * - `messageRepository` is how the thread is handed over: an
+ *   `ExportedMessageRepository` is **every message with its parent, and a
+ *   head**, and in that mode the runtime keeps exactly what it is given and
+ *   drops what it is no longer given. Ours is a chain -- each message's
+ *   parent is the one before it -- so a message an edit cut off the thread
+ *   is gone from the runtime on the next render. The other way in, plain
+ *   `messages`, relinks a flat list and keeps what it has already seen, so a
+ *   message cut off would linger beside its replacement as a branch. Nothing
+ *   here is a branch (ADR 0003, `docs/specs/conversations.md`).
+ * - `setMessages` is **not** offered. It is what turns on branch switching
+ *   and deleting, neither of which exists; and it is what makes the library's
+ *   own `cancelRun` take a trailing question out of the thread and put its
+ *   text back into the box, which is wrong for a host whose backend stored
+ *   that question when the turn began (`@assistant-ui/core`,
+ *   `external-store-thread-runtime-core`, `cancelRun`). Without it a stop
+ *   leaves the thread as it is.
  * - `onNew`, `onEdit`, `onReload` and `onCancel` are the four the vendored
  *   Thread's composer and action bar reach: send, edit, regenerate, stop.
- *   Each is one of the wire's turns (`docs/specs/wire.md`).
+ *   Each is one of the wire's turns (`docs/specs/wire.md`). An edit cuts the
+ *   thread after the edited message's parent and goes on from there; a
+ *   regeneration cuts the answer off and produces it again.
  * - `isRunning` is ours to say, and while it is true with no assistant
- *   message at the end of the branch the runtime draws a placeholder of its
+ *   message at the end of the thread the runtime draws a placeholder of its
  *   own -- which is the "working" dot between a question and its first word.
  */
 import {
@@ -41,7 +46,6 @@ import {
   type ExportedMessageRepository,
   type ExternalStoreAdapter,
   type MessageStatus,
-  type ThreadComposerRuntime,
   type ThreadMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
@@ -158,8 +162,8 @@ export function useChat(props: ChatProps): Chatting {
   // The runtime re-imports what it is given when the object is not the one it
   // was given last, so this is what decides how often it does.
   const repository = useMemo(
-    () => asRepository(state.messages, state.leafId),
-    [state.messages, state.leafId],
+    () => asRepository(state.messages),
+    [state.messages],
   );
 
   const adapter: ExternalStoreAdapter = useMemo(
@@ -175,18 +179,6 @@ export function useChat(props: ChatProps): Chatting {
       // There is nothing to send a first message to when the deployment has
       // no agent; the box still takes what is typed into it.
       isSendDisabled: state.conversationId === null && props.agentId === null,
-      // **What the runtime rewrote, handed straight back.** It is present at
-      // all because branch switching is offered only when it is; what it does
-      // is refuse the rewrite, because the conversation is the server's. It
-      // is not a no-op, though: the runtime rewrites its own repository
-      // first, so leaving this empty would leave the two disagreeing -- and
-      // a head it has dropped and we still name is an exception thrown from
-      // inside the library on the next render. Handing ours over again puts
-      // it back in step (`state.ts`, `resync`).
-      setMessages: () => {
-        dispatch({ kind: "resync" });
-      },
-      unstable_onBranchChange: turns.onBranchChange,
       onNew: turns.onNew,
       onEdit: turns.onEdit,
       onReload: turns.onReload,
@@ -204,28 +196,16 @@ export function useChat(props: ChatProps): Chatting {
 
   const runtime = useExternalStoreRuntime(adapter);
 
-  // **The box.** Two things the library leaves it saying the wrong thing
-  // about a message that never became a turn; what they are and why is in
+  // **The box.** The one thing the library leaves it saying the wrong thing
+  // about a message that never became a turn; what it is and why is in
   // `turnsOf`, beside `wanted`. This runs after every render, which is after
   // the library's own work in the same event, and it never overwrites
   // anything the person has typed since.
   useEffect(() => {
-    turns.reaches(() => runtime.thread.composer);
-  }, [turns, runtime]);
-  useEffect(() => {
     const wanted = turns.saying();
     if (wanted === null) return;
     const box = runtime.thread.composer;
-    const held = box.getState().text;
-    if (wanted.kind === "put") {
-      if (held === "") box.setText(wanted.text);
-      return;
-    }
-    // **The library's own rule, not a stricter one.** `restoreDraft` refuses
-    // only when the box holds something that is not all whitespace, so a box
-    // holding two spaces is one it restored into -- and one this must clear,
-    // or the question sits in the thread and in the box at once.
-    if (wanted.was.trim() === "" && held === wanted.text) box.setText("");
+    if (box.getState().text === "") box.setText(wanted.text);
   });
 
   return { state, runtime };
@@ -257,35 +237,12 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
   /**
    * What the box must be made to say, once, after the next render.
    *
-   * Two things the library leaves it saying the wrong thing, and both are
-   * about a message that never became a turn:
-   *
-   * - **take**: pressing stop before an answer has begun makes the library
-   *   take the trailing question out of its own repository and restore its
-   *   text into the composer, on the assumption that a host which keeps no
-   *   unanswered question would want it back to edit. Ours is not that host:
-   *   the backend stored that question when the turn began, so it stays in
-   *   the conversation, and a box holding a copy of a message on the screen
-   *   is a message somebody sends twice. The library takes its own draft
-   *   back only when it can see that the store still holds the message, and
-   *   here it cannot -- what it moved is the end of the branch, the one case
-   *   it reads as "the host has not removed it yet".
-   * - **put**: the box empties itself when it hands a message over, so a
-   *   turn refused here for being a second one leaves nothing behind at all.
-   *   The text goes back, and a notice says why (`ONE_AT_A_TIME`).
-   *
-   * `was` is what the box held **before** the stop: a draft somebody had
-   * already typed is theirs and is never cleared.
+   * The box empties itself when it hands a message over, so a turn refused
+   * here for being a second one leaves nothing behind at all. The text goes
+   * back, and a notice says why (`ONE_AT_A_TIME`).
    */
-  type Wanted =
-    { kind: "take"; text: string; was: string } | { kind: "put"; text: string };
+  type Wanted = { text: string };
   let wanted: Wanted | null = null;
-
-  /** How the box is reached, once there is a runtime to reach it with. */
-  let box: (() => ThreadComposerRuntime) | null = null;
-  function reaches(reach: () => ThreadComposerRuntime): void {
-    box = reach;
-  }
 
   /** What the box must be made to say, once. */
   function saying(): Wanted | null {
@@ -330,7 +287,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     dispatch({ kind: "told", detail: ONE_AT_A_TIME });
     // The box cleared itself when it handed this over, so without this the
     // message is gone and the notice is all there is.
-    if (text !== "") wanted = { kind: "put", text };
+    if (text !== "") wanted = { text };
   }
 
   /**
@@ -389,9 +346,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       kind: "opened",
       conversationId,
       messages: opened.messages,
-      leafId: opened.leaf_id,
       runId: opened.run_id,
-      resume: opened.resume,
       endedBadly:
         opened.ended_badly === null
           ? null
@@ -505,8 +460,8 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // which stops this watcher -- and the list still has to be asked for.
     props.onTurnEnded?.();
     // The turn is over and **the store is the truth**: the ids are the
-    // server's, the answer carries its provenance, and the branch is the one
-    // its author is on.
+    // server's, the answer carries its provenance, and the thread is the one
+    // the server shows.
     await read(attached.conversationId, control.signal);
   }
 
@@ -514,10 +469,10 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     const text = wrote(message);
     if (text === "") return;
     if (busy()) return told(text);
-    // Not the end of the branch where that is a question nobody answered:
+    // Not the end of the thread where that is a question nobody answered:
     // sending again is how a turn that went wrong is retried (`under`).
-    const parentId = under(state, message.parentId ?? state.leafId);
-    dispatch({ kind: "asked", id: unsent(), parentId, text });
+    const parentId = under(state);
+    dispatch({ kind: "asked", id: unsent(), after: parentId, text });
     const conversationId = state.conversationId;
     if (conversationId !== null) {
       await follow((signal) =>
@@ -552,8 +507,10 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     const conversationId = state.conversationId;
     if (text === "" || conversationId === null) return;
     // **An edit is a new message under the parent of the one it replaces**
-    // (`docs/specs/conversations.md`): nothing is overwritten, and what the
-    // tree gains is a branch beside the old one.
+    // (`docs/specs/conversations.md`): the store keeps the old one, and the
+    // thread on the screen is cut after that parent and goes on from the new
+    // one. The runtime names the parent, which in our chain is the message
+    // before the edited one, or nothing for the first.
     const parentId = message.parentId;
     // A parent the server has never been told about: the question being
     // edited is itself one this chat put on the screen a moment ago and the
@@ -562,7 +519,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // reachable only by driving the runtime directly.
     if (isUnsent(parentId)) return;
     if (busy()) return told(text);
-    dispatch({ kind: "asked", id: unsent(), parentId, text });
+    dispatch({ kind: "asked", id: unsent(), after: parentId, text });
     await follow((signal) =>
       startTurn(conversationId, { text, parentId }, { signal }),
     );
@@ -582,34 +539,17 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       return;
     }
     // A regeneration carries no new message: it answers the question that
-    // turn already had (`docs/specs/conversations.md`).
-    dispatch({ kind: "again", parentId });
+    // turn already had (`docs/specs/conversations.md`). The old answer comes
+    // off the screen with everything after it, which is what `parentId` --
+    // the question -- cuts the thread after.
+    dispatch({ kind: "again", after: parentId });
     await follow((signal) =>
       startTurn(conversationId, { regenerate }, { signal }),
     );
   }
 
   async function onCancel(): Promise<void> {
-    // **Both of these before anything is awaited.** assistant-ui's own
-    // `cancelRun` calls this and then, in the same turn of the loop, takes
-    // the trailing question out of its repository and puts its text into the
-    // box. The `resync` is what puts its repository back -- ours still holds
-    // that message, because the backend stored it when the turn began -- and
-    // `restored` is what `useChat` clears the box with. A dispatch after an
-    // `await` would be too late for either.
-    dispatch({ kind: "resync" });
     const { conversationId, runId } = state;
-    const tail = state.messages.find((each) => each.id === state.leafId);
-    wanted =
-      tail !== undefined && tail.role === "user"
-        ? {
-            kind: "take",
-            text: tail.parts.map((part) => part.text).join(""),
-            // Read **now**, before the library touches it: a draft somebody
-            // had already typed is not one to clear.
-            was: box?.().getState().text ?? "",
-          }
-        : null;
     // Nothing to stop. The Thread offers stopping only while `isRunning`,
     // which is a run this chat knows the id of, so this is a guard and not a
     // state: there is no request that would say "stop whatever is going".
@@ -631,43 +571,16 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // outcome (`docs/specs/wire.md`).
   }
 
-  function onBranchChange({ headId }: { headId: string | null }): void {
-    if (headId === null || isUnsent(headId)) {
-      // A head this state cannot mean: nothing, or a message the server has
-      // never been told about. The runtime has moved its own repository
-      // there all the same, so the two now disagree -- and what puts them
-      // back in step is handing the whole state over again, which is a new
-      // object and a `resetHead` on the branch this really reads.
-      dispatch({ kind: "resync" });
-      return;
-    }
-    dispatch({ kind: "branch", leafId: headId });
-    const conversationId = state.conversationId;
-    if (conversationId === null) return;
-    // Where its author is reading is the conversation's and not this tab's,
-    // and moving there writes nothing else: it deliberately does not date the
-    // conversation (`docs/specs/conversations.md`).
-    void request("put", "/api/conversations/{conversation_id}/leaf", {
-      path: { conversation_id: conversationId },
-      body: { message_id: headId },
-    }).then(undefined, () => {
-      // The branch on the screen is the branch being read either way; a
-      // position the server did not keep is not worth a sentence.
-    });
-  }
-
   return {
     now,
     began,
     stop,
-    reaches,
     saying,
     read,
     onNew,
     onEdit,
     onReload,
     onCancel,
-    onBranchChange,
   };
 }
 
@@ -703,65 +616,28 @@ function wrote(message: AppendMessage): string {
 const converted = new WeakMap<ChatMessage, ThreadMessage>();
 
 /**
- * The whole tree, with the branch it is read on, as the runtime takes it.
+ * The thread as the runtime takes it: a chain, each message under the one
+ * before it, with the last as the head.
  *
- * **Nothing goes out of here naming a message that is not in it.** The
- * library throws on a parent it has not been given and on a head it does not
- * hold, and an exception from inside a render is the whole interface gone --
- * over a message, which is the thing this is least entitled to lose. The
- * reducer is written not to produce either (`state.ts`), so what this drops
- * is a slip: it is said once to the console and the conversation carries on.
+ * A chain and not a flat list, because of how the two ways in differ
+ * (the header above): given a repository, the runtime holds exactly these
+ * messages and no others, so a message an edit cut off is gone from it on
+ * the next render rather than kept beside its replacement.
  */
 export function asRepository(
   messages: readonly ChatMessage[],
-  leafId: string | null,
 ): ExportedMessageRepository {
-  const known = new Set<string>();
-  const items = [];
-  for (const message of messages) {
-    if (message.parentId !== null && !known.has(message.parentId)) {
-      complain(
-        `dropping ${message.id}: its parent ${message.parentId} is not here`,
-      );
-      continue;
-    }
-    known.add(message.id);
-    items.push({ message: stored(message), parentId: message.parentId });
-  }
-  const last = items[items.length - 1]?.message.id ?? null;
-  const headId = leafId !== null && known.has(leafId) ? leafId : last;
-  if (leafId !== null && headId !== leafId) {
-    complain(`the branch ends on ${leafId}, which is not here`);
-  }
+  const items = messages.map((message, at) => ({
+    message: stored(message),
+    parentId: at === 0 ? null : (messages[at - 1]?.id ?? null),
+  }));
+  const headId = items[items.length - 1]?.message.id ?? null;
   return {
     messages: items,
-    // Left out rather than given as `null`, which would mean "no branch at
+    // Left out rather than given as `null`, which would mean "no thread at
     // all"; left out, the runtime reads the last message as the head.
     ...(headId === null ? {} : { headId }),
   };
-}
-
-/** The shapes already complained about; every render would say them again. */
-const complained = new Set<string>();
-
-/**
- * Say that a message named something that is not there.
- *
- * **It firing is a bug of ours** -- the reducer is written never to produce
- * either shape (`state.ts`) -- and nothing a person can do anything about,
- * so it goes to the console and not on to the screen, and it is not thrown,
- * because the conversation on the screen is worth more than the certainty.
- * A warning rather than a debug line for the same reason: whoever is looking
- * at the console should see it.
- *
- * Once per shape. The tree is rebuilt on every delta, so a slip that lasts a
- * whole answer would otherwise be a thousand identical lines and the one
- * before it scrolled away.
- */
-function complain(what: string): void {
-  if (complained.has(what)) return;
-  complained.add(what);
-  console.warn(`[robinauts] the chat's tree is not a tree: ${what}`);
 }
 
 /** That message as assistant-ui holds one, converted at most once. */

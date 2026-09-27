@@ -388,11 +388,8 @@ def test_a_message_comes_from_the_web_unless_it_says_otherwise() -> None:
 # --- conversations ----------------------------------------------------------
 
 
-def test_a_conversation_has_an_owner_an_agent_and_a_branch_to_open_on() -> None:
-    leaf = uuid.uuid4()
-    opened = conversation(active_leaf_id=leaf)
-    assert (opened.owner_id, opened.agent, opened.active_leaf_id) == (OWNER, AGENT, leaf)
-    assert conversation().active_leaf_id is None
+def test_a_conversation_has_an_owner_and_an_agent() -> None:
+    assert (conversation().owner_id, conversation().agent) == (OWNER, AGENT)
 
 
 def test_a_new_conversation_has_no_title_yet() -> None:
@@ -424,7 +421,6 @@ def test_a_title_is_one_line_of_printable_text(title: str) -> None:
         {"agent": "No Such Agent"},
         {"created_at": NAIVE},
         {"updated_at": NAIVE},
-        {"active_leaf_id": "not a uuid"},
         {"title": 7},
     ],
 )

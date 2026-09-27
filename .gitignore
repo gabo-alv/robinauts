@@ -17,3 +17,6 @@ backend/NOTICE
 backend/THIRD_PARTY_LICENSES.txt
 # Generated from backend/openapi.json by `npm run generate`, on every check.
 frontend/src/api/schema.d.ts
+
+# Scratch space: review findings and other working files.
+tmp/

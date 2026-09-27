@@ -90,8 +90,8 @@ How such persistence would sit beside the platform's store is part of that
 evaluation and is open. **Dual write** — LangGraph storing its checkpoints
 its own way while the platform also writes its own record — is one of the
 options to discuss then. It is neither adopted nor rejected by this ADR. Its
-known difficulty is keeping the two in step: when a user edits, branches or
-deletes a message in the platform's store, a checkpoint of the same
+known difficulty is keeping the two in step: when a user edits, regenerates
+or deletes a message in the platform's store, a checkpoint of the same
 conversation is stale.
 
 Two constraints already bind that evaluation:

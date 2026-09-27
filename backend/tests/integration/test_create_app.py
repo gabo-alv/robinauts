@@ -340,11 +340,9 @@ async def test_a_conversation_is_listed_opened_renamed_and_deleted_over_http() -
 
     assert [item["id"] for item in listed.json()["items"]] == [str(kept.id)]
     assert listed.json()["next_cursor"] is None
-    assert opened.json()["leaf_id"] == str(asked.id)
     assert opened.json()["messages"] == [
         {
             "id": str(asked.id),
-            "parent_id": None,
             "role": "user",
             "channel": "web",
             "created_at": "2026-09-21T09:00:00Z",

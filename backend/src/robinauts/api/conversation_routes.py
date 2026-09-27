@@ -6,9 +6,8 @@
 ::
 
     GET    /api/conversations                          the panel's list, paged
-    GET    /api/conversations/{id}                     open one: the tree and the run
+    GET    /api/conversations/{id}                     open one: its thread and the run
     PATCH  /api/conversations/{id}                     rename
-    PUT    /api/conversations/{id}/leaf                move to another branch
     DELETE /api/conversations/{id}                     delete, for good
     POST   /api/conversations/{id}/runs/{run_id}/cancel  stop the answer
 
@@ -92,7 +91,6 @@ from robinauts.api.schemas import (
     OpenedConversationResponse,
     RenameRequest,
     RunView,
-    SelectLeafRequest,
 )
 from robinauts.application import DEFAULT_PAGE, MAX_PAGE
 from robinauts.domain import InvalidCursorError, InvalidValueError
@@ -155,14 +153,12 @@ async def list_conversations(
 async def open_conversation(
     request: Request, user: SignedIn, conversation_id: uuid.UUID
 ) -> OpenedConversationResponse:
-    """One conversation, read at **one moment**: its messages and its run.
+    """One conversation, read at **one moment**: its thread and its run.
 
-    ``messages`` is the whole tree, oldest first with ties broken by id, and
-    ``leaf_id`` is the message it opens on -- the branch its author was last
-    on (``docs/specs/conversations.md``). The branch being shown is the walk
-    from ``leaf_id`` up the ``parent_id``s, which the client does: sending it
-    as well would send every message of it twice. The other branches are there
-    to switch between without another request.
+    ``messages`` is the one thread the conversation shows, oldest first: the
+    path to its newest message, and nothing an edit or a regeneration put
+    aside (``docs/specs/conversations.md``). What was put aside is kept in
+    the store and never sent.
 
     When a run is in flight, ``run_id`` and ``resume`` say which run and where
     to attach to its stream, so that a client which has just loaded every
@@ -204,32 +200,6 @@ async def rename_conversation(
         # ``NotFoundError`` and not this. So a refused value is the title's.
         raise InvalidValueError(f"body.title: {refused}") from refused
     return ConversationSummary.of(renamed)
-
-
-@conversation_router.put("/conversations/{conversation_id}/leaf", responses=WRITING)
-async def select_branch(
-    request: Request,
-    user: SignedIn,
-    conversation_id: uuid.UUID,
-    asked: SelectLeafRequest,
-    read_once: StrictJson,
-) -> ConversationSummary:
-    """Move the author to another branch; the conversation as it then is.
-
-    ``message_id`` is **any** message of the conversation, not only the end of
-    a branch: what is recorded is the position its author is at, and opening
-    the conversation resolves it to the branch below it. One that is no
-    message of this conversation answers like anything else that is not there.
-
-    It deliberately does **not** date the conversation: moving between
-    branches writes nothing, so it must not push a conversation to the top of
-    a panel ordered by when things were last written. Only the author moves
-    between branches, and every other reader sees the branch the author is on
-    (``docs/specs/conversations.md``).
-    """
-    return ConversationSummary.of(
-        await conversing(request).select_branch(user, conversation_id, asked.message_id)
-    )
 
 
 @conversation_router.delete(

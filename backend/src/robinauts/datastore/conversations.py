@@ -27,8 +27,8 @@ run's.** Two methods that took them the other way round would deadlock the
 first time they met on one conversation, and a deadlock is a failure a caller
 cannot do anything about. So:
 
-- ``start_run``, ``append_message``, ``complete_message``,
-  ``delete_conversation`` and ``set_active_leaf`` take the conversation's row
+- ``start_run``, ``append_message``, ``complete_message`` and
+  ``delete_conversation`` take the conversation's row
   first, with ``SELECT ... FOR UPDATE`` (``start_run`` creates it instead,
   where it is creating one -- a row it has just inserted is one nobody else
   can see);
@@ -243,7 +243,7 @@ reached, so a violation means something is wrong here rather than with the
 call, and it propagates.
 """
 
-_CONVERSATION_COLUMNS = "id, owner_id, agent, title, active_leaf_id, created_at, updated_at"
+_CONVERSATION_COLUMNS = "id, owner_id, agent, title, created_at, updated_at"
 _RUN_COLUMNS = (
     "id, conversation_id, message_id, agent, engine, model, state,"
     " created_at, started_at, finished_at, error"
@@ -251,22 +251,21 @@ _RUN_COLUMNS = (
 
 _INSERT_CONVERSATION = f"""
 INSERT INTO conversations ({_CONVERSATION_COLUMNS})
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6)
 """
 
 _LOCK_CONVERSATION = "SELECT agent FROM conversations WHERE id = $1 FOR UPDATE"
 """The conversation's row, held until this transaction ends.
 
 The first lock every writing method takes, and what makes "is this
-conversation already answering" and "is this the message it opens on"
-decidable by looking: while it is held nothing else writes this conversation
-or starts a run in it.
+conversation already answering" decidable by looking: while it is held
+nothing else writes this conversation or starts a run in it.
 """
 
-_MOVE_CONVERSATION = """
-UPDATE conversations SET updated_at = $2, active_leaf_id = $3 WHERE id = $1
+_DATE_CONVERSATION = """
+UPDATE conversations SET updated_at = $2 WHERE id = $1
 """
-"""Date it and open it on that message: the two columns an append moves.
+"""Date it: the one column an append moves.
 
 Named columns, never the whole row read back and written again: a rename
 landing between the read and the write would be lost, and the contract has a
@@ -404,39 +403,6 @@ class PostgresConversationStore(ConversationStore):
         )
         return None if row is None else _conversation(row)
 
-    async def set_active_leaf(
-        self, conversation_id: uuid.UUID, leaf_id: uuid.UUID
-    ) -> Conversation | None:
-        return await self._transacted(
-            lambda connection: self._set_active_leaf(connection, conversation_id, leaf_id)
-        )
-
-    async def _set_active_leaf(
-        self, connection: asyncpg.Connection, conversation_id: uuid.UUID, leaf_id: uuid.UUID
-    ) -> Conversation | None:
-        if await connection.fetchrow(_LOCK_CONVERSATION, conversation_id) is None:
-            return None
-        found = await connection.fetchval(
-            "SELECT true FROM messages WHERE id = $1 AND conversation_id = $2",
-            leaf_id,
-            conversation_id,
-        )
-        if found is None:
-            raise MessageNotFoundError(
-                f"message {leaf_id} is not in conversation {conversation_id}"
-            )
-        # No `updated_at`: moving between branches writes nothing that should
-        # reorder a panel sorted by when things were last written.
-        row = await connection.fetchrow(
-            f"""
-            UPDATE conversations SET active_leaf_id = $2 WHERE id = $1
-            RETURNING {_CONVERSATION_COLUMNS}
-            """,
-            conversation_id,
-            leaf_id,
-        )
-        return None if row is None else _conversation(row)
-
     async def touch_conversation(
         self, conversation_id: uuid.UUID, *, now: datetime
     ) -> Conversation | None:
@@ -494,7 +460,7 @@ class PostgresConversationStore(ConversationStore):
                 f"there is no conversation {message.conversation_id} to append to"
             )
         await self._store_message(connection, message, document)
-        await connection.execute(_MOVE_CONVERSATION, message.conversation_id, now, message.id)
+        await connection.execute(_DATE_CONVERSATION, message.conversation_id, now)
 
     @staticmethod
     async def _store_message(
@@ -626,7 +592,7 @@ class PostgresConversationStore(ConversationStore):
         if asked is not None:
             assert document is not None  # the two arrive together
             await self._store_message(connection, asked, document)
-            await connection.execute(_MOVE_CONVERSATION, run.conversation_id, now, asked.id)
+            await connection.execute(_DATE_CONVERSATION, run.conversation_id, now)
         else:
             # A regeneration appends nothing and answers a question that is
             # already stored, so the question is read rather than written --
@@ -810,7 +776,7 @@ class PostgresConversationStore(ConversationStore):
             )
         await self._check_position(connection, event)
         await self._store_message(connection, message, document)
-        await connection.execute(_MOVE_CONVERSATION, message.conversation_id, now, message.id)
+        await connection.execute(_DATE_CONVERSATION, message.conversation_id, now)
         await self._store_event(connection, event, event_document)
 
     async def events_of(
@@ -923,7 +889,6 @@ def _conversation(row: asyncpg.Record) -> Conversation:
             owner_id=row["owner_id"],
             agent=row["agent"],
             title=row["title"],
-            active_leaf_id=row["active_leaf_id"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -952,7 +917,6 @@ def _conversation_values(conversation: Conversation) -> tuple[object, ...]:
         conversation.owner_id,
         conversation.agent,
         conversation.title,
-        conversation.active_leaf_id,
         conversation.created_at,
         conversation.updated_at,
     )

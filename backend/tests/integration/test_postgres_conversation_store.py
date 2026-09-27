@@ -589,7 +589,6 @@ async def _after_the_answer(store: ConversationStore) -> None:
     outcomes = await asyncio.gather(
         store.delete_conversation(here, now=at(9)),
         store.append_message(again, message_to_data(again), now=at(5)),
-        store.set_active_leaf(here, replied.id),
         store.rename_conversation(here, "Renamed", now=at(6)),
         store.start_run(
             conversation=None,
@@ -718,9 +717,8 @@ async def test_a_whole_turn_runs_against_this_store() -> None:
             [message_from_stored(document) for document in documents],
             conversation_id=begun.conversation.id,
         )
-        (root,) = tree.children_of(None)
+        root, replied = tree.visible_path()
         assert root.role is Role.USER and root.text == "What is a robinaut?"
-        (replied,) = tree.children_of(root.id)
         assert replied.role is Role.ASSISTANT and replied.text == "Someone who plays fair."
         assert replied.provenance is not None and replied.provenance.run_id == ended.id
         events = [run_event_from_stored(document) for document in await store.events_of(ended.id)]
@@ -731,10 +729,7 @@ async def test_a_whole_turn_runs_against_this_store() -> None:
             follows=ended.message_id,
             ended=True,
         )
-        # And the conversation opens where the turn left it.
-        found = await store.conversation_by_id(begun.conversation.id)
-        assert found is not None and found.active_leaf_id == replied.id
-        assert await store.active_run_of(found.id) is None
+        assert await store.active_run_of(begun.conversation.id) is None
 
 
 def _parts(text: str) -> tuple[MessagePart, ...]:

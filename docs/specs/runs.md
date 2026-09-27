@@ -38,7 +38,11 @@ depend on the request that started it.
   last completed message, or of the event that started it if it has
   completed none, together with the message a new announcement after that
   point will hang under — the two things anyone checking that stream needs,
-  handed over together so that neither is guessed. The watcher has every complete message already, so
+  handed over together so that neither is guessed. The messages served
+  end at that message ([conversations.md](conversations.md), "The visible
+  thread"), so what arrives is shown where it belongs, even for a
+  regeneration that has not yet replaced the answer it is producing again.
+  The watcher has every complete message already, so
   attaching there replays exactly the message still being produced, from its
   announcement. Nothing twice, nothing missed.
 - The stream of a run is **re-attachable**, and this is what that promises.
@@ -267,7 +271,7 @@ Tool usage is planned ([agents.md](agents.md)); runs are designed for it.
   two calls, and a process can stop between two calls.
 - **The store is where "at most one active run" is held**, not the
   application: two requests that both looked, both found none and both
-  inserted would give one conversation two answers writing into one branch,
+  inserted would give one conversation two answers writing into it at once,
   so creating a run and refusing a second are one indivisible step, and the
   second caller is told the conversation is already answering. The store
   holds four more rules of its own, for the same reason — they are about the

@@ -83,7 +83,7 @@ the format and its versions (`message_to_data` / `message_from_data`,
 `run_event_to_data` / `run_event_from_data`, and the upgrades — two document
 shapes and no more), the rules of the **tree** (`ConversationTree`, built by
 `tree_of` or `tree_of_stored` and asked everything afterwards: what may follow
-what, paths, branches, where a conversation opens, where an edit or a
+what, paths, which path is the visible thread, where an edit or a
 regeneration attaches), the **run state machine** and "one active run", the
 **two order checks** (what an engine yields, what the application publishes,
 and where a watcher re-attaches), the derived **title**, and **history
@@ -313,7 +313,7 @@ confined to their adapter sub-package. HTTP clients are confined to adapters.
 |---|---|
 | the platform's conversation format: the records, the two event vocabularies, the value rules (`clean_text`, `text_parts`) | domain |
 | the canonical encoding of the format and its versions | core |
-| the rules of the tree: paths, branches, where a message attaches | core |
+| the rules of the tree: paths, the visible thread, where a message attaches | core |
 | the run state machine, and the order of a run's and an engine's events | core |
 | the derived title | core |
 | reading our own rows: flat records from columns (`domain.reading_stored`) | datastore |

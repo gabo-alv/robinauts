@@ -30,9 +30,16 @@ documents, and the run's events too; they are decoded through ``core``'s
 (``StoredDataError``) and not a 404 for whoever opened the conversation. An id
 the *request* named and that is not there stays a ``NotFoundError``.
 
-The rules are ``core``'s throughout -- the tree, where a conversation opens,
-where a watcher of a run in flight attaches -- and everything outside the
-process is a port, handed in and never constructed (``docs/layout.md``).
+**What is opened is the visible path, never the tree.** A store keeps every
+message ever completed, the ones an edit or a regeneration put aside
+included, and ``core.ConversationTree`` is what tells the one thread a reader
+sees from the rest (``docs/specs/conversations.md``). Nothing leaves here but
+that thread: a message off it is analytics' to read, and no reader this
+module serves is analytics.
+
+The rules are ``core``'s throughout -- the tree, the visible path, where a
+watcher of a run in flight attaches -- and everything outside the process is
+a port, handed in and never constructed (``docs/layout.md``).
 """
 
 from __future__ import annotations
@@ -55,12 +62,17 @@ from robinauts.domain import (
     ConversationNotFoundError,
     InvalidValueError,
     Message,
+    MessageNotFoundError,
     Run,
+    StoredDataError,
     User,
     checked_line,
     checked_uuid,
 )
 from robinauts.ports import MAX_PAGE, Clock, ConversationPage, ConversationStore
+
+_UNREADABLE_RUN = "a stored run names a message its conversation does not have"
+"""What a run in flight whose last message is not stored is answered as."""
 
 DEFAULT_PAGE = 30
 """How many conversations a caller that did not say gets: a panel's worth."""
@@ -75,12 +87,10 @@ class OpenedConversation:
     """
 
     conversation: Conversation
-    tree: ConversationTree
-    """Its messages, read once and checked once; every further question is a
-    method on it (``core.ConversationTree``)."""
-    leaf: Message | None
-    """The message it opens on -- ``core.default_leaf`` -- or ``None`` while
-    the conversation is empty."""
+    messages: tuple[Message, ...]
+    """The visible path, oldest first (``core.ConversationTree.visible_path``):
+    the one thread a reader sees, and nothing an edit put aside. Empty while
+    the conversation is."""
     run_id: uuid.UUID | None = None
     """The run in flight, if there is one; the stream is attached to by id."""
     resume: ResumePoint | None = None
@@ -127,12 +137,12 @@ class Conversations:
         return await self._store.conversations_of(user.id, limit=limit, cursor=cursor)
 
     async def open(self, user: User, conversation_id: uuid.UUID) -> OpenedConversation:
-        """A conversation, its messages, the branch it opens on and its run in flight.
+        """A conversation, the thread it shows and its run in flight.
 
-        The messages that are **stored** -- every one that is complete -- and,
-        if a run is going, where to attach to watch the rest of it arrive. The
-        two together are what makes reopening a conversation in the middle of
-        an answer show the answer arriving rather than a gap
+        The messages on the visible path -- every complete one a reader is
+        shown -- and, if a run is going, where to attach to watch the rest of
+        it arrive. The two together are what makes reopening a conversation
+        in the middle of an answer show the answer arriving rather than a gap
         (``docs/specs/runs.md``).
 
         **One read, of one moment.** The messages, the run and its events come
@@ -156,6 +166,13 @@ class Conversations:
         deleted between the two reads: the same 404 as one that was never
         there.
 
+        **With a run in flight, the thread ends where the run is writing**
+        (``ConversationTree.visible_path(extending=...)``): at ``resume.follows``,
+        the message its next one will hang under. A regeneration writes nothing
+        until its first answer completes, and until then the newest leaf is the
+        answer it is replacing -- or a later turn -- which a reader must not be
+        sent with the new answer arriving under it.
+
         **What went wrong is told too.** When no run is in flight, the most
         recent one is looked at, and a run that failed, was cancelled or was
         interrupted comes back on ``ended_badly``: somebody who reloads a
@@ -176,30 +193,28 @@ class Conversations:
             [message_from_stored(document) for document in snapshot.messages],
             conversation_id=conversation.id,
         )
-        leaf = tree.default_leaf(conversation)
         active = snapshot.active_run
         if active is None:
             return OpenedConversation(
                 conversation=conversation,
-                tree=tree,
-                leaf=leaf,
+                messages=tree.visible_path(),
                 ended_badly=await self._ended_badly(conversation.id),
             )
         events = [run_event_from_stored(document) for document in snapshot.events]
+        resume = resume_point(events, answering=active.message_id)
         return OpenedConversation(
             conversation=conversation,
-            tree=tree,
-            leaf=leaf,
+            messages=_thread_in_flight(tree, resume),
             run_id=active.id,
-            resume=resume_point(events, answering=active.message_id),
+            resume=resume,
         )
 
     async def _ended_badly(self, conversation_id: uuid.UUID) -> Run | None:
         """The most recent run of that conversation, if it ended badly.
 
         A **second** read, and deliberately outside the snapshot: it is asked
-        only when nothing is in flight, it changes nothing about the messages
-        or the tree, and what it says is advisory -- a run that began between
+        only when nothing is in flight, it changes nothing about the messages,
+        and what it says is advisory -- a run that began between
         the two reads is a run the caller will be told about when it opens
         again. Keeping it in the snapshot would mean a port that returned a
         conversation's whole run history for every open.
@@ -225,9 +240,8 @@ class Conversations:
 
         What comes back is what the **store wrote**, not the record read a
         moment earlier with a new title put on it: between the two a run may
-        have completed a message and moved the conversation on, and an
-        interface drawn from the older record would put back a position that
-        has already changed.
+        have completed a message and dated the conversation, and an interface
+        drawn from the older record would show a time that has already moved.
         """
         kept = checked_line(title, "a conversation's title", MAX_TITLE_CHARS)
         if not kept.strip():
@@ -236,29 +250,6 @@ class Conversations:
         written = await self._store.rename_conversation(
             conversation.id, kept, now=self._clock.now()
         )
-        if written is None:
-            raise _gone(conversation.id)
-        return written
-
-    async def select_branch(
-        self, user: User, conversation_id: uuid.UUID, leaf_id: uuid.UUID
-    ) -> Conversation:
-        """Move the author to another branch: the conversation opens there next.
-
-        Any message of the conversation will do, not only a leaf: what the
-        author is on is a position, and ``core.default_leaf`` resolves it to
-        the end of the branch below it when the conversation is opened. One
-        that is no message of this conversation is a ``MessageNotFoundError``
-        from the store, which is where that rule is kept.
-
-        It does not date the conversation. Moving between branches writes
-        nothing, so nothing climbs to the top of the panel
-        (``docs/specs/conversations.md``). What comes back is what the store
-        wrote, for the reason given on ``rename``.
-        """
-        checked_uuid(leaf_id, "a conversation's active leaf")
-        conversation = await self._owned(user, conversation_id)
-        written = await self._store.set_active_leaf(conversation.id, leaf_id)
         if written is None:
             raise _gone(conversation.id)
         return written
@@ -325,3 +316,17 @@ def owner_of(user: User, conversation_id: uuid.UUID, found: Conversation | None)
 def _gone(conversation_id: uuid.UUID) -> ConversationNotFoundError:
     """What a conversation that is not there answers, wherever it is missed."""
     return ConversationNotFoundError(f"there is no conversation {conversation_id}")
+
+
+def _thread_in_flight(tree: ConversationTree, resume: ResumePoint) -> tuple[Message, ...]:
+    """The visible path of a conversation whose run is at ``resume``.
+
+    ``resume.follows`` came out of the same snapshot's events, and a store
+    writes a completed message and its announcement together, so one that is
+    not in the tree is a fault of our rows (``StoredDataError``) and not a
+    404 for whoever opened the conversation.
+    """
+    try:
+        return tree.visible_path(extending=resume.follows)
+    except MessageNotFoundError as cause:
+        raise StoredDataError(_UNREADABLE_RUN) from cause

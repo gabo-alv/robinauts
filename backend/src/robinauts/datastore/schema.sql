@@ -164,7 +164,7 @@ CREATE INDEX IF NOT EXISTS pending_logins_expires_at_idx ON pending_logins (expi
 -- Conversations.
 -- ---------------------------------------------------------------------------
 
--- A conversation: one owner, one agent, and the branch it opens on
+-- A conversation: one owner, one agent, a title and its times
 -- (docs/specs/conversations.md). The id is the application's, never the
 -- server's: a turn builds the conversation, its first message and its run
 -- together, before any of them is stored, so nothing here may mint one.
@@ -177,12 +177,9 @@ CREATE INDEX IF NOT EXISTS pending_logins_expires_at_idx ON pending_logins (expi
 -- conversation is private to its owner in this version: there is nobody else
 -- for it to belong to.
 --
--- `active_leaf_id` carries **no** foreign key, and that is deliberate. It
--- names a message of this conversation, which is a rule the store keeps (it
--- refuses a leaf that is no message of it, `MessageNotFoundError`); a
--- constraint would have to point at `messages`, which points back here, and
--- the cycle would have to be broken by hand on every delete. The store's
--- check runs in the same transaction as the write, which is where it counts.
+-- No column says where a conversation opens: it opens on the path to its
+-- newest message, which the tree of `messages` below decides
+-- (docs/specs/conversations.md).
 CREATE TABLE IF NOT EXISTS conversations (
     id uuid
         CONSTRAINT conversations_pkey PRIMARY KEY,
@@ -190,7 +187,6 @@ CREATE TABLE IF NOT EXISTS conversations (
         CONSTRAINT conversations_owner_id_fkey REFERENCES users (id) ON DELETE CASCADE,
     agent text NOT NULL,
     title text NOT NULL,
-    active_leaf_id uuid,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL
 );

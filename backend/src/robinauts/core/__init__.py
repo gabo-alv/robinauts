@@ -51,7 +51,6 @@ from robinauts.core.conversation_format import (
     run_event_to_data,
 )
 from robinauts.core.conversation_tree import (
-    Branch,
     ConversationTree,
     check_parent,
     check_tree,
@@ -170,7 +169,6 @@ __all__ = [
     "UNRESERVED",
     "UNSAID_ERROR",
     "URL_SAFE",
-    "Branch",
     "ConversationTree",
     "ResumePoint",
     "accepted_issuers",

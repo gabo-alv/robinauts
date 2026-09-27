@@ -25,8 +25,8 @@ const RUN = "11111111-2222-4333-8444-555555555555";
 const CONVERSATION = id(1);
 
 const TREE = [
-  message("m1", null, "user", "Why do robins sing before dawn?"),
-  message("m2", "m1", "assistant", "Because it is quiet then."),
+  message("m1", "user", "Why do robins sing before dawn?"),
+  message("m2", "assistant", "Because it is quiet then."),
 ];
 
 function stub(answer: (call: Call) => Response | undefined) {
@@ -74,7 +74,7 @@ async function send(text: string) {
 }
 
 test("a conversation that is loaded is drawn as a thread", async () => {
-  stub(() => json(opened(conversation(1), TREE, "m2")));
+  stub(() => json(opened(conversation(1), TREE)));
   draw({ conversationId: CONVERSATION });
   await waitFor(() => {
     expect(
@@ -96,7 +96,7 @@ test("the empty chat shows what it is given above the box", async () => {
 test("a conversation with nothing in it is not the empty chat", async () => {
   stub((call) =>
     call.url === `/api/conversations/${CONVERSATION}`
-      ? json(opened(conversation(1), [], null))
+      ? json(opened(conversation(1), []))
       : undefined,
   );
   draw({ conversationId: CONVERSATION, welcome: <p>Pick an agent</p> });
@@ -127,7 +127,7 @@ test("sending a first message posts a turn and reports the conversation", async 
       );
     }
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -152,7 +152,7 @@ test("an answer arriving is on the screen before the run has ended", async () =>
   stub((call) => {
     if (call.url === "/api/turns") return response;
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -195,7 +195,7 @@ test("thinking is shown while it arrives, and it is collapsed", async () => {
   stub((call) => {
     if (call.url === "/api/turns") return response;
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -250,7 +250,7 @@ test("the box does not offer stopping before there is a run to stop", async () =
   let arrived: (given: Response) => void = () => undefined;
   const fetch = stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -288,7 +288,7 @@ test("the box does not offer stopping before there is a run to stop", async () =
 test("the action bar of a finished answer: copy, regenerate and edit", async () => {
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -309,19 +309,13 @@ test("the action bar of a finished answer: copy, regenerate and edit", async () 
   expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
 });
 
-test("a branch picker where the tree has a branch", async () => {
+test("the branch picker never renders: there is one thread", async () => {
+  // The vendored Thread still carries a BranchPicker, hidden when a message
+  // has one branch -- and every message has, because what is handed over is
+  // a chain (ADR 0003). Nothing an edit put aside is here to be a branch.
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(
-        opened(
-          conversation(1),
-          [
-            ...TREE,
-            message("m3", "m1", "assistant", "Or because of the light."),
-          ],
-          "m2",
-        ),
-      );
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -329,11 +323,9 @@ test("a branch picker where the tree has a branch", async () => {
   await waitFor(() => {
     expect(screen.getByText("Because it is quiet then.")).toBeInTheDocument();
   });
-  expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Previous" })).toBeInTheDocument();
-  // "1 / 2": which of the answers under that question is being read.
-  const picker = document.querySelector(".aui-branch-picker-state");
-  expect(picker?.textContent).toBe("1 / 2");
+  expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Previous" })).toBeNull();
+  expect(document.querySelector(".aui-branch-picker-state")).toBeNull();
 });
 
 test("a message that was not sent says so, where it can be read", async () => {
@@ -345,7 +337,7 @@ test("a message that was not sent says so, where it can be read", async () => {
   });
   const fetch = stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE, "m2"));
+      return json(opened(conversation(1), TREE));
     }
     return undefined;
   });
@@ -387,7 +379,7 @@ test("a run that ended badly says so, and says it once", async () => {
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
       return json(
-        opened(conversation(1), TREE, "m2", {
+        opened(conversation(1), TREE, {
           ended_badly: {
             run_id: RUN,
             state: "interrupted",

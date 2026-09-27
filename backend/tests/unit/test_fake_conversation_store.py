@@ -69,7 +69,6 @@ NOT_ATOMIC = {
     "test_a_delete_and_a_run_beginning_at_once_leave_no_orphan",
     "test_two_completions_offered_a_position_at_once_store_one_whole_answer",
     "test_a_completion_and_an_end_at_once_leave_a_readable_stream",
-    "test_a_rename_and_a_branch_change_at_once_keep_both",
     "test_a_rename_and_a_completion_at_once_keep_both",
     "test_a_snapshot_taken_while_a_message_completes_holds_both_or_neither",
     "test_a_snapshot_taken_while_a_run_ends_shows_it_going_or_not_at_all",

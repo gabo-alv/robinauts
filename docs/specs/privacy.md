@@ -8,15 +8,16 @@ on the company's servers; this document says who, inside them, sees what.
 - A conversation is **private to its author** by default.
 - **Share by link.** The author can create a link to a conversation. It is
   read-only, works only for people who can sign in to the deployment, and
-  can be revoked. It shows the **author's current branch, live**: it
-  follows the author when they continue the conversation or switch
-  branch, and the interface says so when the link is created. The other
-  branches stay private to the author.
+  can be revoked. It shows the **conversation's visible thread, live**: it
+  follows the author when they continue, edit or regenerate, and the
+  interface says so when the link is created. What an edit or a
+  regeneration discarded is shown to nobody
+  ([conversations.md](conversations.md)).
 - **Projects.** Any user can create a project at any time and add people.
   - The creator is the owner. Owners add and remove members and can make
     another member an owner.
-  - Every member sees every conversation in the project — the author's
-    current branch of each — and can start new ones there.
+  - Every member sees every conversation in the project — the visible
+    thread of each — and can start new ones there.
   - Only a conversation's author continues it. Another member who wants to
     carry it on forks it into a conversation of their own
     ([conversations.md](conversations.md)).
@@ -41,6 +42,10 @@ on the company's servers; this document says who, inside them, sees what.
 
 - Deletion by the author is soft, with a fixed 30 days in the trash
   ([conversations.md](conversations.md)).
+- **Edited-away and regenerated-away messages are retained** with their
+  conversation, shown to no user, and readable by analytics alone. They
+  leave with the conversation: deleting it, purging its owner and the
+  retention period remove them with everything else.
 - The operator may configure a retention period, after which
   conversations are deleted automatically. By default nothing expires.
 - An admin can purge everything of a user. The purge shows the admin no

@@ -322,9 +322,9 @@ class StartedTurn:
 
     ``conversation`` is the record the turn began in -- the one this call
     created, or the one it was read from a moment before the store dated it.
-    The store wrote the move (``updated_at``, the active leaf); a caller that
-    needs the conversation as it now is reads it, rather than being handed a
-    record that was true for an instant.
+    The store dated it (``updated_at``); a caller that needs the conversation
+    as it now is reads it, rather than being handed a record that was true
+    for an instant.
     """
 
     run: Run
@@ -554,10 +554,12 @@ class Turns:
         (``docs/specs/wire.md``): an **agent**, which begins a conversation
         with that agent and titles it from the question
         (``core.derive_title``); or a **conversation**, which appends the
-        question to it -- under ``parent_id``, which is what makes an edit a
-        sibling of the message it replaces and a continuation hang under the
-        last answer. Nothing for ``parent_id`` is a root: a conversation's
-        first question, or another beside it after the first was edited.
+        question to it -- under ``parent_id``, which is what makes an edit
+        hang beside the message it replaces, putting that message and
+        everything under it off the visible path, and a continuation hang
+        under the last answer. Nothing for ``parent_id`` is a root: a
+        conversation's first question, or another beside it after the first
+        was edited.
 
         All of it is **one** ``start_run``: the conversation if it is new, the
         question, and the run, in one transaction, so nothing can exist

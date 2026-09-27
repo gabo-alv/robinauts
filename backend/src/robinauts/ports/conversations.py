@@ -18,8 +18,8 @@ Two shapes cross it, and the difference is the whole of ``docs/layout.md``'s
 rule about stores and the platform's format:
 
 - a **conversation** and a **run** cross as records. Their fields are this
-  store's own indexed columns -- an owner, an agent, a title, the times, the
-  active leaf, a state -- and a store builds one from its columns inside
+  store's own indexed columns -- an owner, an agent, a title, the times, a
+  state -- and a store builds one from its columns inside
   ``domain.reading_stored``.
 - a **message** and a **run event** cross as **documents**: the plain mapping
   the platform's format is written as, which a store keeps whole and hands
@@ -86,8 +86,6 @@ in the tests, not here.
 - a record or an event that does not match what it is written beside -- a
   message completed into another conversation's run, an announcement naming
   another message, an end announcing another state: ``InvalidValueError``.
-- an active leaf that is no message of that conversation:
-  ``MessageNotFoundError``, as a parent is.
 - an argument outside what the method takes: a ``limit`` outside 1 to
   ``MAX_PAGE`` or to ``MAX_SWEPT``, a position to read past that is negative,
   a cursor that does not parse, a **title** that is not the one bounded,
@@ -245,28 +243,8 @@ class ConversationStore(ABC):
         ``None`` if there was none to rename. It hands back the **written**
         record rather than a ``bool`` so that a caller need not rebuild one out
         of what it read before the write: what it read may be older than what
-        is there, and an interface drawn from it would show a title or a
-        position that has already moved.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def set_active_leaf(
-        self, conversation_id: uuid.UUID, leaf_id: uuid.UUID
-    ) -> Conversation | None:
-        """Move the branch it opens on to that message; the conversation as it now is.
-
-        ``None`` if there was none, and the written record otherwise, for the
-        reason given on ``rename_conversation``.
-
-        **It does not date the conversation**, and takes no ``now`` for that
-        reason. Moving between branches is navigation: nothing was written, so
-        nothing should climb to the top of a panel ordered by when things were
-        last written (``docs/specs/conversations.md``).
-
-        The message must be one of that conversation's -- a leaf of somebody
-        else's tree would make the conversation open nowhere -- so this
-        refuses one that is not, with ``MessageNotFoundError``.
+        is there, and an interface drawn from it would show a title that has
+        already changed.
         """
         raise NotImplementedError
 
@@ -305,15 +283,12 @@ class ConversationStore(ABC):
 
     @abstractmethod
     async def append_message(self, message: Message, document: Document, *, now: datetime) -> None:
-        """Append a completed message and move the conversation onto it.
+        """Append a completed message and date the conversation.
 
-        One step: the document is stored under the message's id, the
-        conversation's ``updated_at`` becomes ``now`` and its **active leaf
-        becomes this message**. The leaf moves deliberately -- what was just
-        written is where its author is, and where the conversation opens next
-        (``docs/specs/conversations.md``) -- and it moves *with* the append,
-        because a conversation whose newest message is not the one it opens on
-        is a conversation that opens in the wrong place.
+        One step: the document is stored under the message's id and the
+        conversation's ``updated_at`` becomes ``now``, because a conversation
+        whose newest message is not what dates it is one a panel orders
+        wrongly (``docs/specs/conversations.md``).
 
         ``document`` is the message written in the platform's format and is
         kept **whole and unread**; ``message`` is beside it for the columns
@@ -327,10 +302,13 @@ class ConversationStore(ABC):
     async def messages_of(self, conversation_id: uuid.UUID) -> tuple[Document, ...]:
         """Every message document of that conversation, oldest first.
 
-        All of them: the tree is what orders a conversation, and a branch is
-        found by walking it, so a store returns the whole of one and the
-        application builds the tree. Ordered by ``created_at`` and then by id,
-        so that two stores hand back one order.
+        **All of them, ever completed.** A store keeps every message, the
+        ones an edit or a regeneration put aside included: the tree is what
+        tells the visible path from the rest, and the application builds it
+        (``core.ConversationTree``). Only analytics reads the whole of what
+        comes back; every other reader is handed the visible path and never a
+        message off it. Ordered by ``created_at`` and then by id, so that two
+        stores hand back one order.
 
         The documents are handed back as they were given. A caller may do what
         it likes with what it gets without changing what is stored.
@@ -389,7 +367,7 @@ class ConversationStore(ABC):
         All of it happens or none of it does. In particular the refusal of a
         second run is decided in the same step that would have inserted it, so
         two requests arriving together leave one run and one refusal, never
-        two answers writing into one branch.
+        two answers writing into one conversation.
 
         **A run answers a question.** ``run.message_id`` is the message given
         here, when one is given, and otherwise a message already stored in
@@ -411,8 +389,7 @@ class ConversationStore(ABC):
         the run answers is not a question, if the run is not in an active
         state, or if the run's agent is not the conversation's -- a
         conversation is bound to one agent (``docs/specs/agents.md``). A first
-        message is appended exactly as ``append_message`` would append it: the
-        active leaf becomes that message.
+        message is appended exactly as ``append_message`` would append it.
 
         **A turn dates the conversation in every shape**, a regeneration
         included: ``updated_at`` becomes ``now`` even where nothing is

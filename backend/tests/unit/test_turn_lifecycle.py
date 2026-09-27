@@ -125,9 +125,6 @@ async def test_a_streamed_answer_is_announced_streamed_stored_and_announced_agai
     assert ended.state is RunState.FINISHED
     assert ended.error is None
     assert ended.started_at is not None and ended.finished_at is not None
-    # The conversation moved onto what was just written.
-    conversation = await wiring.store.conversation_by_id(run.conversation_id)
-    assert conversation.active_leaf_id == answered.id
 
 
 @asyncio_test
@@ -617,7 +614,7 @@ async def _re_attaches(wiring: Wiring, run: Run, *, messages: int) -> None:
     opened = await wiring.conversations.open(AUTHOR, run.conversation_id)
 
     assert opened.run_id == run.id
-    assert len(opened.tree.messages) == messages
+    assert len(opened.messages) == messages
     slice_of = await stored_events(wiring.store, run.id, after=opened.resume.after)
     check_event_order(
         slice_of,
@@ -627,11 +624,11 @@ async def _re_attaches(wiring: Wiring, run: Run, *, messages: int) -> None:
         after=opened.resume.after,
         ended=False,
     )
-    # Nothing already in the tree is replayed.
+    # Nothing already shown is replayed.
     replayed = {
         event.event.message.id for event in slice_of if isinstance(event.event, MessageCompleted)
     }
-    assert not replayed & set(opened.tree.at)
+    assert not replayed & {message.id for message in opened.messages}
 
 
 # --- what the engine is given ----------------------------------------------------
