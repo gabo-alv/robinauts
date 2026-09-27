@@ -396,9 +396,10 @@ def run(argv: Sequence[str] | None = None) -> int:
 def version() -> int:
     """This build, and the schema it was written against.
 
-    Both, because they are the two halves of an upgrade: a new wheel whose
-    schema version has moved is a database to recreate (``docs/specs/backend.md``,
-    "Schema"), and the number is the only way to see that from outside.
+    Both, because they are the two halves of an upgrade. Until the first
+    release the schema version stays 1 and a new wheel whose ``schema.sql``
+    changed is a database to recreate (``docs/specs/backend.md``, "Schema");
+    after it, a moved number is a migration to run.
     """
     print(f"{PROGRAM} {_installed_version()} (schema {SCHEMA_VERSION})")
     return OK

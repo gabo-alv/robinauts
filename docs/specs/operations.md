@@ -14,8 +14,8 @@ What an internal platform team deploys and controls.
 - Served at the root of an origin, over https. `public_url` is mandatory
   ([sign-in.md](sign-in.md)).
 - Upgrades: install the new wheel, bring the schema up to date, restart.
-  Until a production deployment exists the schema is edited in place and
-  the database is recreated; after that, migrations upgrade it in place
+  Until the first release the schema is edited in place and the database
+  is recreated; after that, migrations upgrade it in place
   ([backend.md](backend.md)).
 - A restart ends the runs that are in flight: each is marked interrupted,
   and its author retries it by sending the message again

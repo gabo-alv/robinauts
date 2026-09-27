@@ -30,8 +30,8 @@ on it answering to one of our names would silently take their writes.
 ``check_schema`` will not start without.
 
 **Nothing here changes a database it did not make.** There are no migrations
-until there is a production deployment, so the only safe things to do to a
-database are: create the schema in an empty one, and refuse. ``create_schema``
+before the first release, so the only safe things to do to a database are:
+create the schema in an empty one, and refuse. ``create_schema``
 looks before it writes -- under a lock, so that two of them cannot both
 decide the database is empty -- and every refusal is a ``SchemaError`` that
 says what was found and what to do. The alternative, applying the file over
@@ -50,9 +50,13 @@ landed; ``check_schema`` believes it only as far as checking that every
 table is there, and is a table rather than a view of the same name.
 
 ``SCHEMA_VERSION`` is this build's answer to "which schema was I written
-against", and ``SCHEMA_SHA256`` is what the file looked like when that
-answer was last true. ``tests/unit/test_datastore_schema.py`` fails if the
-file changes and the pin does not.
+against". Until the first release it is 1 and stays 1: ``schema.sql`` is one
+definition, edited in place, and a database made from an older edit is
+dropped and made again. ``SCHEMA_SHA256`` is what the file looked like when
+this build was written, so ``tests/unit/test_datastore_schema.py`` fails if
+the file changes and the pin does not. After the first release the released
+file is frozen and every change is a migration; the pin is then what catches
+an edit made instead of one.
 """
 
 from __future__ import annotations
@@ -64,23 +68,25 @@ import asyncpg
 
 from robinauts.domain import SchemaError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
 """The schema this build was written against; ``schema.sql`` says the same.
 
-Bumped in the same change as any edit to ``schema.sql``. Until there is a
-production deployment there are no migrations, so a bump means "recreate the
-database", not "upgrade it" (``docs/specs/backend.md``).
+Frozen at 1 until the first release: ``schema.sql`` is edited in place, an
+edit is not a new version, and a database made from an older edit is made
+again. The schema as released is version 1, and from then on every change is
+a migration that moves this number (``docs/specs/backend.md``, "Schema").
 """
 
-SCHEMA_SHA256 = "c018ed32e47e4d72e8dfabb49378d41ab2f1b201c26086e5b3f1c3f633c4bc7f"
-"""``schema.sql`` as it stood when ``SCHEMA_VERSION`` was last right for it.
+SCHEMA_SHA256 = "e9cfb48bc9fc445632326c25f29dab5161cc5fa0e3430d5c69d99c8a4def5b42"
+"""``schema.sql`` as this build was written against it.
 
-A schema edited in place has no migration to forget to write, which leaves
-exactly one thing to forget: the version. This pin is what remembers.
-Changing the file fails ``tests/unit/test_datastore_schema.py`` until both
-the version above and this hash are brought up to date, and the test says so
-in as many words. Line endings are normalised to ``\\n`` before hashing, and
-``.gitattributes`` keeps the file checked out that way on every platform.
+Before the first release every edit to ``schema.sql`` updates this pin and
+leaves the version alone, so a schema change is always visible in review and
+never made by accident: ``tests/unit/test_datastore_schema.py`` fails until
+the hash is brought up to date, and says so in as many words. After the
+first release the released file is frozen and a change is a migration, never
+an edit to the pin. Line endings are normalised to ``\\n`` before hashing,
+and ``.gitattributes`` keeps the file checked out that way on every platform.
 """
 
 SCHEMA_TABLES = (

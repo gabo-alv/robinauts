@@ -265,8 +265,9 @@ Now create the schema, with that file and not with a flag:
 
 It prints `the database is at schema version N` whether it created the
 schema or found it already there. It works on an **empty** database only:
-there are no migrations yet, and a database of another version is made
-again rather than upgraded ([specs/backend.md](specs/backend.md)).
+there are no migrations before the first release, and a database made from
+another `schema.sql` is made again rather than upgraded
+([specs/backend.md](specs/backend.md)).
 
 The local development mode has **no** variable: it is asked for on the
 command line and nowhere else, so nothing a process inherits can turn
@@ -543,12 +544,12 @@ read once at start-up.
    install, with the new artifact's own pair of files:
    `pip install --require-hashes -r requirements.txt` then
    `pip install --no-deps --force-reinstall robinauts-<new>.whl`.
-3. `robinauts version` — if the schema version changed, the database is
-   **recreated**, not migrated: there are no migrations until the project
-   owner confirms that a production deployment exists
-   ([specs/backend.md](specs/backend.md)). Until then, treat every
-   conversation in it as disposable.
-4. `robinauts db init` (a no-op when the version is unchanged), then start
+3. Until the first release the schema version does not change, so
+   `robinauts version` says nothing about it: an upgrade whose `schema.sql`
+   changed means the database is **recreated**, not migrated, and all data
+   in it is disposable ([specs/backend.md](specs/backend.md)). After the
+   first release a moved version is a migration to run.
+4. `robinauts db init` (a no-op when the schema is unchanged), then start
    the service.
 
 **Backups** are the platform team's: one PostgreSQL holds everything —
@@ -612,7 +613,7 @@ engine = "pydantic-ai"
 | `no database: set ROBINAUTS_DATABASE_URL …` | the variable is unset | set it; the url is never a command-line flag |
 | `the database could not be opened: …` | no server there, no such database, credentials refused | the driver's own sentence says which; the url is never echoed |
 | `the database has no Robinauts schema; this build needs schema version N` | `db init` was not run | run `robinauts db init` |
-| `the database is at schema version M; this build needs schema version N` | the wheel and the database disagree | there are no migrations: recreate the database and `db init` |
+| `the database is at schema version M; this build needs schema version N` | the wheel and the database disagree | there are no migrations before the first release: recreate the database and `db init` |
 | signing in loops back to the sign-in page | `public_url` is not the origin the browser is on: the redirect URI, the cookie prefix and the origin check are all built from that one string | make `public_url` character for character what the address bar shows, and re-register the redirect URI if it changed |
 | the sign-in page says the sign-in "came back to a different browser" (`state_mismatch`) | the login cookie did not come back: the deployment is reachable under two names or two ports, so the cookie was set on one origin and the callback landed on the other | one origin, equal to `public_url`; send the other name to it with a redirect |
 | `public_url: '…' is http on a host that is not loopback: use https` | an `http://` origin on a real host | https is mandatory: `public_url` beginning `https://` is what marks the cookies `Secure` and `__Host-`, and neither may be sent over `http` ([specs/sign-in.md](specs/sign-in.md)) |

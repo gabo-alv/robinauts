@@ -3,12 +3,11 @@
 --
 -- The whole schema of a Robinauts deployment, in one file.
 --
--- Until there is an active production deployment this file is **edited in
--- place** and there are no incremental migrations (docs/specs/backend.md):
--- a database made from an older definition is recreated rather than
--- upgraded. Every change here therefore comes with a bump of
--- `SCHEMA_VERSION` in schema.py, which is what a server compares against
--- the row in `schema_version` before it agrees to start.
+-- Until the first release this file is **edited in place** and there are no
+-- incremental migrations (docs/specs/backend.md): the version stays 1, and
+-- a database made from an older edit is dropped and made again with
+-- `robinauts db init`. `SCHEMA_VERSION` in schema.py is what a server
+-- compares against the row in `schema_version` before it agrees to start.
 --
 -- It is applied by a command (`robinauts db init`), never by the server
 -- itself, and it is applied in one transaction: the whole file goes in as
@@ -21,11 +20,11 @@
 -- after an error, which is exactly the half-applied database the version row
 -- at the bottom of this file is placed to expose.
 --
--- **Editing this file means bumping `SCHEMA_VERSION` in schema.py.** There
--- is no migration to write -- a database of an older version is made again --
--- but a build that reads this schema while calling it the previous version
--- would run against tables it was not written for. A test pins the SHA-256
--- of this file beside the version so that an edit without a bump fails.
+-- **Editing this file means updating `SCHEMA_SHA256` in schema.py**, and
+-- nothing else: a test pins the SHA-256 of this file, so every edit is
+-- deliberate and visible in review, and the version is not bumped. After
+-- the first release the file as released is frozen, and a change is a
+-- migration; the pin is then what catches an edit made instead of one.
 --
 -- A later step adds the usage tables to the bottom of this file, as the
 -- conversation and run tables were added. Keep each table's block
@@ -386,8 +385,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS run_events_one_end_per_run
 -- The version this file defines must equal `SCHEMA_VERSION` in schema.py;
 -- tests/unit/test_datastore_schema.py fails if the two drift apart.
 --
--- Version 2 added the conversation, message, run and event tables. There is
--- no migration from version 1 and there will not be one until a deployment
--- exists: a database of another version is made again, not upgraded.
-INSERT INTO schema_version (version) VALUES (2)
+-- Version 1 is the schema until the first release: this file, as it stands,
+-- edited in place. A database made from an older edit is made again.
+INSERT INTO schema_version (version) VALUES (1)
 ON CONFLICT (only_row) DO NOTHING;

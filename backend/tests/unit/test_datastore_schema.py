@@ -163,28 +163,38 @@ def test_the_kind_that_ends_a_stream_is_the_name_of_the_record() -> None:
 
 
 def test_the_version_in_the_file_is_the_version_in_the_code() -> None:
-    # The one thing that must be changed twice, and the one thing nobody
-    # remembers to change twice. An edit to schema.sql without a bump of
-    # SCHEMA_VERSION would leave a server happy to run against a schema it
-    # was not written for.
+    # The row is what a server compares SCHEMA_VERSION against before it
+    # agrees to start, so the two must say the same thing -- and until the
+    # first release that thing is 1, in both places.
     recorded = re.search(r"^INSERT INTO schema_version \(version\) VALUES \((\d+)\)$", SQL, re.M)
 
     assert recorded is not None, "schema.sql no longer records a version the way this test reads it"
     assert int(recorded.group(1)) == SCHEMA_VERSION
 
 
-def test_editing_the_schema_without_bumping_the_version_fails_here() -> None:
+def test_the_schema_file_matches_its_pin() -> None:
     # The whole guard for a schema that is edited in place. There is no
     # migration to write and therefore nothing else that would notice; this
-    # pin is what turns "I changed a column and forgot" into a red build.
-    # Line endings are normalised so that a checkout on Windows does not
-    # fail for a reason that has nothing to do with the schema.
+    # pin is what makes every edit deliberate and visible in review. After
+    # the first release it is what catches an edit made instead of a
+    # migration. Line endings are normalised so that a checkout on Windows
+    # does not fail for a reason that has nothing to do with the schema.
     text = SQL.replace("\r\n", "\n")
 
     assert hashlib.sha256(text.encode("utf-8")).hexdigest() == SCHEMA_SHA256, (
-        "schema.sql changed: bump SCHEMA_VERSION in datastore/schema.py and update the"
-        " pinned SCHEMA_SHA256 in the same change. There are no migrations yet, so a"
-        " database made from the old file is recreated, not upgraded."
+        "schema.sql changed: update SCHEMA_SHA256 in datastore/schema.py. Do not bump"
+        " SCHEMA_VERSION: until the first release the schema is edited in place and"
+        ' stays at version 1 (docs/specs/backend.md, "Schema"). After the first'
+        " release, schema.sql is frozen and a change is a migration."
+    )
+
+
+def test_the_schema_stays_at_version_one_until_the_first_release() -> None:
+    """Delete this test at the first release, when migrations start."""
+    assert SCHEMA_VERSION == 1, (
+        "SCHEMA_VERSION moved: until the first release the schema is one definition"
+        " edited in place at version 1, and an edit updates SCHEMA_SHA256 only"
+        ' (docs/specs/backend.md, "Schema").'
     )
 
 

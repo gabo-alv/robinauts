@@ -317,8 +317,8 @@ class SchemaError(RobinautsError):
     told they are looking at, so the shapes are the constructors below and
     the advice is one sentence, written once.
 
-    Until there is a production deployment there are no migrations: a
-    database of any other version is **made again**, not upgraded, and the
+    Until the first release there are no migrations: a database of any
+    other version is **made again**, not upgraded, and the
     command that creates the schema works on an empty database only. Saying
     that in every message is deliberate -- the alternative is an operator
     running the command on the database that already has their data in it.
