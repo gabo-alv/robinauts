@@ -186,7 +186,10 @@ Notes on what is and is not there:
 - **Matchers.** `hosted_domain` is Google's `hd` claim and is Google only;
   `email_domain` is *not* for Google, because Google verifies personal
   accounts registered with any address. `email` and `subject` name one
-  person. `everyone = true` admits anyone the provider authenticates.
+  person. `everyone = true` admits anyone the provider authenticates, and
+  is refused for Google too, where that is every Google account in the
+  world; a Google client set to Internal with `hosted_domain` is how a
+  Workspace lets all of its people in.
 - **`[[admin]]` is refused.** Roles are deferred in this release: everyone
   who may sign in is a user, and a file with an `admin` table does not
   start ([specs/sign-in.md](specs/sign-in.md)).

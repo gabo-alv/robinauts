@@ -266,8 +266,8 @@ def test_a_groups_claim_names_a_claim_or_is_left_out() -> None:
 )
 def test_google_is_recognised_however_its_issuer_is_spelt(issuer: str) -> None:
     # Whether this is Google decides whether hd is read, whether
-    # email_verified is believed, and whether email_domain is refused. A
-    # spelling that read as "not Google" would drop all three at once.
+    # email_verified is believed, and whether email_domain and everyone are
+    # refused. A spelling that read as "not Google" would drop them all at once.
     assert is_google_issuer(issuer)
     assert provider(issuer=issuer).is_google
 

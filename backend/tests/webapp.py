@@ -88,7 +88,13 @@ def sign_in_config(
     providers: Iterable[ProviderConfig] = (GOOGLE,),
     allow: Iterable[AllowEntry] | None = None,
 ) -> SignInConfig:
-    """A deployment's sign-in configuration, with everyone of it let in."""
+    """A deployment's sign-in configuration, with each provider's own people let in.
+
+    For Google that is its Workspace, ``example.com``, and for any other
+    provider everyone: the configuration refuses ``everyone`` for Google, and a
+    test's deployment is one it would have started. A Gmail account, with no
+    ``hd``, is not let in.
+    """
     named = {provider.id: provider for provider in providers}
     return SignInConfig(
         public_url=public_url,
@@ -96,7 +102,14 @@ def sign_in_config(
         allow=(
             tuple(allow)
             if allow is not None
-            else tuple(AllowEntry(name, Matcher.EVERYONE) for name in named)
+            else tuple(
+                (
+                    AllowEntry(name, Matcher.HOSTED_DOMAIN, "example.com")
+                    if provider.is_google
+                    else AllowEntry(name, Matcher.EVERYONE)
+                )
+                for name, provider in named.items()
+            )
         ),
     )
 
