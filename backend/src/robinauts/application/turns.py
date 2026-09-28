@@ -123,8 +123,9 @@ default, and may be moved to another at any point (``set_model``); each run
 takes the model the conversation names when the run is begun, and the engine
 is handed the **run's**, so a run in flight -- or one taken up again -- keeps
 the model it started with (``docs/specs/agents.md``). A model the deployment
-no longer offers is refused with ``UnknownModelError`` before anything is
-written, as an agent that is gone is.
+no longer offers is refused with ``ModelNotOfferedError`` before anything
+is written, and only once the conversation is known to be its caller's: a
+model the request names is ``UnknownModelError``.
 
 **Ownership is the same one rule as everywhere else**: a conversation of
 somebody else's is answered exactly like one that is not there
@@ -179,6 +180,7 @@ from robinauts.domain import (
     MessagePart,
     MessageStarted,
     ModelConfig,
+    ModelNotOfferedError,
     PositionTakenError,
     ReasoningDelta,
     Role,
@@ -774,10 +776,16 @@ class Turns:
 
         **On the conversation's model**, which the run then keeps however the
         conversation's changes. One the deployment no longer offers is
-        ``UnknownModelError`` here, which every way of beginning a turn --
-        a question, an edit, a regeneration -- reaches before it writes.
+        ``ModelNotOfferedError`` here, which every way of beginning a turn --
+        a question, an edit, a regeneration -- reaches before it writes, and
+        after the conversation has been found to be its caller's.
         """
-        model = self._model(conversation.model)
+        model = self._models.get(conversation.model)
+        if model is None:
+            raise ModelNotOfferedError(
+                f"conversation {conversation.id} is on model {conversation.model!r},"
+                " which this deployment no longer offers"
+            )
         return Run(
             id=self._ids.new_id(),
             conversation_id=conversation.id,
@@ -812,10 +820,8 @@ class Turns:
 
         ``domain.ModelsConfig.model_by_id``'s rule, over the models this
         service was wired with -- which are the configuration's in a
-        deployment, and whatever a test handed in beside its own agents. A
-        conversation whose model the operator has since removed meets this,
-        and is refused as not there rather than answered by another model
-        (``docs/specs/agents.md``).
+        deployment, and whatever a test handed in beside its own agents. For
+        a model a request names; a conversation's own is ``_new_run``'s.
         """
         checked_config_id(model_id, "a model's id")
         found = self._models.get(model_id)

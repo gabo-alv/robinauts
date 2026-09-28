@@ -16,7 +16,7 @@
  */
 import { useRef, useState } from "react";
 
-import { ApiError, detailOf, request } from "../api/client";
+import { detailOf, isRefusal, request, UNKNOWN_MODEL } from "../api/client";
 import type { components } from "../api/schema";
 import type { ConversationId } from "../chat";
 import { type Conversation, setModel } from "../conversation/conversation";
@@ -69,9 +69,9 @@ export function isOffered(models: Models, id: string): boolean | null {
  * to be answered by another because a list was slow -- and `null` for
  * anyone who never picked, which the backend takes as the agent's default
  * (`docs/specs/wire.md`). A remembered model the deployment no longer
- * offers is then refused by the backend; where the list could not be had,
- * the shell forgets it (the third of what this returns), so the next
- * message is not refused for it again.
+ * offers is then refused by the backend, by name, and the shell forgets it
+ * (the third of what this returns), so the next message is not refused for
+ * it again. So is one picked from a list that has gone stale.
  */
 export function useChosenModel(
   models: Models,
@@ -81,7 +81,7 @@ export function useChosenModel(
   let chosen: string | null = kept;
   if (models.status === "ready") {
     const offered = (id: string | null) =>
-      id !== null && models.items.some((model) => model.id === id);
+      id !== null && isOffered(models, id) === true;
     // The first of the list only where the agent's default is not offered,
     // which the backend refuses at start-up: a picker has to show something.
     chosen = offered(kept)
@@ -137,8 +137,7 @@ export function ModelPicker({
       </p>
     );
   }
-  const stale =
-    chosen !== null && !models.items.some((model) => model.id === chosen);
+  const stale = chosen !== null && isOffered(models, chosen) === false;
   return (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
       Model
@@ -174,11 +173,9 @@ export const NOT_OFFERED =
 
 /** The sentence for a refused change, in the picker's own words where it has any. */
 function refusedWith(failure: unknown): string {
-  // The backend's detail for a 422 here names the field of the request, for
-  // whoever reads the log; the one value in it is the model.
-  if (failure instanceof ApiError && failure.status === 422) {
-    return NOT_OFFERED;
-  }
+  // The backend's detail for it names the field of the request, for whoever
+  // reads the log; the one value in it is the model.
+  if (isRefusal(failure, UNKNOWN_MODEL)) return NOT_OFFERED;
   return detailOf(failure);
 }
 

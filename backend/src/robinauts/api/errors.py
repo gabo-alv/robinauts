@@ -85,6 +85,7 @@ from robinauts.domain import (
     InvalidMessageTreeError,
     InvalidValueError,
     MessageNotFoundError,
+    ModelNotOfferedError,
     NotAllowedError,
     NotFoundError,
     NotTheOwnerError,
@@ -132,6 +133,23 @@ wrong and the run is not over -- a person told "internal error" would think
 the deployment broken and start the whole turn again, rather than opening the
 conversation and seeing where the run got to (``docs/specs/runs.md``, known
 limits).
+"""
+
+NOT_OFFERED_DETAIL = "body.model_id: is not a model this deployment offers"
+"""What a request naming a model the deployment does not offer is told.
+
+Naming the field and not the id: the id is the request's. The two routes that
+take a ``model_id`` -- a new chat and a conversation's move -- both take it
+under that name, so one sentence is true of either.
+"""
+
+NO_LONGER_OFFERED_DETAIL = (
+    "this conversation's model is no longer offered here; move the conversation to another"
+)
+"""What a turn in a conversation whose model has been removed is told.
+
+Nothing of the request is in it, nor the model's id: the person has the
+conversation, and its model, in front of them.
 """
 
 UNREADABLE_DETAIL = "the request could not be read"
@@ -261,12 +279,16 @@ STATUS_OF: dict[type[RobinautsError], int] = {
     # since it is under `NotFoundError` and there is one answer for everything
     # that is not there.
     UnknownAgentError: 404,
-    # A model id that names no configured model: the same, for the same
-    # reasons. A conversation whose model the operator has since removed meets
-    # it at its next turn. The one route whose body is nothing but a model --
-    # `PUT /api/conversations/{id}/model` -- answers it as the unreadable
-    # field it is there instead (422), and says so itself.
-    UnknownModelError: 404,
+    # A model the request names that the deployment does not offer -- a new
+    # chat's, or the one a conversation is moved to: a value this deployment
+    # cannot take, answered under its own name so a client can say so.
+    UnknownModelError: 422,
+    # A conversation whose model the operator has since removed, at its next
+    # turn: nothing about the request was wrong, the conversation's state is
+    # what refuses, and moving it to another model is what makes the turn
+    # work. Raised only after the conversation was found to be the caller's,
+    # so it tells nobody anything about somebody else's.
+    ModelNotOfferedError: 409,
     # The conversation is busy answering, or the run has moved on: the state
     # of something else is what refuses, and trying again may well work.
     RunAlreadyActiveError: 409,
@@ -316,6 +338,15 @@ def error_body(exc: BaseException, status: int) -> dict[str, Any]:
         return {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
     if isinstance(exc, SignInError):
         return {"error": type(exc).__name__, "detail": SIGN_IN_DETAIL[exc.code]}
+    if isinstance(exc, UnknownModelError):
+        # Its message names the model, which is the request's or the
+        # conversation's: the log has it, and the body a fixed sentence.
+        detail = (
+            NO_LONGER_OFFERED_DETAIL
+            if isinstance(exc, ModelNotOfferedError)
+            else NOT_OFFERED_DETAIL
+        )
+        return {"error": type(exc).__name__, "detail": detail}
     return {"error": type(exc).__name__, "detail": str(exc)}
 
 

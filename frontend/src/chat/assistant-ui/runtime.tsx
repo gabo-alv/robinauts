@@ -49,9 +49,16 @@ import {
   type ThreadMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 
-import { ApiError, detailOf, request } from "../../api/client";
+import {
+  ApiError,
+  detailOf,
+  isRefusal,
+  MODEL_NOT_OFFERED,
+  request,
+  UNKNOWN_MODEL,
+} from "../../api/client";
 import { cancelRun } from "../../conversation/conversation";
 import type { ChatProps } from "../index";
 import {
@@ -84,38 +91,37 @@ export const STILL_ANSWERING =
   "This conversation is still answering. Stop that answer before sending another.";
 
 /**
- * What a turn refused in a conversation whose model has gone is told.
+ * What a turn refused in a conversation whose model has gone is told
+ * (`MODEL_NOT_OFFERED`).
  *
- * The backend's own answer is the 404 of a conversation that is not there
- * (`docs/specs/wire.md`), which about the conversation on the screen would be
- * untrue; the shell knows the model has gone and says so (`modelGone`).
+ * Still true once another model has been picked: it is about the turn that
+ * was refused, and it stays until the next one, as every refusal does.
  */
 export const MODEL_GONE =
-  "This conversation's model is no longer offered here, so the turn was refused. Pick another model above.";
-
-/** The same, where the list of models did not come and so nobody can tell. */
-export const MODEL_MAYBE_GONE =
-  "This turn was refused: the conversation is not here, or its model is no longer offered.";
+  "This conversation's model is no longer offered here, so the turn was refused. Pick another model above and try again.";
 
 /**
- * What a first message refused as not there is told, where the pickers are
- * up to date as far as this page knows.
+ * What a first message refused for its model is told (`UNKNOWN_MODEL`).
  *
- * A new chat is refused 404 when the deployment does not have the agent or
- * the model it names (`docs/specs/wire.md`), and the one answer does not say
- * which: both lists may have been fetched before the operator changed the
- * configuration.
+ * The model is one the page picked from a list that has gone stale, or one
+ * this browser remembered before the list came. The shell forgets it
+ * (`onModelRefused`), but a list gone stale may offer it again under another
+ * name -- the agent's default, say -- so what is promised is a pick or a
+ * reload, which are always true.
  */
-export const NOT_OFFERED_PICK =
-  "This chat was not started: the agent or the model picked is not offered here any more. Pick another above, or reload the page.";
+export const MODEL_GONE_NEW_CHAT =
+  "This chat was not started: the model it was for is no longer offered here. Pick another model above, or reload the page.";
 
 /**
- * The same, where the list of models did not come: there is no model picker
- * to pick from, and the model sent was the one this browser remembered,
- * which the shell then forgets (`onModelRefused`).
+ * What a first message refused as not there is told.
+ *
+ * On a new chat there is no conversation to be missing, and the backend
+ * looks for the agent before anything else (`docs/specs/wire.md`): a 404 is
+ * the agent, gone from a list this page fetched before the operator changed
+ * it.
  */
-export const NOT_OFFERED_RETRY =
-  "This chat was not started: the agent or the model it was for is not offered here any more. Send it again to use the agent's default, or reload the page.";
+export const AGENT_GONE =
+  "This chat was not started: the agent it was for is no longer offered here. Pick another agent above, or reload the page.";
 
 /**
  * What is said when the answer could not be followed to its end.
@@ -132,25 +138,27 @@ export const LOST_TOUCH =
 /**
  * The sentence for a refusal, in the chat's own words where it has any.
  *
- * A 409 is the one refusal a person causes by doing something reasonable, and
- * the backend's own detail for it names a run and a conversation by id, for
- * an operator's log (`api/errors.py`). Everything else is the backend's
- * sentence, which is already written for a reader.
+ * A model that is not offered is told as what to do about it. A conversation
+ * already answering is the one refusal a person causes by doing something
+ * reasonable, and the backend's own detail for it names a run and a
+ * conversation by id, for an operator's log (`api/errors.py`); it shares its
+ * 409 with the model's, so the name is what is read. Everything else is the
+ * backend's sentence, which is already written for a reader.
  */
 function said(failure: unknown): string {
+  if (isRefusal(failure, MODEL_NOT_OFFERED)) return MODEL_GONE;
+  if (isRefusal(failure, UNKNOWN_MODEL)) return MODEL_GONE_NEW_CHAT;
   if (failure instanceof ApiError && failure.status === 409) {
     return STILL_ANSWERING;
   }
   return detailOf(failure);
 }
 
-/**
- * How a 404 on a turn is told when it may be about the model: the sentence,
- * and what else to do about it.
- */
-interface NotOffered {
-  say: string;
-  then?: () => void;
+/** Whether a turn was refused for its model, which is to be picked again. */
+function forItsModel(failure: unknown): boolean {
+  return (
+    isRefusal(failure, MODEL_NOT_OFFERED) || isRefusal(failure, UNKNOWN_MODEL)
+  );
 }
 
 /** What the component below gets back. */
@@ -173,23 +181,6 @@ export function useChat(props: ChatProps): Chatting {
   useEffect(() => {
     turns.now(props, state);
   });
-
-  // Another model picked -- a conversation on a model that was gone is on
-  // one that is not -- and the sentence telling them to pick one is no
-  // longer true. Only then: the list arriving late turns "unknown" into
-  // "offered" without anybody having picked anything, and what was said
-  // about a turn refused in the meantime still stands. Only those
-  // sentences, too: anything said since stays.
-  // `null` is kept apart from `false`: unknown is not offered.
-  const modelGone = props.modelGone === undefined ? false : props.modelGone;
-  const wasGone = useRef(modelGone);
-  useEffect(() => {
-    const before = wasGone.current;
-    wasGone.current = modelGone;
-    if (before !== true || modelGone !== false) return;
-    dispatch({ kind: "unsaid", detail: MODEL_GONE });
-    dispatch({ kind: "unsaid", detail: MODEL_MAYBE_GONE });
-  }, [modelGone]);
 
   // Which conversation is on the screen. Reading one is one call
   // (`docs/specs/conversations.md`), and leaving one abandons it.
@@ -264,6 +255,17 @@ export function useChat(props: ChatProps): Chatting {
   useEffect(() => {
     const wanted = turns.saying();
     if (wanted === null) return;
+    if (wanted.editing !== null) {
+      // An edit goes back into its own box, open on the message it was
+      // editing -- which the refusal has just put back on the screen -- so
+      // that sending it again is still an edit and not a new message at
+      // the end of the thread. Unless that box has been opened again since.
+      const edit = runtime.thread.getMessageById(wanted.editing).composer;
+      if (edit.getState().isEditing) return;
+      edit.beginEdit();
+      edit.setText(wanted.text);
+      return;
+    }
     const box = runtime.thread.composer;
     if (box.getState().text === "") box.setText(wanted.text);
   });
@@ -299,9 +301,10 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
    *
    * The box empties itself when it hands a message over, so a turn refused
    * here for being a second one leaves nothing behind at all. The text goes
-   * back, and a notice says why (`ONE_AT_A_TIME`).
+   * back, and a notice says why (`ONE_AT_A_TIME`). `editing` is the message
+   * an edit was of, whose own box it goes back into; `null` is the main one.
    */
-  type Wanted = { text: string };
+  type Wanted = { text: string; editing: string | null };
   let wanted: Wanted | null = null;
 
   /** What the box must be made to say, once. */
@@ -347,7 +350,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     dispatch({ kind: "told", detail: ONE_AT_A_TIME });
     // The box cleared itself when it handed this over, so without this the
     // message is gone and the notice is all there is.
-    if (text !== "") wanted = { text };
+    if (text !== "") wanted = { text, editing: null };
   }
 
   /**
@@ -449,14 +452,20 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       watch = false,
       afterLoss = false,
       text = "",
-      notOffered = null,
+      editing = null,
+      newChat = false,
+      modelRefused,
     }: {
       watch?: boolean;
       afterLoss?: boolean;
       /** What was written, to put back if the turn is refused for its model. */
       text?: string;
-      /** What a 404 is to be told as, decided when the turn was sent. */
-      notOffered?: NotOffered | null;
+      /** The message an edit was of, whose box that goes back into. */
+      editing?: string | null;
+      /** A first message, where a 404 can only be about the agent. */
+      newChat?: boolean;
+      /** What else a refusal for the model calls for. */
+      modelRefused?: () => void;
     } = {},
   ): Promise<void> {
     const control = new AbortController();
@@ -486,38 +495,23 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
           dispatch({ kind: "lost", detail: LOST_TOUCH });
           return;
         }
-        const forModel =
-          notOffered !== null &&
-          failure instanceof ApiError &&
-          failure.status === 404;
+        const agentGone =
+          newChat && failure instanceof ApiError && failure.status === 404;
         dispatch({
           kind: "refused",
-          detail: forModel ? notOffered.say : said(failure),
+          detail: agentGone ? AGENT_GONE : said(failure),
         });
-        if (!forModel) return;
-        // **Refused for its model, the message goes back in the box**: what
-        // the person is told to do is pick another model and send again, and
-        // the box emptied itself when it handed the message over -- or, for
-        // an edit, the edit box closed. Only then: any other refusal is left
-        // as it always was.
-        if (text !== "") wanted = { text };
-        notOffered.then?.();
+        const forModel = forItsModel(failure);
+        if (!forModel && !agentGone) return;
+        // **Refused for its model or its agent, the message goes back in its
+        // box**: what the person is told to do is pick another and send
+        // again, and the box emptied itself when it handed the message over
+        // -- or, for an edit, the edit box closed. Only then: any other
+        // refusal is left as it always was.
+        if (text !== "") wanted = { text, editing };
+        if (forModel) modelRefused?.();
       },
     );
-  }
-
-  /**
-   * What a 404 on a turn in this conversation is to be told as, if it may be
-   * about the model rather than the conversation.
-   *
-   * Read **when the turn is sent**, from what the shell said then: a model
-   * picked while the request is in the air changes what the shell says, not
-   * what the backend was asked.
-   */
-  function goneModel(): NotOffered | null {
-    if (props.modelGone === true) return { say: MODEL_GONE };
-    if (props.modelGone === null) return { say: MODEL_MAYBE_GONE };
-    return null;
   }
 
   async function consume(
@@ -578,7 +572,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     if (conversationId !== null) {
       await follow(
         (signal) => startTurn(conversationId, { text, parentId }, { signal }),
-        { text, notOffered: goneModel() },
+        { text },
       );
       return;
     }
@@ -587,20 +581,6 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       dispatch({ kind: "lost", detail: NO_AGENT });
       return;
     }
-    // A first message that names a model and is refused as not there may
-    // have been refused for that model; the shell is told which, and decides
-    // what to do about it (`onModelRefused`). `modelGone` is `null` here
-    // while the list of models has not come, and there is then no picker.
-    const notOffered: NotOffered | null =
-      modelId === null
-        ? null
-        : {
-            say:
-              props.modelGone === null ? NOT_OFFERED_RETRY : NOT_OFFERED_PICK,
-            then: () => {
-              props.onModelRefused?.(modelId);
-            },
-          };
     await follow(
       async (signal) => {
         // The model goes with the first message and never again: every later
@@ -621,7 +601,14 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
         props.onConversationStarted(attached.conversationId);
         return attached;
       },
-      { text, notOffered },
+      {
+        text,
+        newChat: true,
+        // The shell holds the choice, and forgets it (`onModelRefused`).
+        modelRefused: () => {
+          if (modelId !== null) props.onModelRefused?.(modelId);
+        },
+      },
     );
   }
 
@@ -643,11 +630,11 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     if (isUnsent(parentId)) return;
     if (busy()) return told(text);
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
-    // Refused for its model, the edited text comes back in the box, as it
-    // does for a new message (`follow`).
+    // Refused for its model, the edited text comes back in the edit box of
+    // the message it was of (`follow`).
     await follow(
       (signal) => startTurn(conversationId, { text, parentId }, { signal }),
-      { text, notOffered: goneModel() },
+      { text, editing: message.sourceId },
     );
   }
 
@@ -669,11 +656,8 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // off the screen with everything after it, which is what `parentId` --
     // the question -- cuts the thread after.
     dispatch({ kind: "again", after: parentId });
-    await follow(
-      (signal) => startTurn(conversationId, { regenerate }, { signal }),
-      {
-        notOffered: goneModel(),
-      },
+    await follow((signal) =>
+      startTurn(conversationId, { regenerate }, { signal }),
     );
   }
 

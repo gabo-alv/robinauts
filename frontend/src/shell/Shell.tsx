@@ -18,7 +18,7 @@
  * `docs/legal/ip-clearance.md`.
  */
 import { Menu } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Chat } from "../chat";
 import { conversationIn, useHistory } from "../history/history";
@@ -36,7 +36,6 @@ import {
 import { LocalModeBanner } from "./LocalModeBanner";
 import {
   ConversationModel,
-  isOffered,
   ModelPicker,
   useChosenModel,
   useModels,
@@ -150,15 +149,6 @@ export function Shell({
     models,
     agentDefault,
   );
-  // A first message refused as not there, naming a model. With the list in
-  // hand, that model was one it offered, so the refusal is more likely about
-  // a list gone stale -- the agent's or the models' -- and the pick stays.
-  // Without it, the model was the one this browser remembered, unchecked,
-  // and is forgotten: there is no picker to pick another with, and the next
-  // message goes to the agent's default.
-  const modelRefused = (id: string) => {
-    if (models.status === "failed") forgetModel(id);
-  };
   const opener = useRef<HTMLButtonElement>(null);
   const closer = useRef<HTMLButtonElement>(null);
 
@@ -204,17 +194,6 @@ export function Shell({
   // panel, so the chat's latest read -- or the change's own answer -- is
   // fresher than the panel's page.
   const conversationModel = about?.model ?? listed?.model ?? null;
-  // Unknown (`null`) until the list has come, and for as long as it has not.
-  // On the empty chat, what is unknown is the model a first message names.
-  const offered =
-    current === null
-      ? models.status === "ready"
-        ? true
-        : null
-      : conversationModel === null
-        ? true
-        : isOffered(models, conversationModel);
-  const modelGone = offered === null ? null : !offered;
   const conversationOpened = useCallback((conversation: Conversation) => {
     setOpened((was) => later(was, openedFrom(conversation)));
   }, []);
@@ -247,27 +226,15 @@ export function Shell({
     },
     [history],
   );
-  // Held across renders: the chat memoises what it is given, so that a
-  // keystroke in the message box does not remount the picker under it.
-  const welcome = useMemo(
-    () => (
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
-        <AgentPicker agents={agents} chosen={agentId} onChoose={chooseAgent} />
-        {/* Only once there is an agent to talk to: with none, the agent
-            picker's sentence is the whole of what there is to say. */}
-        {agentId !== null && (
-          <ModelPicker
-            models={models}
-            chosen={modelId}
-            onChoose={chooseModel}
-          />
-        )}
-      </div>
-    ),
-    // `chooseAgent` and `chooseModel` are made afresh on every render and do
-    // the same thing each time; what the pickers draw is the values below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agents, agentId, models, modelId],
+  const welcome = (
+    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+      <AgentPicker agents={agents} chosen={agentId} onChoose={chooseAgent} />
+      {/* Only once there is an agent to talk to: with none, the agent
+          picker's sentence is the whole of what there is to say. */}
+      {agentId !== null && (
+        <ModelPicker models={models} chosen={modelId} onChoose={chooseModel} />
+      )}
+    </div>
   );
   const startedConversation = useCallback(
     (id: string) => {
@@ -382,8 +349,10 @@ export function Shell({
             conversationId={current}
             agentId={agentId}
             modelId={modelId}
-            modelGone={modelGone}
-            onModelRefused={modelRefused}
+            // A first message refused for its model: this browser forgets
+            // it, whether or not the list has come, so the next one goes to
+            // the agent's default or to another pick.
+            onModelRefused={forgetModel}
             onConversationStarted={startedConversation}
             onConversationOpened={conversationOpened}
             onTurnEnded={history.refresh}

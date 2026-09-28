@@ -114,18 +114,35 @@ class UnknownAgentError(NotFoundError):
     """
 
 
-class UnknownModelError(NotFoundError):
+class UnknownModelError(RobinautsError):
     """No model of that id is configured in this deployment.
 
-    The model's twin of ``UnknownAgentError``, and under ``NotFoundError`` for
-    the same reasons: a model's id is not a secret -- the picker lists the ones
-    there are -- and a name that reaches nothing answers like everything else
-    that is not there. It is what a person picking a model that is not offered
-    meets, and what a conversation whose model the operator has since removed
-    meets at its next turn: that turn is refused rather than answered by
-    another model, because the point of choosing is knowing who answers
-    (``docs/specs/agents.md``). The detail, which reaches the log alone, says
-    which of the two it was.
+    What a request naming a model that is not offered meets: a new chat's
+    model, or the one a conversation is moved to. **Not** under
+    ``NotFoundError``, unlike ``UnknownAgentError``: a model's id is not a
+    secret -- the picker lists the ones there are -- so there is nothing to
+    hide by answering it like everything else that is not there, and a person
+    told "not found" about a model would be told nothing they could act on.
+    It answers with its own name, so that a client can say which it was, and
+    a fixed sentence, since the id is the request's (``robinauts.api.errors``).
+    """
+
+
+class ModelNotOfferedError(UnknownModelError):
+    """The conversation's model is one this deployment no longer offers.
+
+    What a conversation whose model the operator has since removed meets at
+    its next turn -- a question, an edit, a regeneration. The turn is refused
+    rather than answered by another model, because the point of choosing is
+    knowing who answers (``docs/specs/agents.md``); its author moves the
+    conversation to a model that is offered. Its own class because nothing
+    about the request was wrong: it is the conversation that stands in the
+    way, and a client that could not tell this from a model it named itself
+    would not know what to say.
+
+    Only ever raised for a conversation its caller may see, and after that
+    was decided: somebody else's conversation is still the one answer for
+    everything that is not there.
     """
 
 

@@ -100,24 +100,8 @@ export interface ChatProps {
    */
   onTurnEnded?: () => void;
   /**
-   * That the open conversation's model is one the deployment no longer
-   * offers: `true` or `false`, or `null` where the list of models has not
-   * come and nobody can tell. On the empty chat it is `null` in that case
-   * too -- `modelId` is then a remembered one nobody has checked -- and
-   * `false` otherwise.
-   *
-   * The backend refuses a turn in such a conversation with the very 404 a
-   * conversation that is not there answers with (`docs/specs/wire.md`), so a
-   * chat left to itself could only say "not found" about the conversation
-   * somebody is looking at. The shell can tell -- it has the conversation's
-   * model and the list -- and the chat says why instead, or that it may be
-   * why. Going back to `false` -- another model picked -- takes back what
-   * was said.
-   */
-  modelGone?: boolean | null;
-  /**
-   * That a first message naming a model -- `modelId` above -- was refused
-   * as not there, which may be that model or the agent.
+   * That a first message was refused because the deployment does not offer
+   * the model it named -- `modelId` above (`docs/specs/wire.md`).
    *
    * The chat says so and puts the message back; what to do about the model
    * is the shell's, which holds the choice.

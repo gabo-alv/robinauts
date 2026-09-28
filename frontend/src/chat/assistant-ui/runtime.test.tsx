@@ -9,12 +9,11 @@ import { event, streamed, streamHeaders, writable } from "../../test/stream";
 import type { ChatProps } from "../index";
 import type { AguiEvent } from "./agui/events";
 import {
+  AGENT_GONE,
   asRepository,
   LOST_TOUCH,
   MODEL_GONE,
-  MODEL_MAYBE_GONE,
-  NOT_OFFERED_PICK,
-  NOT_OFFERED_RETRY,
+  MODEL_GONE_NEW_CHAT,
   useChat,
 } from "./runtime";
 import {
@@ -1301,20 +1300,22 @@ test("the model goes with the first message, and no turn after it", async () => 
 });
 
 test("a turn refused because the model has gone says so", async () => {
-  // The backend's refusal is the 404 of a conversation that is not there;
-  // the shell knows it is the model and says so through `modelGone`.
-  const answers = () =>
+  // The backend names the refusal (`docs/specs/wire.md`): the conversation's
+  // model, and not the conversation, is what stands in the way.
+  const answers = (refused: () => Response) =>
     stub((call) => {
       if (call.url === `/api/conversations/${CONVERSATION}`) {
         return json(opened(conversation(1), TREE));
       }
       if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
-        return refusal(404, "NotFoundError", "there is nothing here");
+        return refused();
       }
       return undefined;
     });
-  answers();
-  const gone = chatting({ conversationId: CONVERSATION, modelGone: true });
+  answers(() =>
+    refusal(409, "ModelNotOfferedError", "this conversation's model is gone"),
+  );
+  const gone = chatting({ conversationId: CONVERSATION });
   await waitFor(() => {
     expect(gone.result.current.state.messages).toHaveLength(2);
   });
@@ -1328,35 +1329,16 @@ test("a turn refused because the model has gone says so", async () => {
   expect(gone.result.current.runtime.thread.composer.getState().text).toBe(
     "and then?",
   );
-  // Another model picked: the sentence is no longer true, and goes.
-  await act(async () => {
-    gone.rerender({
-      conversationId: CONVERSATION,
-      agentId: "helper",
-      modelId: "sonnet",
-      onConversationStarted: gone.started,
-      onTurnEnded: gone.ended,
-      modelGone: false,
-    });
-    await settle();
-  });
-  expect(gone.result.current.state.ended).toBeNull();
+  expect(gone.result.current.state.messages.map((each) => each.id)).toEqual([
+    "m1",
+    "m2",
+  ]);
   gone.unmount();
 
-  // With no list of models to go by, it may be either, and it says so.
-  answers();
-  const unknown = chatting({ conversationId: CONVERSATION, modelGone: null });
-  await waitFor(() => {
-    expect(unknown.result.current.state.messages).toHaveLength(2);
-  });
-  await act(async () => {
-    await unknown.result.current.runtime.thread.append("and then?");
-  });
-  expect(unknown.result.current.state.ended).toBe(MODEL_MAYBE_GONE);
-  unknown.unmount();
-
-  // With the model still offered, a 404 is what the backend says it is.
-  answers();
+  // A 404 is what the backend says it is, and nothing is put back.
+  answers(() =>
+    refusal(404, "NotFoundError", "there is nothing here of that id"),
+  );
   const there = chatting({ conversationId: CONVERSATION });
   await waitFor(() => {
     expect(there.result.current.state.messages).toHaveLength(2);
@@ -1365,25 +1347,23 @@ test("a turn refused because the model has gone says so", async () => {
     await there.result.current.runtime.thread.append("and then?");
     await settle();
   });
-  expect(there.result.current.state.ended).toBe("there is nothing here");
-  // Any other refusal is left as it was: nothing is put back.
+  expect(there.result.current.state.ended).toBe(
+    "there is nothing here of that id",
+  );
   expect(there.result.current.runtime.thread.composer.getState().text).toBe("");
 });
 
-test("an edit refused because the model has gone keeps the edited text", async () => {
+test("an edit refused because the model has gone goes back into its edit box", async () => {
   stub((call) => {
     if (call.url === `/api/conversations/${CONVERSATION}`) {
       return json(opened(conversation(1), TREE));
     }
     if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
-      return refusal(404, "NotFoundError", "there is nothing here");
+      return refusal(409, "ModelNotOfferedError", "the model is gone");
     }
     return undefined;
   });
-  const { result } = chatting({
-    conversationId: CONVERSATION,
-    modelGone: true,
-  });
+  const { result } = chatting({ conversationId: CONVERSATION });
   await waitFor(() => {
     expect(result.current.state.messages).toHaveLength(2);
   });
@@ -1397,11 +1377,38 @@ test("an edit refused because the model has gone keeps the edited text", async (
     await settle();
   });
   expect(result.current.state.ended).toBe(MODEL_GONE);
-  // The edit box has closed; what was written in it is in the main box, to
-  // send once another model is picked.
-  expect(result.current.runtime.thread.composer.getState().text).toBe(
-    "why, really?",
-  );
+  // Still an edit of the message it was of, so that sending it again once
+  // another model is picked replaces that message rather than adding one.
+  const edit = result.current.runtime.thread.getMessageById("m1").composer;
+  expect(edit.getState().isEditing).toBe(true);
+  expect(edit.getState().text).toBe("why, really?");
+  expect(result.current.runtime.thread.composer.getState().text).toBe("");
+  expect(result.current.state.messages.map((each) => each.id)).toEqual([
+    "m1",
+    "m2",
+  ]);
+});
+
+test("a regeneration refused because the model has gone says so", async () => {
+  stub((call) => {
+    if (call.url === `/api/conversations/${CONVERSATION}`) {
+      return json(opened(conversation(1), TREE));
+    }
+    if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
+      return refusal(409, "ModelNotOfferedError", "the model is gone");
+    }
+    return undefined;
+  });
+  const { result } = chatting({ conversationId: CONVERSATION });
+  await waitFor(() => {
+    expect(result.current.state.messages).toHaveLength(2);
+  });
+  await act(async () => {
+    result.current.runtime.thread.startRun({ parentId: "m1", sourceId: "m2" });
+    await settle();
+  });
+  expect(result.current.state.ended).toBe(MODEL_GONE);
+  // The answer it would have replaced is back where it was.
   expect(result.current.state.messages.map((each) => each.id)).toEqual([
     "m1",
     "m2",
@@ -1411,138 +1418,39 @@ test("an edit refused because the model has gone keeps the edited text", async (
 test("a first message refused for its model says so, and hands the model back", async () => {
   stub((call) =>
     call.url === "/api/turns"
-      ? refusal(404, "NotFoundError", "there is nothing here")
+      ? refusal(422, "UnknownModelError", "body.model_id: is not a model")
       : undefined,
   );
   const onModelRefused = vi.fn();
-  const { result, unmount } = chatting({
-    modelId: "retired",
-    modelGone: false,
-    onModelRefused,
-  });
+  const { result } = chatting({ modelId: "retired", onModelRefused });
   await settle();
   await act(async () => {
     await result.current.runtime.thread.append("why?");
     await settle();
   });
-  // The pickers are up: pick another, or reload.
-  expect(result.current.state.ended).toBe(NOT_OFFERED_PICK);
+  expect(result.current.state.ended).toBe(MODEL_GONE_NEW_CHAT);
   expect(result.current.state.messages).toHaveLength(0);
   expect(result.current.runtime.thread.composer.getState().text).toBe("why?");
   expect(onModelRefused).toHaveBeenCalledWith("retired");
-  unmount();
-
-  // No list of models, so no picker: send again, or reload.
-  const unknown = chatting({ modelId: "retired", modelGone: null });
-  await settle();
-  await act(async () => {
-    await unknown.result.current.runtime.thread.append("why?");
-    await settle();
-  });
-  expect(unknown.result.current.state.ended).toBe(NOT_OFFERED_RETRY);
 });
 
-test("a first message that named no model is refused as the backend says", async () => {
+test("a first message refused as not there is about its agent, and keeps the text", async () => {
+  // No conversation yet, so a 404 is the agent: nothing about the model.
   stub((call) =>
     call.url === "/api/turns"
       ? refusal(404, "NotFoundError", "there is nothing here")
       : undefined,
   );
   const onModelRefused = vi.fn();
-  const { result } = chatting({ modelId: null, onModelRefused });
+  const { result } = chatting({ modelId: "sonnet", onModelRefused });
   await settle();
   await act(async () => {
     await result.current.runtime.thread.append("why?");
     await settle();
   });
-  expect(result.current.state.ended).toBe("there is nothing here");
+  expect(result.current.state.ended).toBe(AGENT_GONE);
+  expect(result.current.runtime.thread.composer.getState().text).toBe("why?");
   expect(onModelRefused).not.toHaveBeenCalled();
-});
-
-test("what a refusal is told as is what was known when the turn was sent", async () => {
-  // Sent while the model was gone; another picked before the refusal came
-  // back. The 404 was about the model the turn was sent on.
-  let refuse: () => void = () => undefined;
-  const refused = new Promise<Response>((done) => {
-    refuse = () => {
-      done(refusal(404, "NotFoundError", "there is nothing here"));
-    };
-  });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof globalThis.fetch>((input) =>
-      String(input) === `/api/conversations/${CONVERSATION}/turns`
-        ? refused
-        : Promise.resolve(json(opened(conversation(1), TREE))),
-    ),
-  );
-  const { result, rerender, started, ended } = chatting({
-    conversationId: CONVERSATION,
-    modelGone: true,
-  });
-  await waitFor(() => {
-    expect(result.current.state.messages).toHaveLength(2);
-  });
-  await act(async () => {
-    void result.current.runtime.thread.append("and then?");
-    await settle();
-  });
-  await act(async () => {
-    rerender({
-      conversationId: CONVERSATION,
-      agentId: "helper",
-      modelId: "sonnet",
-      onConversationStarted: started,
-      onTurnEnded: ended,
-      modelGone: false,
-    });
-    await settle();
-  });
-  await act(async () => {
-    refuse();
-    await settle();
-  });
-  expect(result.current.state.ended).toBe(MODEL_GONE);
-  expect(result.current.runtime.thread.composer.getState().text).toBe(
-    "and then?",
-  );
-});
-
-test("the list arriving late does not take back what was said", async () => {
-  stub((call) => {
-    if (call.url === `/api/conversations/${CONVERSATION}`) {
-      return json(opened(conversation(1), TREE));
-    }
-    if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
-      return refusal(404, "NotFoundError", "there is nothing here");
-    }
-    return undefined;
-  });
-  const { result, rerender, started, ended } = chatting({
-    conversationId: CONVERSATION,
-    modelGone: null,
-  });
-  await waitFor(() => {
-    expect(result.current.state.messages).toHaveLength(2);
-  });
-  await act(async () => {
-    await result.current.runtime.thread.append("and then?");
-  });
-  expect(result.current.state.ended).toBe(MODEL_MAYBE_GONE);
-  // The list came, and the model is offered: nobody picked anything, and the
-  // turn was still refused.
-  await act(async () => {
-    rerender({
-      conversationId: CONVERSATION,
-      agentId: "helper",
-      modelId: "sonnet",
-      onConversationStarted: started,
-      onTurnEnded: ended,
-      modelGone: false,
-    });
-    await settle();
-  });
-  expect(result.current.state.ended).toBe(MODEL_MAYBE_GONE);
 });
 
 test("a stop that does not reach the server leaves the answer alone", async () => {

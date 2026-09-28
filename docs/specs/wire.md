@@ -64,11 +64,16 @@ checks as every other write.
   message being replaced for an edit.
 - `model_id` is the model a new conversation runs on, one of those
   `GET /api/models` lists; left out or `null`, it is the agent's default
-  ([agents.md](agents.md)). An agent or a model the deployment has not got is
-  404. A turn in a conversation that exists names no model — it runs on the
+  ([agents.md](agents.md)). An agent the deployment has not got is 404, and
+  is looked for first; a model it does not offer is 422, `UnknownModelError`.
+  A turn in a conversation that exists names no model — it runs on the
   conversation's, which `PUT /api/conversations/{id}/model` changes — so a
   `model_id` there is a field that body does not know (422). A conversation
-  whose model the deployment no longer offers refuses the turn with 404.
+  whose model the deployment no longer offers refuses the turn — a question,
+  an edit or a regeneration — with 409, `ModelNotOfferedError`, decided after
+  the conversation was found to be the caller's: somebody else's is the 404
+  of one that is not there. Both bodies are a fixed sentence and never the
+  model's id.
 - A conversation with a run going refuses a second turn (409). A run that is
   not there and one in somebody else's conversation answer the same 404, and
   **before the stream begins**: a refusal is a status.

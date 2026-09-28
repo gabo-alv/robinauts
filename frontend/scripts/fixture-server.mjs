@@ -100,6 +100,13 @@ const AGENTS = [
 /** @param {unknown} id */
 const offered = (id) => MODELS.some((model) => model.id === id);
 
+/** What the backend says about a model a request named and it does not offer. */
+const NOT_OFFERED = "body.model_id: is not a model this deployment offers";
+
+/** And about a turn in a conversation on a model it no longer offers. */
+const NO_LONGER_OFFERED =
+  "this conversation's model is no longer offered here; move the conversation to another";
+
 const SIGNED_IN = {
   sign_in: true,
   local_development: false,
@@ -309,7 +316,7 @@ function tree(n) {
 /**
  * @type {Record<string, {
  *   session: unknown,
- *   agents: unknown[],
+ *   agents: typeof AGENTS,
  *   conversations?: number,
  *   retired?: number,
  *   stream?: "finishes" | "fails",
@@ -618,16 +625,10 @@ async function conversations(request, response, path, query) {
   }
   const model = MODEL.exec(path);
   if (model !== null && method === "PUT") {
-    // Checked before the conversation, as the backend does, and a 422
-    // naming the field rather than the id.
+    // Checked before the conversation, as the backend does.
     const asked = await body(request);
     if (!offered(asked?.model_id)) {
-      refuse(
-        response,
-        422,
-        "InvalidValueError",
-        "body.model_id: is not a model this deployment offers",
-      );
+      refuse(response, 422, "UnknownModelError", NOT_OFFERED);
       return true;
     }
     const id = model[1] ?? "";
@@ -658,15 +659,19 @@ async function conversations(request, response, path, query) {
     const id = turns[1] ?? "";
     const held = trees.get(id);
     const found = listed.find((each) => each.id === id);
-    // A model no longer offered refuses the turn with the very 404 of a
-    // conversation that is not there (`docs/specs/wire.md`).
-    if (held === undefined || !offered(found?.model)) {
+    if (held === undefined) {
       refuse(
         response,
         404,
         "NotFoundError",
         "there is nothing here of that id",
       );
+      return true;
+    }
+    // Once the conversation is known, and before the run already going: a
+    // model no longer offered refuses the turn by name (`docs/specs/wire.md`).
+    if (!offered(found?.model)) {
+      refuse(response, 409, "ModelNotOfferedError", NO_LONGER_OFFERED);
       return true;
     }
     if (held.run_id !== null) {
@@ -1076,16 +1081,21 @@ const server = createServer((request, response) => {
     // are how the interface learns which one (`docs/specs/wire.md`).
     void body(request).then((sent) => {
       const text = typeof sent?.text === "string" ? sent.text : "";
-      const agent = AGENTS.find((each) => each.id === sent?.agent_id);
-      // Absent or null is the agent's default; anything else must be offered.
-      const model = sent?.model_id ?? agent?.model;
-      if (agent === undefined || !offered(model)) {
+      // The scene's agents, which are what its picker offered.
+      const agent = fixture.agents.find((each) => each.id === sent?.agent_id);
+      if (agent === undefined) {
         refuse(
           response,
           404,
           "NotFoundError",
           "there is nothing here of that id",
         );
+        return;
+      }
+      // Absent or null is the agent's default; anything else must be offered.
+      const model = sent?.model_id ?? agent.model;
+      if (!offered(model)) {
+        refuse(response, 422, "UnknownModelError", NOT_OFFERED);
         return;
       }
       const created = summary(listed.length + 1, text.slice(0, 60), {

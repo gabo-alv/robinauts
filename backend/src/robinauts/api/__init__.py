@@ -71,7 +71,7 @@ from robinauts.api.agui import (
     sse,
 )
 from robinauts.api.auth_routes import SIGN_IN_PAGE, auth_router
-from robinauts.api.conversation_routes import NOT_OFFERED, conversation_router
+from robinauts.api.conversation_routes import conversation_router
 from robinauts.api.cookies import (
     HOST_PREFIX,
     LOGIN_COOKIE,
@@ -88,8 +88,10 @@ from robinauts.api.errors import (
     MAX_DETAIL_CHARS,
     MAX_LOCATION_CHARS,
     METHOD_NOT_ALLOWED,
+    NO_LONGER_OFFERED_DETAIL,
     NOT_FOUND_DETAIL,
     NOT_FOUND_ERROR,
+    NOT_OFFERED_DETAIL,
     QUIET_RUN_DETAIL,
     SIGN_IN_DETAIL,
     STATUS_OF,
@@ -291,10 +293,11 @@ __all__ = [
     "NOT_BUILT",
     "NOT_BUILT_PAGE",
     "NOT_BUILT_STATUS",
+    "NO_LONGER_OFFERED_DETAIL",
     "NOT_FOUND_DETAIL",
     "NOT_FOUND_ERROR",
     "NOT_JSON",
-    "NOT_OFFERED",
+    "NOT_OFFERED_DETAIL",
     "NOT_OURS",
     "NOT_SIGNED_IN",
     "NOT_THERE",

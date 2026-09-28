@@ -547,6 +547,22 @@ test("the empty chat has a model picker beside the agent's, on its default", asy
   expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
 });
 
+test("picking a model on the empty chat leaves the focus on the picker", async () => {
+  // A keyboard arrows through a closed <select> one change at a time; a
+  // picker remounted by each of them would drop the focus to <body>.
+  location.hash = "#/";
+  await shell();
+  const picker = screen.getByLabelText("Model");
+  picker.focus();
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toBe(picker);
+  expect(picker).toHaveFocus();
+  expect(picker).toHaveValue("opus");
+});
+
 test("the model picked on the empty chat is the one the first message names", async () => {
   const created = id(9);
   const { fetch } = await shell(undefined, (call) => {
@@ -623,7 +639,7 @@ test("an open conversation's line has its model, and a change is a PUT", async (
 test("a change that is refused is said, and the picker goes back", async () => {
   location.hash = `#/c/${id(1)}`;
   let answer = () =>
-    refusal(422, "InvalidValueError", "body.model_id: is not a model");
+    refusal(422, "UnknownModelError", "body.model_id: is not a model");
   await shell(undefined, (call) => {
     if (call.method === "PUT") return answer();
     return withConversation(call);
@@ -656,8 +672,7 @@ test("a model no longer offered is shown, and a turn refused for it says why", a
   const retired = { ...conversation(1, "Robins"), model: "retired" };
   await shell(undefined, (call) => {
     if (call.url === `/api/conversations/${id(1)}/turns`) {
-      // What the backend answers: the 404 of a conversation not there.
-      return refusal(404, "NotFoundError", "there is nothing here of that id");
+      return refusal(409, "ModelNotOfferedError", "the model is gone");
     }
     if (call.url === `/api/conversations/${id(1)}`) {
       return json(
@@ -688,10 +703,13 @@ test("a model no longer offered is shown, and a turn refused for it says why", a
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await settled();
   });
-  // Not "not found" about the conversation on the screen: the chat's own
-  // sentence for it (`src/chat/assistant-ui/runtime.tsx`).
+  // The chat's own sentence for it (`src/chat/assistant-ui/runtime.tsx`),
+  // and what was written is back in the box to send once another is picked.
   expect(screen.getByRole("status")).toHaveTextContent(
     /model is no longer offered/,
+  );
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "And at night?",
   );
 });
 
@@ -837,7 +855,7 @@ test("without the list, a remembered model is still the one a first message name
       return refusal(500, "InternalError", "something went wrong");
     }
     if (call.url === "/api/turns") {
-      return refusal(404, "NotFoundError", "there is nothing here of that id");
+      return refusal(422, "UnknownModelError", "body.model_id: is not a model");
     }
     return undefined;
   });
@@ -856,7 +874,7 @@ test("without the list, a remembered model is still the one a first message name
   });
   // Refused for it: said, the message is back, and the model is forgotten,
   // so the next one goes to the agent's default.
-  expect(screen.getByRole("status")).toHaveTextContent(/Send it again/);
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
   expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
     "Why do robins sing?",
   );
@@ -867,7 +885,64 @@ test("without the list, a remembered model is still the one a first message name
   });
 });
 
-test("with the list in hand, a refused first message keeps the pick", async () => {
+test("with the list in hand, a first message refused for its model forgets the pick", async () => {
+  // Picked from a list that has gone stale since: the next message goes to
+  // the agent's default, and is not refused for the same model again.
+  location.hash = "#/";
+  const created = id(9);
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.url === "/api/turns") {
+      const asked = (call.body as { model_id: string }).model_id;
+      if (asked === "opus") {
+        return refusal(
+          422,
+          "UnknownModelError",
+          "body.model_id: is not a model",
+        );
+      }
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return undefined;
+  });
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const send = async () => {
+    const box = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      await settled();
+    });
+  };
+  await send();
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBeNull();
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(
+    callsTo(fetch, "/api/turns", "POST").map(
+      (call) => (call.body as { model_id: string }).model_id,
+    ),
+  ).toEqual(["opus", "sonnet"]);
+  expect(location.hash).toBe(`#/c/${created}`);
+});
+
+test("a first message refused as not there keeps the text and the pick", async () => {
+  // The agent, and not the model: nothing to forget.
   location.hash = "#/";
   await shell(undefined, (call) =>
     call.url === "/api/turns"
@@ -883,9 +958,12 @@ test("with the list in hand, a refused first message keeps the pick", async () =
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await settled();
   });
-  // The model was one the list offered: the refusal is as likely the agent,
-  // or a list gone stale, and the pickers are there to pick again with.
-  expect(screen.getByRole("status")).toHaveTextContent(/Pick another above/);
+  expect(screen.getByRole("status")).toHaveTextContent(
+    /agent it was for is no longer offered/,
+  );
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
   expect(localStorage.getItem("robinauts.model")).toBe("opus");
   expect(screen.getByLabelText("Model")).toHaveValue("opus");
 });

@@ -21,7 +21,10 @@
   model stays a choice, so the model picker sits on that line, showing the
   conversation's model; changing it applies from the next turn, a run in
   flight included. A model the deployment no longer offers is shown as
-  such, and a turn refused for it says so.
+  such, and a turn refused for it says so and keeps what was written — an
+  edit in its own box. A first message refused because its model or its
+  agent is no longer offered says which, and keeps the text; a refused
+  model is forgotten by the browser.
 - On a small screen the panel becomes an overlay drawer opened from a
   button, and the chat is usable on a phone.
 - The theme follows the operating system by default. A light / dark /

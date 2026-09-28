@@ -12,10 +12,13 @@
   change takes effect at the next turn: a turn already running keeps the
   model it started with, and every answer records the model that produced
   it ([conversations.md](conversations.md)).
-- **A model the deployment no longer offers refuses the turn**: it is not
-  there, and is refused exactly as an agent the operator has removed is
-  (below); which model it was goes to the log. There is no falling back to
-  the agent's default: the point of choosing is knowing who answers.
+- **A model the deployment no longer offers refuses the turn**, with an
+  error of its own that says so, and its author moves the conversation to
+  another model; which model it was goes to the log. It is not answered as
+  "not found", the way an agent the operator has removed is: model ids are
+  no secret, and the person is looking at the conversation. There is no
+  falling back to the agent's default: the point of choosing is knowing who
+  answers.
 - The engine is a property of the agent. Both engines run side by side in
   one deployment. Changing an agent's engine takes effect at the next turn
   of its existing conversations — which is the swap the persistence design

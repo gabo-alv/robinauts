@@ -95,7 +95,7 @@ from robinauts.api.schemas import (
     SetModelRequest,
 )
 from robinauts.application import DEFAULT_PAGE, MAX_PAGE
-from robinauts.domain import InvalidCursorError, InvalidValueError, UnknownModelError
+from robinauts.domain import InvalidCursorError, InvalidValueError
 
 conversation_router = APIRouter(prefix="/api", tags=["conversations"])
 
@@ -204,14 +204,6 @@ async def rename_conversation(
     return ConversationSummary.of(renamed)
 
 
-NOT_OFFERED = "body.model_id: is not a model this deployment offers"
-"""What a request for a model the deployment does not offer is refused with.
-
-Fixed, and naming the field and not the id: the id is the request's, and a
-body never repeats what the request carried (``robinauts.api.errors``).
-"""
-
-
 @conversation_router.put("/conversations/{conversation_id}/model", responses=WRITING)
 async def set_model(
     request: Request,
@@ -230,12 +222,10 @@ async def set_model(
     A ``PUT``, because the body is the whole of the conversation's model
     rather than a change to it.
 
-    **A model the deployment does not offer is 422 here**, naming the field,
-    where the turn routes answer 404 for it as for an agent that is not
-    there. The model is the one value this route takes, so a request naming
-    one the picker could not have offered is a body this route cannot take --
-    and a 404 at a path that names a conversation would read as the
-    conversation not being there.
+    **A model the deployment does not offer is 422** (``UnknownModelError``,
+    with a fixed sentence naming the field), as it is for a new chat: the
+    model is the one value this route takes, and a 404 at a path that names
+    a conversation would read as the conversation not being there.
 
     **The model is checked first**, before the conversation is looked up, as
     a rename checks its title: nothing is read for a value that is refused
@@ -247,8 +237,6 @@ async def set_model(
     """
     try:
         moved = await turning(request).set_model(user, conversation_id, asked.model_id)
-    except UnknownModelError as refused:
-        raise InvalidValueError(NOT_OFFERED) from refused
     except InvalidValueError as refused:
         # The model's id is the only value this route hands ``set_model``, as
         # the title is ``rename``'s: the conversation's id is a uuid the

@@ -275,12 +275,7 @@ export type ChatAction =
    * the run it is watching over a turn it never started would leave the answer
    * arriving into a thread that thinks nothing is happening.
    */
-  | { kind: "refused"; detail: string }
-  /**
-   * What was said about the last turn is no longer so: it is taken back,
-   * if it is still what is said. Anything said since stays.
-   */
-  | { kind: "unsaid"; detail: string };
+  | { kind: "refused"; detail: string };
 
 export function reduce(state: ChatState, action: ChatAction): ChatState {
   switch (action.kind) {
@@ -400,8 +395,6 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
         sending: false,
         ended: action.detail,
       };
-    case "unsaid":
-      return state.ended === action.detail ? { ...state, ended: null } : state;
   }
 }
 

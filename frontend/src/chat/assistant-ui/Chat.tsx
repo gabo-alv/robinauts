@@ -28,25 +28,33 @@
  * (`docs/specs/agents.md`).
  */
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useMemo } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 
 import type { ChatProps } from "../index";
 import { useChat } from "./runtime";
 import { Thread } from "./vendor/components/assistant-ui/elements/thread.aui";
+
+/** What the welcome slot draws, handed down past the Thread. */
+const WelcomeSlot = createContext<ReactNode>(null);
+
+function Welcome() {
+  return <>{useContext(WelcomeSlot)}</>;
+}
+
+/**
+ * One component for the slot, made once, and what it draws comes through
+ * `WelcomeSlot`. A component made afresh whenever the welcome changed would
+ * be a different component to React, which remounts it -- and a `<select>`
+ * that is remounted loses the focus: at a keystroke in the box beside it, or
+ * at every step of a keyboard arrowing through the picker itself.
+ */
+const COMPONENTS = { Welcome };
 
 export function Chat(props: ChatProps) {
   const { state, runtime } = useChat(props);
   // Only on the empty chat: a conversation with nothing in it yet is still a
   // conversation, and its agent is no longer a choice (`../index.ts`).
   const welcome = props.conversationId === null ? props.welcome : undefined;
-  // Held across renders: a component identity that changed on every one of
-  // them would remount the welcome -- and a `<select>` that is remounted
-  // loses the focus, on every keystroke in the box beside it. What the shell
-  // passes is held across its own renders for the same reason.
-  const components = useMemo(
-    () => ({ Welcome: () => <>{welcome}</> }),
-    [welcome],
-  );
 
   if (state.failure !== null) {
     return (
@@ -67,7 +75,9 @@ export function Chat(props: ChatProps) {
           content unless it is told otherwise. */}
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1">
-          <Thread components={components} />
+          <WelcomeSlot.Provider value={welcome}>
+            <Thread components={COMPONENTS} />
+          </WelcomeSlot.Provider>
         </div>
         {state.ended !== null && (
           <p

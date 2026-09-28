@@ -218,9 +218,10 @@ async def begin_chat(
     the response's headers, since there was none to name in the request.
 
     The conversation runs on ``model_id``, or on the agent's default when the
-    body names none (``schemas.NewChatRequest``). An agent or a model this
-    deployment has not got is 404, like everything else that is not there; a
-    message with nothing in it is 422.
+    body names none (``schemas.NewChatRequest``). An agent this deployment
+    has not got is 404, like everything else that is not there, and is looked
+    for first; a model it does not offer is 422 (``UnknownModelError``), and so
+    is a message with nothing in it.
 
     **Both services are taken before the turn is begun.** A deployment whose
     lifespan has not run has neither (``access.NOT_WIRED``), and finding that
@@ -256,10 +257,11 @@ async def begin_turn(
 
     A conversation that is not there, one that is somebody else's, and a parent
     or an answer that is no message of it all answer the same 404: the rule is
-    the application's and no route here looks at an owner. So does a
-    conversation whose model the operator has since removed
-    (``UnknownModelError``): the turn is refused rather than answered by
-    another model, and its author moves it to one that is offered
+    the application's and no route here looks at an owner. **A conversation
+    whose model the operator has since removed is 409**
+    (``ModelNotOfferedError``), decided after the conversation was found to be
+    this person's: the turn is refused rather than answered by another model,
+    and its author moves it to one that is offered
     (``PUT /api/conversations/{id}/model``).
     """
     if (asked.text is None) == (asked.regenerate is None):

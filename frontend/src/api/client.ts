@@ -42,6 +42,23 @@ export class ApiError extends Error {
 }
 
 /**
+ * A model the request named that the deployment does not offer: a new
+ * chat's, or the one a conversation is moved to (422, `docs/specs/wire.md`).
+ */
+export const UNKNOWN_MODEL = "UnknownModelError";
+
+/**
+ * A turn in a conversation whose model the deployment no longer offers
+ * (409): the conversation stands in the way until it is moved to another.
+ */
+export const MODEL_NOT_OFFERED = "ModelNotOfferedError";
+
+/** Whether that failure is the backend refusing with the error of that name. */
+export function isRefusal(failure: unknown, error: string): boolean {
+  return failure instanceof ApiError && failure.error === error;
+}
+
+/**
  * The sentence to put in front of a person when a call did not work.
  *
  * Every failure a caller can meet is an `ApiError` (see `request`), and its
