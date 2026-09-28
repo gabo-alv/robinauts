@@ -234,9 +234,8 @@ def _provider(
         if kind is None:
             problems.append(f"{where}.kind: one of {_named(_KINDS)}, not {raw_kind!r}")
         elif kind not in kinds:
-            # A client this build does not carry -- not adopted, or not
-            # passing the dependency policy -- is a provider it does not
-            # offer (``DEPENDENCIES.md``). Said at
+            # A kind no engine of this build reaches is a provider it
+            # does not offer (``docs/specs/agents.md``). Said at
             # start-up, with what can be used instead, rather than found out
             # by a person waiting for an answer.
             problems.append(

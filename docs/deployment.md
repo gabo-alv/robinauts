@@ -199,9 +199,8 @@ Notes on what is and is not there:
   Anthropic client reaches between them — the second is any endpoint that
   speaks Anthropic's Messages API at a `base_url` you give, and is how
   OpenRouter is reached. `openai` and `openai-compatible` are refused at
-  start-up saying so: the client that reaches them is not adopted in this
-  build, and adopting it is a dependency change of its own
-  ([../DEPENDENCIES.md](../DEPENDENCIES.md), "Known exclusions").
+  start-up saying so: their clients are installed, but the engines do not
+  offer those kinds yet ([specs/agents.md](specs/agents.md)).
 - `token_endpoint_auth` is `client_secret_basic` by default, or
   `client_secret_post`.
 - **Titles.** An agent's or a model's `title` is the name a person picks it
@@ -621,7 +620,7 @@ engine = "pydantic-ai"
 | `unknown key 'sessions_hours'` | a misspelt key | spell it as the example does; unknown keys are never ignored |
 | `providers.<id>: the client secret is read from the environment variable X, which is unset or empty` | the variable is unset, empty, or not in the unit's `EnvironmentFile` | set it; an empty variable counts as unset |
 | `model_providers.<id>: the API key is read from the environment variable X, which is unset or empty` | as above, for a model provider | set it; every *declared* provider needs its key, used or not |
-| `model_providers.<id>.kind: this build cannot reach 'openai' providers; it was built with anthropic, anthropic-compatible` | the client for that kind is not adopted in this build | use `anthropic`, or `anthropic-compatible` with the endpoint's `base_url`; otherwise wait for a build that adopts it |
+| `model_providers.<id>.kind: this build cannot reach 'openai' providers; it was built with anthropic, anthropic-compatible` | the engines do not offer that kind yet | use `anthropic`, or `anthropic-compatible` with the endpoint's `base_url`; otherwise wait for a build that offers it |
 | `agents.<id>.engine: one of langgraph, pydantic-ai, not '…'` | a misspelt engine | `langgraph` or `pydantic-ai`; both are wired in this build |
 | `admin: roles are not in this release …` | an `[[admin]]` table | remove it; roles are deferred |
 | `allow: no entry, so nobody could sign in` | providers configured, allow list empty | add at least one `[[allow]]` |

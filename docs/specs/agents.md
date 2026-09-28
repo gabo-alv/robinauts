@@ -376,8 +376,8 @@ engine = "pydantic-ai"
   The other two kinds are written the same way — here a self-hosted
   gateway speaking OpenAI's protocol, which is a different provider from
   the two above and not another spelling of one. **This build refuses
-  them** at start-up, naming the provider, because the client that reaches
-  them is not adopted in this build (see "Known findings" below);
+  them** at start-up, naming the provider, because the engines do not
+  offer them yet (see "Known findings" below);
   the shape is settled all the same, and `base_url` belongs to the two
   protocol kinds and to nothing else:
 
@@ -457,16 +457,15 @@ tools = ["github", "jira", "learn"]
   settled now -- CNRI-Python is on the allowed list, and `tiktoken` 0.14.0 is
   excepted by name for its licence text (its package licence only: the BPE
   tokenizer files it fetches at runtime are assets, a separate question
-  when the client is adopted) -- but the client is not adopted:
-  adopting it is a dependency change of its own, with its whole tree read
-  then, and until it is made `openai` and `openai-compatible` wait
-  ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known exclusions"). The
+  before the kinds are offered). The client is now a dependency, but the
+  engine does not offer the kinds yet: wiring them is a change of its own,
+  and until it is made `openai` and `openai-compatible` wait. The
   configuration still names all four kinds — the vocabulary is the
   platform's — and a deployment asking for a kind this build cannot reach
   is refused at start-up, saying so.
 - The same holds for the **Pydantic AI** engine: `pydantic-ai-slim[openai]`
-  requires `tiktoken` too, and is not adopted either, so the same two kinds
-  are out of it.
+  is installed too, and not wired either, so the same two kinds are out
+  of it.
 - So both engines reach **`anthropic` and `anthropic-compatible`**, with
   one client each and nothing else added, and the swap holds for every
   model either of them has. OpenRouter is reached as an

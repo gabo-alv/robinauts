@@ -509,11 +509,9 @@ class LangGraphAgent(Agent):
     sends the request.
 
     What is still not here is ``openai`` and ``openai-compatible``, which are
-    reached through ``langchain-openai``. The licences that kept its tree out
-    are settled now, but the client is not adopted: adopting it is a
-    dependency change of its own, with the whole tree read then
-    (``DEPENDENCIES.md``, "Known exclusions"). A provider whose client is not
-    in the build is not offered (``docs/specs/agents.md``), so the
+    reached through ``langchain-openai``. The client is a dependency now, but
+    nothing here builds it yet: wiring it is a change of its own. A kind this
+    engine does not build is not offered (``docs/specs/agents.md``), so the
     configuration refuses the kind at start-up rather than the engine failing
     at the first turn. Adding it back
     is this set, a branch in ``chat_model`` and the dependency -- nothing
