@@ -12,9 +12,11 @@
 #
 # It needs one model provider key, and the only two variables it will look at
 # are OPENROUTER_API_KEY and ANTHROPIC_API_KEY, from the environment or from
-# demo/.env. **Neither is ever printed and neither is ever written to a file**:
-# the configuration names the *variable*, and the key travels in the
-# environment of the server this starts (docs/specs/agents.md).
+# demo/.env. A GitHub token exported as ROBINAUTS_GITHUB_TOKEN is optional,
+# and turns on GitHub's MCP server for both agents.
+# **No key or token is ever printed or written to a file**: the configuration
+# names the *variable*, and the secret travels in the environment of the
+# server this starts (docs/specs/agents.md).
 #
 # Every failure is one line and a non-zero exit: 2 for something to put right
 # before running it again, 1 for something that went wrong while starting.
@@ -27,6 +29,10 @@ demo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ENV_FILE="$demo/.env"
 ENV_MODE=600
 # demo/.env may hold a key, so it is read only when nobody else can read it.
+
+GITHUB_VARIABLE=ROBINAUTS_GITHUB_TOKEN
+# The variable the platform reads GitHub's token from, as [mcp_servers.github]
+# names it. Without it in the environment, the agents have no tools.
 
 OPENROUTER_VARIABLE=OPENROUTER_API_KEY
 ANTHROPIC_VARIABLE=ANTHROPIC_API_KEY
@@ -135,6 +141,7 @@ esac
 
 openrouter_key=${OPENROUTER_API_KEY:-$(from_env_file "$OPENROUTER_VARIABLE")}
 anthropic_key=${ANTHROPIC_API_KEY:-$(from_env_file "$ANTHROPIC_VARIABLE")}
+github_token=${ROBINAUTS_GITHUB_TOKEN:-}
 
 # And **out of the environment the moment they have been read**. Everything
 # this script runs before the server -- pgserver, npm and everything npm runs,
@@ -142,7 +149,7 @@ anthropic_key=${ANTHROPIC_API_KEY:-$(from_env_file "$ANTHROPIC_VARIABLE")}
 # exported variable is inherited by every one of them. The server is handed the
 # one key it needs on its own invocation and nowhere else (below), which is
 # what makes the promise at the top of this file true rather than nearly true.
-unset OPENROUTER_API_KEY ANTHROPIC_API_KEY
+unset OPENROUTER_API_KEY ANTHROPIC_API_KEY ROBINAUTS_GITHUB_TOKEN
 
 if [ -z "$openrouter_key" ] && [ -z "$anthropic_key" ]; then
     # The one message this script prints over several lines, because what to do
@@ -212,6 +219,13 @@ else
     key_value=$anthropic_key
 fi
 say "Provider: $provider_kind ($provider_id); models $model, $model_2, $model_3; key from $key_variable."
+if [ -n "$github_token" ]; then
+    github_env=$GITHUB_VARIABLE
+    say "Tools: GitHub's MCP server, for both agents."
+else
+    github_env=
+    say "Tools: none (no GitHub token found)."
+fi
 
 # --- the database ------------------------------------------------------------
 
@@ -237,7 +251,7 @@ uv run --no-project --python "$PYTHON" python "$demo/config.py" \
     --model "$DEFAULT_ID" "$model" "$title" \
     --model "$id_2" "$model_2" "$title_2" \
     --model "$id_3" "$model_3" "$title_3" \
-    --base-url "$base_url" ||
+    --base-url "$base_url" --github-secret-env "$github_env" ||
     fail "$CONFIG could not be written." 1
 export ROBINAUTS_CONFIG="$CONFIG"
 
@@ -284,22 +298,30 @@ say "Creating the schema if it is not there (robinauts db init) ..."
 
 say "Starting the server on http://$HOST:$PORT/ ..."
 : >"$LOG_FILE"
-# The key, at last, and **only here**: a variable assignment in front of a
-# command puts it in that command's environment and in nothing else's. The two
+# The secrets, at last, and **only here**: they are exported inside a subshell
+# that then becomes the server (`exec`), so they are in the server's
+# environment and in nothing else's, and `$!` is the server's own pid. The
 # branches are written out rather than built from `$key_variable`, because the
 # shell way of setting a variable whose name is itself in a variable is `env`
 # or `eval`, and `env KEY=...` would put the key in an argument list that
 # anybody on this machine can read out of `ps`.
-case "$provider_id" in
-openrouter)
-    OPENROUTER_API_KEY="$key_value" \
-        "$ROBINAUTS" start --dev-no-sign-in --port "$PORT" >>"$LOG_FILE" 2>&1 &
-    ;;
-*)
-    ANTHROPIC_API_KEY="$key_value" \
-        "$ROBINAUTS" start --dev-no-sign-in --port "$PORT" >>"$LOG_FILE" 2>&1 &
-    ;;
-esac
+(
+    case "$provider_id" in
+    openrouter)
+        OPENROUTER_API_KEY=$key_value
+        export OPENROUTER_API_KEY
+        ;;
+    *)
+        ANTHROPIC_API_KEY=$key_value
+        export ANTHROPIC_API_KEY
+        ;;
+    esac
+    if [ -n "$github_token" ]; then
+        ROBINAUTS_GITHUB_TOKEN=$github_token
+        export ROBINAUTS_GITHUB_TOKEN
+    fi
+    exec "$ROBINAUTS" start --dev-no-sign-in --port "$PORT"
+) >>"$LOG_FILE" 2>&1 &
 server=$!
 printf '%s\n' "$server" >"$PID_FILE"
 
@@ -353,6 +375,9 @@ say "The demo is up: $url"
 say "  sign-in is off (the local development mode), loopback only, one user"
 say "  two agents in the picker, one per engine: start a chat with each"
 say "  three models beside it: $model, $model_2, $model_3"
+if [ -n "$github_token" ]; then
+    say "  tools: both agents may call GitHub's MCP server, as the token's owner"
+fi
 say "  log:  $LOG_FILE"
 say "  stop: demo/stop.sh   ('demo/stop.sh --reset' also deletes $state)"
 

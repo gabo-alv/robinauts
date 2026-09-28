@@ -68,6 +68,18 @@ a provider with an empty one: the line goes altogether, because ``base_url =
 ""`` is a start-up refusal and ``base_url`` at all is one for the ``anthropic``
 kind (``docs/specs/agents.md``)."""
 
+TOOLS = "@TOOLS@"
+GITHUB_SERVER = "@GITHUB_SERVER@"
+"""The template's lines for the GitHub tool server: each agent's ``tools`` line
+and the server's own table. Whole lines, like ``@BASE_URL@``: they are written
+when ``demo/start.sh`` found a GitHub token, and go altogether when it did not,
+so that an agent never names a server the platform would have no secret for."""
+
+GITHUB_URL = "https://api.githubcopilot.com/mcp/"
+"""GitHub's remote MCP server, which takes the token as a bearer secret."""
+
+WHOLE_LINES = (BASE_URL, TOOLS, GITHUB_SERVER)
+
 FORBIDDEN = '"\\'
 """What a value may not hold, because a TOML basic string would not survive it.
 
@@ -94,6 +106,9 @@ the operator set rather than as a title they never wrote."""
 
 ELLIPSIS = "…"
 
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+"""What the name of the variable GitHub's token is read from may be."""
+
 
 def check(value: str, what: str, longest: int | None = None) -> str:
     """``value`` if it can be written into a TOML string as it stands."""
@@ -117,14 +132,15 @@ def title_for(name: str) -> str:
     return name[: MAX_TITLE_CHARS - len(ELLIPSIS)] + ELLIPSIS
 
 
-def filled(template: str, values: dict[str, str], base_url: str) -> str:
+def filled(template: str, values: dict[str, str], base_url: str, github_env: str) -> str:
     """The template with every placeholder replaced, literally.
 
-    ``@BASE_URL@`` is the exception, being a whole line: it becomes the
-    assignment when there is an endpoint to write, and the line is dropped when
-    there is not.
+    ``WHOLE_LINES`` are the exceptions: ``@BASE_URL@`` becomes the assignment
+    when there is an endpoint to write, the two GitHub lines become the tools
+    line and the server's table when there is a token's variable to name, and
+    each line is dropped when there is not.
     """
-    unknown = sorted(set(UNFILLED.findall(template)) - {*PLACEHOLDERS, BASE_URL})
+    unknown = sorted(set(UNFILLED.findall(template)) - {*PLACEHOLDERS, *WHOLE_LINES})
     if unknown:
         raise SystemExit(f"the template holds {', '.join(unknown)}, which nothing fills")
     lines = []
@@ -133,19 +149,30 @@ def filled(template: str, values: dict[str, str], base_url: str) -> str:
             if not base_url:
                 continue
             line = line.replace(BASE_URL, f'base_url = "{base_url}"')
+        elif line.strip() == TOOLS:
+            if not github_env:
+                continue
+            line = line.replace(TOOLS, 'tools = ["github"]')
+        elif line.strip() == GITHUB_SERVER:
+            if not github_env:
+                continue
+            line = line.replace(
+                GITHUB_SERVER,
+                f'[mcp_servers.github]\nurl = "{GITHUB_URL}"\nsecret_env = "{github_env}"',
+            )
         lines.append(line)
     text = "".join(lines)
     for placeholder in PLACEHOLDERS:
         text = text.replace(placeholder, values[placeholder])
     # Only the template can have left one, since no value may look like one:
-    # @BASE_URL@ anywhere but on a line of its own.
+    # a whole-line placeholder anywhere but on a line of its own.
     left = sorted(set(UNFILLED.findall(text)))
     if left:
         raise SystemExit(f"{', '.join(left)} left in the finished configuration")
     return text
 
 
-def written(text: str, values: dict[str, str], base_url: str) -> None:
+def written(text: str, values: dict[str, str], base_url: str, github_env: str) -> None:
     """Refuse the file unless, read back, it says what it was told to say."""
     tables = tomllib.loads(text)
     provider_id = values["@PROVIDER_ID@"]
@@ -167,8 +194,16 @@ def written(text: str, values: dict[str, str], base_url: str) -> None:
     agents = tables.get("agents")
     if not agents:
         raise SystemExit("the configuration declares no agents")
+    tools = ["github"] if github_env else []
     for agent_id, agent in agents.items():
         said[f"{agent_id}'s model"] = (agent.get("model", ""), ids[0])
+        said[f"{agent_id}'s tools"] = (agent.get("tools", []), tools)
+    servers = tables.get("mcp_servers", {})
+    if github_env:
+        github = servers.get("github", {})
+        said["the GitHub server's url"] = (github.get("url", ""), GITHUB_URL)
+        said["the GitHub server's secret_env"] = (github.get("secret_env", ""), github_env)
+    said["the tool servers"] = (sorted(servers), ["github"] if github_env else [])
     wrong = [
         f"{what}: {found!r}, not {wanted!r}"
         for what, (found, wanted) in said.items()
@@ -203,6 +238,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--base-url", default="", help="the endpoint, for a kind that names a protocol"
     )
+    parser.add_argument(
+        "--github-secret-env",
+        default="",
+        help="the variable GitHub's token is read from; the GitHub tools are off without it",
+    )
     arguments = parser.parse_args(argv)
 
     if len(arguments.model) != len(MODELS):
@@ -232,9 +272,12 @@ def main(argv: list[str] | None = None) -> int:
     if len(set(ids)) != len(ids):
         raise SystemExit(f"two models have one id: {ids}")
     base_url = check(arguments.base_url, "the base_url") if arguments.base_url else ""
+    github_env = arguments.github_secret_env
+    if github_env and ENV_NAME.fullmatch(github_env) is None:
+        raise SystemExit(f"the GitHub token's variable is not a variable name: {github_env!r}")
 
-    text = filled(arguments.template.read_text(encoding="utf-8"), values, base_url)
-    written(text, values, base_url)
+    text = filled(arguments.template.read_text(encoding="utf-8"), values, base_url, github_env)
+    written(text, values, base_url, github_env)
     arguments.out.write_text(text, encoding="utf-8")
     return 0
 
