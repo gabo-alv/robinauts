@@ -42,6 +42,7 @@ from robinauts.domain import (
     InvalidValueError,
     Message,
     MessageNotFoundError,
+    ModelNotOfferedError,
     Run,
     RunAlreadyActiveError,
     RunState,
@@ -427,8 +428,11 @@ async def test_no_model_picked_is_the_agent_s_default() -> None:
 async def test_a_model_this_deployment_does_not_offer_begins_nothing() -> None:
     wiring = wired(store=Watched())
 
-    with pytest.raises(UnknownModelError):
+    with pytest.raises(UnknownModelError) as refused:
         await wiring.turns.start(AUTHOR, agent_id=AGENT, model_id="gpt-5-5", text="Hello?")
+    # The model the request named, and not a conversation's: that is the
+    # other refusal (below), and a client says something else about it.
+    assert type(refused.value) is UnknownModelError
     # A name that is not an id at all is refused as a value.
     with pytest.raises(InvalidValueError):
         await wiring.turns.start(AUTHOR, agent_id=AGENT, model_id="GPT 5.5", text="Hello?")
@@ -548,13 +552,13 @@ async def test_a_model_the_deployment_no_longer_offers_refuses_every_kind_of_tur
     wiring, first, answered = await _on_a_model_since_removed()
     conversation_id = first.conversation_id
 
-    with pytest.raises(UnknownModelError):
+    with pytest.raises(ModelNotOfferedError):
         await wiring.turns.start(
             AUTHOR, conversation_id=conversation_id, text="And why?", parent_id=answered.id
         )
-    with pytest.raises(UnknownModelError):
+    with pytest.raises(ModelNotOfferedError):
         await wiring.turns.start(AUTHOR, conversation_id=conversation_id, text="Rather, who?")
-    with pytest.raises(UnknownModelError):
+    with pytest.raises(ModelNotOfferedError):
         await wiring.turns.regenerate(
             AUTHOR, conversation_id=conversation_id, message_id=answered.id
         )
@@ -563,6 +567,23 @@ async def test_a_model_the_deployment_no_longer_offers_refuses_every_kind_of_tur
     assert len(await wiring.store.runs_of(conversation_id)) == 1
     stored = await wiring.store.conversation_by_id(conversation_id)
     assert stored is not None and stored.model == OTHER_MODEL
+
+
+@asyncio_test
+async def test_somebody_else_s_conversation_on_a_removed_model_is_still_not_there() -> None:
+    # Whose it is is decided first: the model's refusal says something about
+    # the conversation, and a stranger is told what a missing one tells.
+    wiring, first, answered = await _on_a_model_since_removed()
+    conversation_id = first.conversation_id
+
+    with pytest.raises(ConversationNotFoundError):
+        await wiring.turns.start(
+            SOMEBODY_ELSE, conversation_id=conversation_id, text="And?", parent_id=answered.id
+        )
+    with pytest.raises(ConversationNotFoundError):
+        await wiring.turns.regenerate(
+            SOMEBODY_ELSE, conversation_id=conversation_id, message_id=answered.id
+        )
 
 
 @asyncio_test

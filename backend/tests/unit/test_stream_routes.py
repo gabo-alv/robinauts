@@ -45,8 +45,10 @@ from robinauts.api import (
     INTERNAL_CODE,
     INTERNAL_ERROR,
     MAX_POSITION_DIGITS,
+    NO_LONGER_OFFERED_DETAIL,
     NOT_FOUND_DETAIL,
     NOT_FOUND_ERROR,
+    NOT_OFFERED_DETAIL,
     NOT_WIRED,
     ONE_FORM,
     POSITION_AHEAD,
@@ -921,8 +923,8 @@ async def test_a_new_chat_that_names_no_model_runs_on_the_agents_default(
 
 
 @asyncio_test
-async def test_a_model_this_deployment_has_not_got_is_not_there() -> None:
-    """404, like an agent that is not there, and before anything is written."""
+async def test_a_model_this_deployment_has_not_got_is_refused_by_name() -> None:
+    """422 under its own name, with nothing of the id, and before anything is written."""
     async with served(*says(ANSWER)) as it:
         refused = await it.client.post(
             "/api/turns",
@@ -931,30 +933,73 @@ async def test_a_model_this_deployment_has_not_got_is_not_there() -> None:
         )
         page = await it.wiring.store.conversations_of(it.user.id, limit=10)
 
-    assert refused.status_code == 404
-    assert refused.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
+    assert refused.status_code == 422
+    assert refused.json() == {"error": "UnknownModelError", "detail": NOT_OFFERED_DETAIL}
     assert page.conversations == ()
     assert not it.wiring.agent.asked
 
 
 @asyncio_test
-async def test_a_conversation_whose_model_was_removed_is_not_answered() -> None:
-    """The model is the conversation's, and one no longer offered is not there.
-
-    404, like a removed agent, and not an answer from some other model:
-    whoever reads it has to know which model answered.
-    """
+async def test_an_agent_that_is_not_there_is_looked_for_before_the_model() -> None:
     async with served(*says(ANSWER)) as it:
-        kept = conversation(id=uuid.uuid4(), owner_id=it.user.id, model="retired")
-        await it.wiring.store.add_conversation(kept)
-
         refused = await it.client.post(
-            f"/api/conversations/{kept.id}/turns", json={"text": "And?"}, headers=WRITE
+            "/api/turns",
+            json={"agent_id": "nobody", "model_id": "haiku", "text": QUESTION},
+            headers=WRITE,
         )
 
     assert refused.status_code == 404
     assert refused.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
-    assert not it.wiring.agent.asked
+
+
+@pytest.mark.parametrize("turn", ["continue", "edit", "regenerate"])
+@asyncio_test
+async def test_a_conversation_whose_model_was_removed_is_not_answered(turn: str) -> None:
+    """The model is the conversation's, and one no longer offered refuses the turn.
+
+    409 under its own name -- the conversation stands in the way, not the
+    request -- and not an answer from some other model: whoever reads it has
+    to know which model answered. A continuation, an edit and a regeneration
+    alike.
+    """
+    async with served(*says(ANSWER)) as it:
+        started = await it.begun()
+        await settled(it.wiring, started.run)
+        question, answer = await stored_messages(it.wiring.store, started.conversation.id)
+        # What a restart without that model leaves: the row still names it.
+        await it.wiring.store.set_model(started.conversation.id, "retired", now=NOW)
+        body = {
+            "continue": {"text": "And?", "parent_id": str(answer.id)},
+            "edit": {"text": "Rather?", "parent_id": question.parent_id},
+            "regenerate": {"regenerate": str(answer.id)},
+        }[turn]
+
+        refused = await it.client.post(
+            f"/api/conversations/{started.conversation.id}/turns", json=body, headers=WRITE
+        )
+
+    assert refused.status_code == 409
+    assert refused.json() == {"error": "ModelNotOfferedError", "detail": NO_LONGER_OFFERED_DETAIL}
+    assert len(it.wiring.agent.asked) == 1
+
+
+@asyncio_test
+async def test_a_strangers_conversation_on_a_removed_model_is_not_there() -> None:
+    """Whose it is is decided before its model, so nothing about it is told."""
+    async with served(*says(ANSWER)) as it:
+        theirs = conversation(id=uuid.uuid4(), owner_id=SOMEBODY_ELSE.id, model="retired")
+        await it.wiring.store.add_conversation(theirs)
+
+        elsewhere = await it.client.post(
+            f"/api/conversations/{theirs.id}/turns", json={"text": "And?"}, headers=WRITE
+        )
+        missing = await it.client.post(
+            f"/api/conversations/{NOWHERE}/turns", json={"text": "And?"}, headers=WRITE
+        )
+
+    assert refusal(elsewhere) == refusal(missing)
+    assert elsewhere.status_code == 404
+    assert elsewhere.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
 
 
 @asyncio_test

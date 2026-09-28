@@ -1,7 +1,7 @@
 # Plan: the user picks the model
 
 Written 2026-09-27 on `feature/model-selection`, after the agent line under
-a conversation's title and the always-shown agent picker (3e02925). Revised
+a conversation's title and the always-shown agent picker (merged in #16). Revised
 the same day against main at #18 (one visible thread, the schema version
 fixed at 1), with the questions it ended on settled. Not a spec: the
 decisions, what they cost across the codebase, and the order to build them
@@ -40,10 +40,13 @@ in. The spec sentences to change are listed at the end.
    of models, with the agent's default selected on a new chat.
 
 3. **A chosen model that the deployment no longer offers refuses the turn**
-   with a named error, the way an agent removed from the configuration
-   does (`UnknownAgentError`). No silent fall-back to the default: the whole
-   point of the feature is that the user knows who is answering. The
-   picker shows the stale id so it can be changed. With decision 2 this is
+   with an error of its own, `ModelNotOfferedError` (409), and not as "not
+   found" the way an agent removed from the configuration is
+   (`UnknownAgentError`): a model's id is no secret, and a client told "not
+   found" about the conversation on its screen has to guess (step 7). No
+   silent fall-back to the default: the whole point of the feature is that
+   the user knows who is answering. The picker shows the stale id so it can
+   be changed. With decision 2 this is
    also what an operator who removes a model from the configuration sees in
    the conversations that were using it, including those that took it as
    their agent's default.
@@ -113,7 +116,8 @@ line.
   does; `NewChatRequest.model_id` optional, the agent's default when
   absent; `ConversationSummary.model`; `AgentSummary.model`;
   `UnknownModelError` → 404 like the agent's on the turn routes and 422 on
-  the PUT. Regenerate `scripts/update-openapi.sh`; the snapshot test pins
+  the PUT (step 4; step 7 gives both refusals names and statuses of their
+  own). Regenerate `scripts/update-openapi.sh`; the snapshot test pins
   it. The wire routes are outside the snapshot and documented in
   [specs/wire.md](../specs/wire.md).
 - **Frontend** (`shell/AgentPicker.tsx` or a sibling `ModelPicker.tsx`,
@@ -138,13 +142,6 @@ One stacked branch per step, reviewed and committed one at a time, as the
 POC steps were ([three-agent recipe](poc-progress.md)). Each step leaves
 every check green.
 
-**The base.** The always-shown agent picker and the agent line (3e02925)
-were made on a branch cut before #16–#18 and are not on main. Steps 1–4 and
-6 do not touch the frontend and need nothing from it. Step 5 does: it
-begins by bringing 3e02925 across, which conflicts in `shell/Shell.tsx` and
-`shell/Shell.test.tsx` and has to be resolved by hand against the one
-visible thread, or that commit lands on main first on its own.
-
 1. **Specs and domain.** The spec sentences below; `ModelConfig.title` and
    `model_by_id`; `Conversation.model`; `UnknownModelError`; the parser.
    Tests: `test_models_config.py`, `test_conversation_domain.py`.
@@ -168,19 +165,29 @@ visible thread, or that commit lands on main first on its own.
    mapping, the OpenAPI snapshot, `wire.md`. Tests: `test_stream_routes.py`,
    `test_conversation_routes.py`, `test_api_access.py`,
    `test_openapi_snapshot.py`.
-5. **Frontend.** 3e02925 first (see the base, above). Then the hook, the
-   picker in both places, the plumbing into the
+5. **Frontend.** The hook, the picker in both places, the plumbing into the
    first message, the `PUT` on change. Tests: `AgentPicker.test.tsx` (or the
    sibling), `Shell.test.tsx`, `client.test.ts`, `runtime.test.tsx`; the
    fixtures in `src/test/conversations.ts` gain `model`.
 6. **Demo.** `demo/robinauts.toml.in` declares a second and third model
    through the same provider (OpenRouter names such as `openai/gpt-5.5`,
    `google/gemini-2.5-pro`) so a switch can be seen working.
-7. **Optional: the model on each answer.** With the model changeable
-   mid-conversation, the per-message record is the one that tells the truth
-   about an old answer. A small caption beside the copy and regenerate
-   icons, from `ProvenanceView.model`, inside the vendored thread. Separate
-   step because it touches `thread.aui.tsx`.
+7. **A model not offered gets its own error.** Step 1 refused a model no
+   longer offered "as not found", and the frontend had to guess what a 404
+   was about (the review of #21). `UnknownModelError` leaves `NotFoundError`
+   and answers 422 for a model a request names (a new chat, the `PUT`);
+   `ModelNotOfferedError`, its subclass, answers 409 for a turn in a
+   conversation whose model is gone, decided after ownership so a stranger
+   still gets the 404. Both bodies name the class, with a fixed sentence.
+   The frontend branches on the name: the guessed sentences, the three-state
+   `modelGone` and the `unsaid` action go; a refused edit goes back into its
+   own edit box; a new chat refused for its model forgets it. With it, the
+   review's other findings: the empty chat's pickers no longer remount on a
+   pick, and the fixture server answers as the backend does. Tests:
+   `test_turn_start.py`, `test_stream_routes.py`,
+   `test_conversation_routes.py`, `test_api_errors.py`, the OpenAPI
+   snapshot, `runtime.test.tsx`, `Shell.test.tsx`. The per-answer model
+   caption once planned here is not needed, the user decided.
 
 ## Spec sentences to change
 

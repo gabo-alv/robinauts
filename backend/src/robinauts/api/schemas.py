@@ -495,8 +495,8 @@ class NewChatRequest(BaseModel):
 
     ``model_id`` is optional: left out, or ``null``, the conversation starts on
     the agent's default (``AgentSummary.model``); named, on that model, which
-    has to be one ``GET /api/models`` lists -- one that is not is 404, like an
-    agent that is not there.
+    has to be one ``GET /api/models`` lists -- one that is not is 422
+    (``UnknownModelError``), where an agent that is not there is 404.
 
     Every bound is the record's own -- ``domain.MAX_CONFIG_ID_CHARS`` for an
     agent's or a model's id, ``domain.MAX_MESSAGE_CHARS`` for a message (every

@@ -34,6 +34,12 @@ import {
   useChosenAgent,
 } from "./AgentPicker";
 import { LocalModeBanner } from "./LocalModeBanner";
+import {
+  ConversationModel,
+  ModelPicker,
+  useChosenModel,
+  useModels,
+} from "./ModelPicker";
 import { PANEL_ID, Panel } from "./Panel";
 import { remember, remembered } from "./storage";
 
@@ -53,6 +59,82 @@ export function agentTitle(agents: Agents, id: string): string | null {
   if (agents.status === "loading") return null;
   if (agents.status === "failed") return id;
   return agents.items.find((agent) => agent.id === id)?.title ?? id;
+}
+
+/** What the shell holds about the conversation on the screen. */
+interface Opened {
+  id: string;
+  agent: string;
+  title: string | null;
+  model: string | null;
+  /** When it was last written to, as the answer said; `null` if unknown. */
+  updatedAt: string | null;
+}
+
+function openedFrom(conversation: Conversation): Opened {
+  return {
+    id: conversation.id,
+    agent: conversation.agent,
+    title: conversation.title,
+    model: conversation.model,
+    updatedAt: conversation.updated_at,
+  };
+}
+
+/**
+ * The later of two answers about the same conversation.
+ *
+ * Answers arrive in the order the network hands them over, not the order
+ * the server wrote them: a read of the conversation answered just before a
+ * model change was saved can land just after that change's own answer, and
+ * would put the old model back on the screen. Every write dates the
+ * conversation (`docs/specs/conversations.md`), so the one written later is
+ * the one to keep. A date nobody has -- a conversation this page has just
+ * started -- is older than any date an answer carries; a tie, or two with
+ * none, goes to what arrived last.
+ */
+function later(was: Opened | null, next: Opened): Opened {
+  if (was?.id !== next.id || was.updatedAt === null) return next;
+  if (next.updatedAt === null) return was;
+  return compareInstants(was.updatedAt, next.updatedAt) > 0 ? was : next;
+}
+
+/**
+ * Two of the server's instants in order, to the digit it wrote.
+ *
+ * `Date.parse` keeps milliseconds and the server writes microseconds, so a
+ * read and a change a few microseconds apart would be taken for a tie. The
+ * fraction is compared as digits beside the milliseconds the rest parses to.
+ */
+function compareInstants(a: string, b: string): number {
+  const [aMs, aFraction] = instant(a);
+  const [bMs, bFraction] = instant(b);
+  if (aMs !== bMs) return aMs < bMs ? -1 : 1;
+  return aFraction < bFraction ? -1 : aFraction > bFraction ? 1 : 0;
+}
+
+function instant(text: string): [number, string] {
+  const found = /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$/.exec(text);
+  if (found === null) return [Date.parse(text), ""];
+  const [, whole = "", fraction = "", zone = ""] = found;
+  return [Date.parse(whole + zone), fraction.padEnd(9, "0")];
+}
+
+/**
+ * What the shell holds about the conversation on the screen: the later of
+ * the panel's row and the chat's own read, by `updated_at` (`later`), the
+ * chat's on a tie.
+ *
+ * The model is changed here and not in the panel, so the chat's read -- or
+ * the change's own answer -- is usually the fresher; but not always: another
+ * tab may have moved it, and the panel's next page says so. A picker showing
+ * the older model would send nothing when the newer one's predecessor is
+ * picked, taking it to be current, and the next turn would run on the other.
+ */
+function freshest(listed: Opened | null, about: Opened | null): Opened | null {
+  if (listed === null) return about;
+  if (about === null) return listed;
+  return later(listed, about);
 }
 
 /** The rail, as this browser last left it. */
@@ -91,6 +173,31 @@ export function Shell({
   // conversation and the picker is what the chat draws above its box.
   const agents = useAgents();
   const [agentId, chooseAgent] = useChosenAgent(agents);
+  // The models likewise, and the one a first message runs on: the chosen
+  // agent's default until somebody picks another (`./ModelPicker.tsx`).
+  // Asked for again when the backend refuses a model the list offered: the
+  // list is stale, and a picker still offering that model would have every
+  // send refused for it until a reload.
+  const [modelsRound, setModelsRound] = useState(0);
+  const models = useModels(modelsRound);
+  const modelsStale = useCallback(() => {
+    setModelsRound((round) => round + 1);
+  }, []);
+  const agentDefault =
+    agents.status === "ready"
+      ? (agents.items.find((agent) => agent.id === agentId)?.model ?? null)
+      : null;
+  const [modelId, chooseModel, forgetChosenModel] = useChosenModel(
+    models,
+    agentDefault,
+  );
+  const forgetModel = useCallback(
+    (id: string) => {
+      forgetChosenModel(id);
+      modelsStale();
+    },
+    [forgetChosenModel, modelsStale],
+  );
   const opener = useRef<HTMLButtonElement>(null);
   const closer = useRef<HTMLButtonElement>(null);
 
@@ -126,44 +233,82 @@ export function Shell({
   // What the chat's own read said about the conversation on the screen,
   // which the panel's pages need not hold; the title is the panel's first,
   // since renaming happens there.
-  const [opened, setOpened] = useState<{
-    id: string;
-    agent: string;
-    title: string | null;
-  } | null>(null);
+  const [opened, setOpened] = useState<Opened | null>(null);
   const about = current !== null && opened?.id === current ? opened : null;
   const title = listed?.title ?? about?.title ?? null;
   const conversationAgent = listed?.agent ?? about?.agent ?? null;
   const withAgent =
     conversationAgent === null ? null : agentTitle(agents, conversationAgent);
+  // Held rather than made at every render: the React Compiler takes a
+  // value made from the panel's row by a call of ours for one that may be
+  // changed later, and then gives up on every callback below.
+  const listedAs = useMemo(
+    () => (listed === null ? null : openedFrom(listed)),
+    [listed],
+  );
+  const conversationModel =
+    freshest(listedAs, about)?.model ?? listed?.model ?? null;
   const conversationOpened = useCallback((conversation: Conversation) => {
-    setOpened({
-      id: conversation.id,
-      agent: conversation.agent,
-      title: conversation.title,
-    });
+    setOpened((was) => later(was, openedFrom(conversation)));
   }, []);
-  // Held across renders: the chat memoises what it is given, so that a
-  // keystroke in the message box does not remount the picker under it.
-  const welcome = useMemo(
-    () => (
+  // Which conversation is on the screen when an answer lands, which is not
+  // necessarily the one it was on when the render that asked was made.
+  const onScreen = useRef(current);
+  useEffect(() => {
+    onScreen.current = current;
+  }, [current]);
+  // A model change answers with the conversation as it left it, and dates
+  // it, which moves it in the panel's order: the list is asked for again, as
+  // after a rename.
+  //
+  // **The answer is what the shell holds about that conversation from then
+  // on**, whatever it held before: opened from the panel, the page may still
+  // hold the conversation it came from while the chat's read of this one is
+  // in the air, and that read -- answered before the change was saved --
+  // must then meet the change's answer and lose to it (`later`). It is never
+  // written over another conversation the page has moved on to.
+  const modelMoved = useCallback(
+    (moved: Conversation) => {
+      setOpened((was) =>
+        was?.id === moved.id
+          ? later(was, openedFrom(moved))
+          : moved.id === onScreen.current
+            ? openedFrom(moved)
+            : was,
+      );
+      history.refresh();
+    },
+    [history],
+  );
+  const welcome = (
+    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
       <AgentPicker agents={agents} chosen={agentId} onChoose={chooseAgent} />
-    ),
-    // `chooseAgent` is made afresh on every render and does the same thing
-    // each time; what the picker draws is the two values above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agents, agentId],
+      {/* Only once there is an agent to talk to: with none, the agent
+          picker's sentence is the whole of what there is to say. */}
+      {agentId !== null && (
+        <ModelPicker models={models} chosen={modelId} onChoose={chooseModel} />
+      )}
+    </div>
   );
   const startedConversation = useCallback(
     (id: string) => {
       navigate({ kind: "conversation", id });
       // A conversation that has just been created is not in the panel's
       // list, and its title is the beginning of the message that created it
-      // (`docs/specs/conversations.md`). Its agent is the one just chosen.
-      if (agentId !== null) setOpened({ id, agent: agentId, title: null });
+      // (`docs/specs/conversations.md`). Its agent and its model are the
+      // ones just chosen.
+      if (agentId !== null) {
+        setOpened({
+          id,
+          agent: agentId,
+          title: null,
+          model: modelId,
+          updatedAt: null,
+        });
+      }
       history.refresh();
     },
-    [history, agentId],
+    [history, agentId, modelId],
   );
 
   return (
@@ -231,23 +376,38 @@ export function Shell({
                 : shownTitle(title)
               : "New chat"}
           </h1>
-          {/* Who the conversation is with, under its title. The picker is
-              gone once a conversation exists (`./AgentPicker.tsx`), and
-              with it the only thing on the screen that said so; this is
+          {/* Who the conversation is with, under its title. The agent
+              picker is gone once a conversation exists (`./AgentPicker.tsx`),
+              and with it the only thing on the screen that said so; this is
               the fact it left behind, told as a line rather than a control
-              that could not be changed. */}
+              that could not be changed. The model is still a choice, so
+              beside it is the model picker (`./ModelPicker.tsx`). */}
           {withAgent !== null && (
-            <p
-              data-agent=""
-              className="mx-auto w-full max-w-3xl px-6 pt-1 text-sm text-muted-foreground"
-            >
-              with {withAgent}
-            </p>
+            <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-4 gap-y-1 px-6 pt-1">
+              <p data-agent="" className="text-sm text-muted-foreground">
+                with {withAgent}
+              </p>
+              {current !== null && conversationModel !== null && (
+                <ConversationModel
+                  key={current}
+                  models={models}
+                  conversationId={current}
+                  model={conversationModel}
+                  onMoved={modelMoved}
+                  onNotOffered={modelsStale}
+                />
+              )}
+            </div>
           )}
           <Chat
             key={chat}
             conversationId={current}
             agentId={agentId}
+            modelId={modelId}
+            // A first message refused for its model: this browser forgets
+            // it, whether or not the list has come, and asks for the list
+            // again, so the next one goes to a model still offered.
+            onModelRefused={forgetModel}
             onConversationStarted={startedConversation}
             onConversationOpened={conversationOpened}
             onTurnEnded={history.refresh}

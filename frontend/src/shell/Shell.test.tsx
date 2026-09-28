@@ -10,9 +10,10 @@ import {
 import { expect, test, vi } from "vitest";
 
 import type { Session } from "../session/session";
-import { json, stubFetch, type Call } from "../test/api";
+import { callsTo, json, refusal, stubFetch, type Call } from "../test/api";
 import { conversation, id, message, opened, page } from "../test/conversations";
 import { event, streamHeaders, streamed } from "../test/stream";
+import { NOT_OFFERED, unoffered } from "./ModelPicker";
 import { PANEL_KEY, Shell } from "./Shell";
 
 const RUN = "11111111-2222-4333-8444-555555555555";
@@ -25,7 +26,7 @@ const SESSION: Session = {
 };
 
 /**
- * One agent and no conversations. A test that is about the history or a
+ * One agent, two models and no conversations. A test that is about the history or a
  * conversation answers those calls itself and falls through to these for
  * the rest.
  */
@@ -38,7 +39,17 @@ function answering(
 function otherwise(call: Call): Response {
   if (call.url.startsWith("/api/agents")) {
     return json({
-      items: [{ id: "helper", title: "Helper", engine: "langgraph" }],
+      items: [
+        { id: "helper", title: "Helper", engine: "langgraph", model: "sonnet" },
+      ],
+    });
+  }
+  if (call.url.startsWith("/api/models")) {
+    return json({
+      items: [
+        { id: "sonnet", title: "Sonnet" },
+        { id: "opus", title: "Opus" },
+      ],
     });
   }
   return json(page([]));
@@ -527,4 +538,557 @@ test("deleting the conversation that is open leaves the page on the empty chat",
     );
   });
   expect(screen.getByText("No conversations yet.")).toBeVisible();
+});
+
+test("the empty chat has a model picker beside the agent's, on its default", async () => {
+  location.hash = "#/";
+  await shell();
+  expect(screen.getByLabelText("Agent")).toHaveValue("helper");
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+});
+
+test("picking a model on the empty chat leaves the focus on the picker", async () => {
+  // A keyboard arrows through a closed <select> one change at a time; a
+  // picker remounted by each of them would drop the focus to <body>.
+  location.hash = "#/";
+  await shell();
+  const picker = screen.getByLabelText("Model");
+  picker.focus();
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toBe(picker);
+  expect(picker).toHaveFocus();
+  expect(picker).toHaveValue("opus");
+});
+
+test("the model picked on the empty chat is the one the first message names", async () => {
+  const created = id(9);
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.url === "/api/turns") {
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/api/conversations/${created}`) {
+      return json(opened({ ...conversation(9, "Robins"), model: "opus" }, []));
+    }
+    return undefined;
+  });
+
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(callsTo(fetch, "/api/turns", "POST")[0]?.body).toEqual({
+    agent_id: "helper",
+    model_id: "opus",
+    text: "Why do robins sing?",
+  });
+  // The conversation it made shows the same model on its line.
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+test("an open conversation's line has its model, and a change is a PUT", async () => {
+  location.hash = `#/c/${id(1)}`;
+  let model = "sonnet";
+  const { fetch } = await shell(undefined, (call) => {
+    if (
+      call.method === "PUT" &&
+      call.url === `/api/conversations/${id(1)}/model`
+    ) {
+      model = (call.body as { model_id: string }).model_id;
+      return json({ ...conversation(1, "Robins"), model });
+    }
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(opened({ ...conversation(1, "Robins"), model }, []));
+    }
+    if (call.url.startsWith("/api/conversations?")) {
+      return json(page([{ ...conversation(1, "Robins"), model }]));
+    }
+    return undefined;
+  });
+
+  const picker = await screen.findByLabelText("Model");
+  expect(picker).toHaveValue("sonnet");
+  const listings = callsTo(fetch, "/api/conversations").length;
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(
+    callsTo(fetch, `/api/conversations/${id(1)}/model`, "PUT").map(
+      (call) => call.body,
+    ),
+  ).toEqual([{ model_id: "opus" }]);
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  // A change dates the conversation, so the panel's list is asked for again.
+  await waitFor(() => {
+    expect(callsTo(fetch, "/api/conversations").length).toBe(listings + 1);
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a change that is refused is said, and the picker goes back", async () => {
+  location.hash = `#/c/${id(1)}`;
+  let answer = () =>
+    refusal(422, "UnknownModelError", "body.model_id: is not a model");
+  await shell(undefined, (call) => {
+    if (call.method === "PUT") return answer();
+    return withConversation(call);
+  });
+
+  const picker = await screen.findByLabelText("Model");
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent(NOT_OFFERED);
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+
+  // Anything else is the backend's own sentence, as a rename's is.
+  answer = () =>
+    refusal(404, "NotFoundError", "there is nothing here of that id");
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "opus" },
+    });
+    await settled();
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "there is nothing here of that id",
+  );
+});
+
+test("a model no longer offered is shown, and a turn refused for it says why", async () => {
+  location.hash = `#/c/${id(1)}`;
+  const retired = { ...conversation(1, "Robins"), model: "retired" };
+  await shell(undefined, (call) => {
+    if (call.url === `/api/conversations/${id(1)}/turns`) {
+      return refusal(409, "ModelNotOfferedError", "the model is gone");
+    }
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(
+        opened(retired, [
+          message("m1", "user", "Why do robins sing?"),
+          message("m2", "assistant", "Because it is quiet."),
+        ]),
+      );
+    }
+    if (call.url.startsWith("/api/conversations?")) {
+      return json(page([retired]));
+    }
+    return undefined;
+  });
+
+  const picker = await screen.findByLabelText("Model");
+  expect(picker).toHaveValue("retired");
+  expect(
+    screen.getByRole("option", { name: unoffered("retired") }),
+  ).toBeDisabled();
+
+  await waitFor(() => {
+    expect(screen.getByText("Because it is quiet.")).toBeInTheDocument();
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "And at night?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  // The chat's own sentence for it (`src/chat/assistant-ui/runtime.tsx`),
+  // and what was written is back in the box to send once another is picked.
+  expect(screen.getByRole("status")).toHaveTextContent(
+    /model is no longer offered/,
+  );
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "And at night?",
+  );
+});
+
+test("a read answered before a model change cannot put the old model back", async () => {
+  location.hash = `#/c/${id(1)}`;
+  let model = "sonnet";
+  const before = { ...conversation(1, "Robins"), model: "sonnet" };
+  // The chat's read of the conversation is held until the change is saved,
+  // and then answered with what was true before it: the network's order,
+  // not the server's.
+  let answerRead: (response: Response) => void = () => undefined;
+  const read = new Promise<Response>((done) => {
+    answerRead = done;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>((input, init) => {
+      const url = String(input);
+      if (url === `/api/conversations/${id(1)}`) return read;
+      if (init?.method === "PUT") {
+        model = (JSON.parse(String(init.body)) as { model_id: string })
+          .model_id;
+        return Promise.resolve(
+          json({ ...before, model, updated_at: "2026-09-03T10:00:00Z" }),
+        );
+      }
+      if (url.startsWith("/api/conversations?")) {
+        return Promise.resolve(json(page([{ ...before, model }])));
+      }
+      return Promise.resolve(
+        otherwise({ url, method: "GET", body: undefined }),
+      );
+    }),
+  );
+  render(<Shell session={SESSION} />);
+
+  const picker = await screen.findByLabelText("Model");
+  expect(picker).toHaveValue("sonnet");
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+
+  await act(async () => {
+    answerRead(json(opened(before, [])));
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+test("a model moved from another tab is the one shown, and picking the old one is sent", async () => {
+  // The chat read the conversation on "sonnet"; the panel's page, written
+  // later, has it on "opus". The later one is what the picker shows, so
+  // picking "sonnet" again is a change and is sent.
+  location.hash = `#/c/${id(1)}`;
+  const read = { ...conversation(1, "Robins"), model: "sonnet" };
+  const moved = {
+    ...read,
+    model: "opus",
+    updated_at: "2026-09-03T10:00:00Z",
+  };
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.method === "PUT") {
+      return json({ ...read, updated_at: "2026-09-04T10:00:00Z" });
+    }
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(opened(read, []));
+    }
+    if (call.url.startsWith("/api/conversations?")) {
+      return json(page([moved]));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "sonnet" },
+    });
+    await settled();
+  });
+  expect(
+    callsTo(fetch, `/api/conversations/${id(1)}/model`, "PUT").map(
+      (call) => call.body,
+    ),
+  ).toEqual([{ model_id: "sonnet" }]);
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+});
+
+test("answers written in the same millisecond are ordered by their microseconds", async () => {
+  // The chat's read and the panel's row fall in one millisecond; the row,
+  // on "opus", is the later by 800 microseconds, and is what the picker shows.
+  location.hash = `#/c/${id(1)}`;
+  const read = {
+    ...conversation(1, "Robins"),
+    model: "sonnet",
+    updated_at: "2026-09-03T10:00:00.000100Z",
+  };
+  const moved = {
+    ...read,
+    model: "opus",
+    updated_at: "2026-09-03T10:00:00.000900Z",
+  };
+  await shell(undefined, (call) => {
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(opened(read, []));
+    }
+    if (call.url.startsWith("/api/conversations?")) {
+      return json(page([moved]));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+});
+
+test("without the list of models, the line still says which model it is on", async () => {
+  location.hash = `#/c/${id(1)}`;
+  await shell(undefined, (call) => {
+    if (call.url.startsWith("/api/models")) {
+      return refusal(500, "InternalError", "something went wrong");
+    }
+    return withConversation(call);
+  });
+
+  await waitFor(() => {
+    expect(screen.getByText("sonnet")).toBeInTheDocument();
+  });
+  expect(screen.queryByLabelText("Model")).toBeNull();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    /models could not be loaded/,
+  );
+});
+
+test("a model changed on a conversation opened from the panel stays changed", async () => {
+  // On one conversation, open another from the panel, and change its model
+  // before the chat's read of it has landed: what the shell holds is still
+  // the conversation it came from. The panel's page, asked again, is no
+  // help either -- here it was read before the change was saved.
+  location.hash = `#/c/${id(2)}`;
+  const first = { ...conversation(1, "Robins"), model: "sonnet" };
+  const second = { ...conversation(2, "Wrens"), model: "sonnet" };
+  let answerRead: (response: Response) => void = () => undefined;
+  const read = new Promise<Response>((done) => {
+    answerRead = done;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>((input, init) => {
+      const url = String(input);
+      if (url === `/api/conversations/${id(1)}`) return read;
+      if (url === `/api/conversations/${id(2)}`) {
+        return Promise.resolve(json(opened(second, [])));
+      }
+      if (init?.method === "PUT") {
+        const model = (JSON.parse(String(init.body)) as { model_id: string })
+          .model_id;
+        return Promise.resolve(
+          json({ ...first, model, updated_at: "2026-09-03T10:00:00Z" }),
+        );
+      }
+      if (url.startsWith("/api/conversations?")) {
+        return Promise.resolve(json(page([first, second])));
+      }
+      return Promise.resolve(
+        otherwise({ url, method: "GET", body: undefined }),
+      );
+    }),
+  );
+  render(<Shell session={SESSION} />);
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Wrens",
+    );
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("link", { name: "Robins" }));
+    await settled();
+  });
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Robins",
+    );
+  });
+
+  const picker = screen.getByLabelText("Model");
+  expect(picker).toHaveValue("sonnet");
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  // The change's answer is what the shell now holds about this one.
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+
+  // And the read answered before the change was saved does not undo it.
+  await act(async () => {
+    answerRead(json(opened(first, [])));
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+test("without the list, a remembered model is still the one a first message names", async () => {
+  location.hash = "#/";
+  localStorage.setItem("robinauts.model", "retired");
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.url.startsWith("/api/models")) {
+      return refusal(500, "InternalError", "something went wrong");
+    }
+    if (call.url === "/api/turns") {
+      return refusal(422, "UnknownModelError", "body.model_id: is not a model");
+    }
+    return undefined;
+  });
+
+  const send = async () => {
+    const box = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      await settled();
+    });
+  };
+  await send();
+  expect(callsTo(fetch, "/api/turns", "POST")[0]?.body).toMatchObject({
+    model_id: "retired",
+  });
+  // Refused for it: said, the message is back, and the model is forgotten,
+  // so the next one goes to the agent's default.
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBeNull();
+  await send();
+  expect(callsTo(fetch, "/api/turns", "POST")[1]?.body).toMatchObject({
+    model_id: null,
+  });
+});
+
+test("a first message refused for the agent's default asks for the models again", async () => {
+  // The agent's default, "sonnet", has been removed since the list came:
+  // the refusal asks for the list again, which no longer has it, so the
+  // next message goes to a model still offered.
+  location.hash = "#/";
+  const created = id(9);
+  let lists = 0;
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.url.startsWith("/api/models")) {
+      lists += 1;
+      return lists === 1
+        ? undefined
+        : json({ items: [{ id: "opus", title: "Opus" }] });
+    }
+    if (call.url === "/api/turns") {
+      const asked = (call.body as { model_id: string }).model_id;
+      if (asked === "sonnet") {
+        return refusal(
+          422,
+          "UnknownModelError",
+          "body.model_id: is not a model",
+        );
+      }
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return undefined;
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(
+    callsTo(fetch, "/api/turns", "POST").map(
+      (call) => (call.body as { model_id: string }).model_id,
+    ),
+  ).toEqual(["sonnet", "opus"]);
+});
+
+test("with the list in hand, a first message refused for its model forgets the pick", async () => {
+  // Picked from a list that has gone stale since: the next message goes to
+  // the agent's default, and is not refused for the same model again.
+  location.hash = "#/";
+  const created = id(9);
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.url === "/api/turns") {
+      const asked = (call.body as { model_id: string }).model_id;
+      if (asked === "opus") {
+        return refusal(
+          422,
+          "UnknownModelError",
+          "body.model_id: is not a model",
+        );
+      }
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return undefined;
+  });
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const send = async () => {
+    const box = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      await settled();
+    });
+  };
+  await send();
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBeNull();
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(
+    callsTo(fetch, "/api/turns", "POST").map(
+      (call) => (call.body as { model_id: string }).model_id,
+    ),
+  ).toEqual(["opus", "sonnet"]);
+  expect(location.hash).toBe(`#/c/${created}`);
+});
+
+test("a first message refused as not there keeps the text and the pick", async () => {
+  // The agent, and not the model: nothing to forget.
+  location.hash = "#/";
+  await shell(undefined, (call) =>
+    call.url === "/api/turns"
+      ? refusal(404, "NotFoundError", "there is nothing here of that id")
+      : undefined,
+  );
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(
+    /agent it was for is no longer offered/,
+  );
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBe("opus");
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
 });

@@ -51,7 +51,14 @@ import {
 } from "@assistant-ui/react";
 import { useEffect, useMemo, useReducer, useState } from "react";
 
-import { ApiError, detailOf, request } from "../../api/client";
+import {
+  ApiError,
+  detailOf,
+  isRefusal,
+  MODEL_NOT_OFFERED,
+  request,
+  UNKNOWN_MODEL,
+} from "../../api/client";
 import { cancelRun } from "../../conversation/conversation";
 import type { ChatProps } from "../index";
 import {
@@ -84,6 +91,39 @@ export const STILL_ANSWERING =
   "This conversation is still answering. Stop that answer before sending another.";
 
 /**
+ * What a turn refused in a conversation whose model has gone is told
+ * (`MODEL_NOT_OFFERED`).
+ *
+ * Still true once another model has been picked: it is about the turn that
+ * was refused, and it stays until the next one, as every refusal does.
+ */
+export const MODEL_GONE =
+  "This conversation's model is no longer offered here, so the turn was refused. Pick another model above and try again.";
+
+/**
+ * What a first message refused for its model is told (`UNKNOWN_MODEL`).
+ *
+ * The model is one the page picked from a list that has gone stale, or one
+ * this browser remembered before the list came. The shell forgets it
+ * (`onModelRefused`), but a list gone stale may offer it again under another
+ * name -- the agent's default, say -- so what is promised is a pick or a
+ * reload, which are always true.
+ */
+export const MODEL_GONE_NEW_CHAT =
+  "This chat was not started: the model it was for is no longer offered here. Pick another model above, or reload the page.";
+
+/**
+ * What a first message refused as not there is told.
+ *
+ * On a new chat there is no conversation to be missing, and the backend
+ * looks for the agent before anything else (`docs/specs/wire.md`): a 404 is
+ * the agent, gone from a list this page fetched before the operator changed
+ * it.
+ */
+export const AGENT_GONE =
+  "This chat was not started: the agent it was for is no longer offered here. Pick another agent above, or reload the page.";
+
+/**
  * What is said when the answer could not be followed to its end.
  *
  * One sentence for every way a **watch** ends badly -- a connection nobody
@@ -98,16 +138,27 @@ export const LOST_TOUCH =
 /**
  * The sentence for a refusal, in the chat's own words where it has any.
  *
- * A 409 is the one refusal a person causes by doing something reasonable, and
- * the backend's own detail for it names a run and a conversation by id, for
- * an operator's log (`api/errors.py`). Everything else is the backend's
- * sentence, which is already written for a reader.
+ * A model that is not offered is told as what to do about it. A conversation
+ * already answering is the one refusal a person causes by doing something
+ * reasonable, and the backend's own detail for it names a run and a
+ * conversation by id, for an operator's log (`api/errors.py`); it shares its
+ * 409 with the model's, so the name is what is read. Everything else is the
+ * backend's sentence, which is already written for a reader.
  */
 function said(failure: unknown): string {
+  if (isRefusal(failure, MODEL_NOT_OFFERED)) return MODEL_GONE;
+  if (isRefusal(failure, UNKNOWN_MODEL)) return MODEL_GONE_NEW_CHAT;
   if (failure instanceof ApiError && failure.status === 409) {
     return STILL_ANSWERING;
   }
   return detailOf(failure);
+}
+
+/** Whether a turn was refused for its model, which is to be picked again. */
+function forItsModel(failure: unknown): boolean {
+  return (
+    isRefusal(failure, MODEL_NOT_OFFERED) || isRefusal(failure, UNKNOWN_MODEL)
+  );
 }
 
 /** What the component below gets back. */
@@ -204,6 +255,32 @@ export function useChat(props: ChatProps): Chatting {
   useEffect(() => {
     const wanted = turns.saying();
     if (wanted === null) return;
+    const editing = wanted.editing;
+    // Only while that message is still in the thread: a read landing in
+    // between may have taken it off, and asking the runtime for a message it
+    // does not hold throws -- which would put the error boundary in place of
+    // the chat. The text then goes to the main box, which is still somewhere.
+    const held = runtime.thread
+      .getState()
+      .messages.some((message) => message.id === editing);
+    if (editing !== null && held) {
+      // An edit goes back into its own box, open on the message it was
+      // editing -- which the refusal has just put back on the screen -- so
+      // that sending it again is still an edit and not a new message at
+      // the end of the thread. If that box has been opened again since, the
+      // text goes into it only while it is empty, and otherwise on to the
+      // main box below: `saying` has handed it over, and it is not dropped.
+      const edit = runtime.thread.getMessageById(editing).composer;
+      if (!edit.getState().isEditing) {
+        edit.beginEdit();
+        edit.setText(wanted.text);
+        return;
+      }
+      if (edit.getState().text === "") {
+        edit.setText(wanted.text);
+        return;
+      }
+    }
     const box = runtime.thread.composer;
     if (box.getState().text === "") box.setText(wanted.text);
   });
@@ -239,9 +316,10 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
    *
    * The box empties itself when it hands a message over, so a turn refused
    * here for being a second one leaves nothing behind at all. The text goes
-   * back, and a notice says why (`ONE_AT_A_TIME`).
+   * back, and a notice says why (`ONE_AT_A_TIME`). `editing` is the message
+   * an edit was of, whose own box it goes back into; `null` is the main one.
    */
-  type Wanted = { text: string };
+  type Wanted = { text: string; editing: string | null };
   let wanted: Wanted | null = null;
 
   /** What the box must be made to say, once. */
@@ -283,11 +361,12 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
    * (`ONE_AT_A_TIME`). `told` changes nothing else: the turn that *is* on its
    * way keeps its question, its run and its stream.
    */
-  function told(text: string): void {
+  function told(text: string, editing: string | null = null): void {
     dispatch({ kind: "told", detail: ONE_AT_A_TIME });
     // The box cleared itself when it handed this over, so without this the
-    // message is gone and the notice is all there is.
-    if (text !== "") wanted = { text };
+    // message is gone and the notice is all there is. An edit goes back into
+    // its own box, so that sending it again still replaces that message.
+    if (text !== "") wanted = { text, editing };
   }
 
   /**
@@ -385,7 +464,25 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
    */
   function follow(
     start: (signal: AbortSignal) => Promise<Attached>,
-    { watch = false, afterLoss = false } = {},
+    {
+      watch = false,
+      afterLoss = false,
+      text = "",
+      editing = null,
+      newChat = false,
+      modelRefused,
+    }: {
+      watch?: boolean;
+      afterLoss?: boolean;
+      /** What was written, to put back if the turn is refused for its model. */
+      text?: string;
+      /** The message an edit was of, whose box that goes back into. */
+      editing?: string | null;
+      /** A first message, where a 404 can only be about the agent. */
+      newChat?: boolean;
+      /** What else a refusal for the model calls for. */
+      modelRefused?: () => void;
+    } = {},
   ): Promise<void> {
     const control = new AbortController();
     starting.add(control);
@@ -410,11 +507,32 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       (failure: unknown) => {
         starting.delete(control);
         if (control.signal.aborted) return;
-        dispatch(
-          watch
-            ? { kind: "lost", detail: LOST_TOUCH }
-            : { kind: "refused", detail: said(failure) },
-        );
+        if (watch) {
+          dispatch({ kind: "lost", detail: LOST_TOUCH });
+          return;
+        }
+        const agentGone =
+          newChat && failure instanceof ApiError && failure.status === 404;
+        dispatch({
+          kind: "refused",
+          detail: agentGone ? AGENT_GONE : said(failure),
+        });
+        const forModel = forItsModel(failure);
+        // An edit the conversation refused for answering already (409): the
+        // person is told to stop that answer and send again, and an edit
+        // sent again from the main box would be a new message instead.
+        const editWhileAnswering =
+          editing !== null &&
+          failure instanceof ApiError &&
+          failure.status === 409;
+        if (!forModel && !agentGone && !editWhileAnswering) return;
+        // **Refused for its model or its agent, the message goes back in its
+        // box**: what the person is told to do is pick another and send
+        // again, and the box emptied itself when it handed the message over
+        // -- or, for an edit, the edit box closed. Only then: any other
+        // refusal is left as it always was.
+        if (text !== "") wanted = { text, editing };
+        if (forModel) modelRefused?.();
       },
     );
   }
@@ -475,31 +593,46 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
     const conversationId = state.conversationId;
     if (conversationId !== null) {
-      await follow((signal) =>
-        startTurn(conversationId, { text, parentId }, { signal }),
+      await follow(
+        (signal) => startTurn(conversationId, { text, parentId }, { signal }),
+        { text },
       );
       return;
     }
-    const agentId = props.agentId;
+    const { agentId, modelId } = props;
     if (agentId === null) {
       dispatch({ kind: "lost", detail: NO_AGENT });
       return;
     }
-    await follow(async (signal) => {
-      const attached = await startNewConversation(agentId, text, { signal });
-      // **Only if this page is still the empty chat.** Somebody who opened
-      // another conversation while the request was in the air is not to be
-      // taken to this one instead, and claiming it as ours would stop the
-      // conversation they *did* open from being read at all. The
-      // conversation exists either way; the panel's next refresh lists it.
-      if (signal.aborted) return attached;
-      // The interface has one to be on now: a route to go to and a row for
-      // the panel. What to do about it is the application's
-      // (`src/chat/index.ts`).
-      ours = attached.conversationId;
-      props.onConversationStarted(attached.conversationId);
-      return attached;
-    });
+    await follow(
+      async (signal) => {
+        // The model goes with the first message and never again: every later
+        // turn runs on the conversation's, which the server reads.
+        const attached = await startNewConversation(agentId, modelId, text, {
+          signal,
+        });
+        // **Only if this page is still the empty chat.** Somebody who opened
+        // another conversation while the request was in the air is not to be
+        // taken to this one instead, and claiming it as ours would stop the
+        // conversation they *did* open from being read at all. The
+        // conversation exists either way; the panel's next refresh lists it.
+        if (signal.aborted) return attached;
+        // The interface has one to be on now: a route to go to and a row for
+        // the panel. What to do about it is the application's
+        // (`src/chat/index.ts`).
+        ours = attached.conversationId;
+        props.onConversationStarted(attached.conversationId);
+        return attached;
+      },
+      {
+        text,
+        newChat: true,
+        // The shell holds the choice, and forgets it (`onModelRefused`).
+        modelRefused: () => {
+          if (modelId !== null) props.onModelRefused?.(modelId);
+        },
+      },
+    );
   }
 
   async function onEdit(message: AppendMessage): Promise<void> {
@@ -518,10 +651,14 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // it. The Thread hides the edit button while a run is going, so this is
     // reachable only by driving the runtime directly.
     if (isUnsent(parentId)) return;
-    if (busy()) return told(text);
+    if (busy()) return told(text, message.sourceId);
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
-    await follow((signal) =>
-      startTurn(conversationId, { text, parentId }, { signal }),
+    // Refused for its model, or because the conversation is answering, the
+    // edited text comes back in the edit box of the message it was of
+    // (`follow`).
+    await follow(
+      (signal) => startTurn(conversationId, { text, parentId }, { signal }),
+      { text, editing: message.sourceId },
     );
   }
 

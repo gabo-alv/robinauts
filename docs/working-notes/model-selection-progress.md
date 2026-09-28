@@ -9,9 +9,11 @@ selection adds to it.
 ## What exists
 
 - `ModelConfig.title` (optional in `[models.*]`, the id when absent) and
-  `ModelsConfig.model_by_id`, which raises `UnknownModelError` (a
-  `NotFoundError`, 404, like `UnknownAgentError`) for a model the
-  deployment does not offer.
+  `ModelsConfig.model_by_id`, which raises `UnknownModelError` for a model
+  the deployment does not offer. Since step 7 it is not a `NotFoundError`:
+  422 for a model a request names (a new chat, the `PUT`), and its subclass
+  `ModelNotOfferedError` is 409 for a conversation's own model at its next
+  turn, checked after the owner. Both bodies are fixed sentences.
 - `Conversation.model`, required: the agent's default is copied in when a
   conversation starts (`Turns._new_chat`). Stored in
   `conversations.model text NOT NULL`; `SCHEMA_VERSION` stays 1 and
@@ -31,10 +33,32 @@ selection adds to it.
 - API: `GET /api/models` (`{items: [{id, title}]}`, configuration order,
   beside `/api/agents` in `api/agent_routes.py`); `PUT
   /api/conversations/{id}/model` with `{"model_id"}`, answering the
-  `ConversationSummary` like the rename, 422 `NOT_OFFERED` for a model not
-  offered (checked before the conversation, so it says nothing about it);
+  `ConversationSummary` like the rename, 422 `UnknownModelError` for a
+  model not offered (checked before the conversation, so it says nothing about it);
   `NewChatRequest.model_id` (absent or null is the agent's default, unknown
-  is 404); `ConversationSummary.model`; `AgentSummary.model`.
+  is 422); `ConversationSummary.model`; `AgentSummary.model`.
+- Frontend: `shell/ModelPicker.tsx` (`useModels`, `useChosenModel`, the
+  `ModelPicker` select, `ConversationModel` which makes the PUT) and
+  `shell/offered.ts` (`useOffered`, the fetch-once hook `useAgents` shares).
+  The empty chat's model sits beside the agent; it follows the agent's
+  default until picked, then is remembered (storage key `model`). The open
+  conversation's model sits on the "with <agent>" line; changes are
+  sent last-wins and the shell keeps the later of the PUT's answer and the
+  chat's reads by `updated_at`. `ChatProps.modelId` and `onModelRefused`
+  (the shell forgets a refused model). The chat branches on the error's
+  name: a 409 `ModelNotOfferedError` or a new chat's 422 says the model is
+  no longer offered and puts the text back (an edit's into its edit box); a
+  new chat's 404 is its agent, and also puts the text back. The empty
+  chat's pickers live in a `WelcomeSlot` context so a pick keeps focus.
+  `scripts/fixture-server.mjs` serves the models (scene `conversation` has
+  a retired one) but still speaks the pre-#18 branch API.
+- Demo: `demo/robinauts.toml.in` declares three models through the one
+  provider, ids and titles filled in by `demo/start.sh` per provider kind
+  (OpenRouter: `claude-sonnet-5`, `gpt-5-5`, `gemini-3-8-flash`; Anthropic:
+  `claude-sonnet-5`, `claude-opus-5-5`, `claude-haiku-4-5`), overridable by
+  `ROBINAUTS_DEMO_MODEL`, `_2`, `_3` (an override keeps the default's id).
+  `demo/config.py` takes `--model ID NAME TITLE` three times and checks what
+  it wrote.
 
 ## Steps
 
@@ -123,4 +147,79 @@ eslint, build) passed; full suite against a throwaway Postgres 2967 passed
 Not done / to watch: for step 5, a turn in a conversation whose model was
 removed is the same 404 as a missing conversation while opening it is 200;
 the frontend explains it by comparing the conversation's `model` with
-`GET /api/models`. Step 5 still starts by bringing 3e02925 across.
+`GET /api/models`.
+
+### Step 5 — frontend   (feature/model-selection-5-frontend)
+
+Summary: the model picker beside the agent picker on the empty chat and on
+the agent line of an open conversation; `model_id` on the first message
+only; `PUT` on change, last-wins while one is in flight; a conversation on a
+model no longer offered shows it marked, explains a refused turn and keeps
+the typed text. frontend.md, the README and the fixture server follow. The
+3e02925 agent picker was already on main (#16).
+
+Review: 4 rounds.
+- High: 0
+- Medium: 3 (3/0)
+- Low: 17 (12/5) — left: every 422 on the PUT read as "not offered" (no
+  other 422 can happen today); the chat's read preferred over a newer panel
+  row for the model across tabs; a "model gone" sentence kept after a
+  change that lands before the turn's 404.
+
+Checks: frontend check (prettier, eslint, tsc, 406 tests, build, audit);
+screenshots through the fixture server with Playwright at 1280 and 390
+wide.
+Not done / to watch: the backend answers the same 404 for a removed agent
+and a removed model on a new chat, so the first-message sentence names
+both. The fixture server's branch fixtures still show a discarded answer.
+
+### Step 6 — demo   (feature/model-selection-6-demo)
+
+Summary: three models in the demo configuration, chosen by provider kind,
+each with an id naming its default model and a title; both agents default
+to Claude Sonnet 5. `config.py` refuses blank or over-long values and
+placeholder-like input, and a template placeholder nothing fills. The
+README says what the ids record, and that an override keeps the default's
+id.
+
+Review: 2 rounds.
+- High: 0
+- Medium: 2 (2/0)
+- Low: 7 (3/4) — left: an argparse usage dump for a name starting with
+  `-`, and an unchecked `--provider-id` (both older than this step, and
+  `start.sh` passes only constants); OpenRouter serving GPT and Gemini
+  through its Messages API, unverified; the progress entry (this one).
+
+Checks: lint; unit suite 2764 passed; the template rendered for both kinds
+and parsed by the backend's loader, `GET /api/models` served through
+`create_app` in the local mode.
+Not done / to watch: no real model call was made. That GPT-5.5 and Gemini
+3.8 Flash answer through OpenRouter's Messages API, and the Anthropic ids
+`claude-opus-5-5` and `claude-haiku-4-5`, are to be confirmed with a key.
+
+### Step 7 — a model not offered has its own error   (feature/model-selection-7-model-not-offered)
+
+Summary: replaces the plan's optional per-answer caption, which was judged
+not needed. After an external review of #21, a model not offered stops
+being a 404: `UnknownModelError` is 422 for a model a request names and
+`ModelNotOfferedError` 409 for a conversation's model at its next turn,
+both checked after the owner, so a stranger still gets the plain 404. The
+frontend branches on the code, which removed the three-state `modelGone`,
+the guessed sentences and the `unsaid` action. The same review's other
+items: a refused edit goes back into its edit box, a model pick on the
+empty chat keeps the keyboard focus, the fixture server checks the scene's
+agents and answers the new codes, and `isOffered` is the one check. Specs:
+agents.md, wire.md, frontend.md, deployment.md; decision 3 of the plan.
+
+Review: 1 round.
+- High: 0
+- Medium: 1 (1/0)
+- Low: 3 (3/0)
+
+Checks: lint; unit suite 2770 passed; full suite against a throwaway
+Postgres 2975 passed (before the frontend-only fixes); frontend check (407
+tests, tsc, eslint, build, audit); screenshots through the fixture server.
+Not done / to watch: a refusal's sentence stays until the next turn, even
+after the model is switched; with the model list failed it still says to
+pick another model above; text put back carries over to the empty chat
+when `#/` is reached by a hash change rather than "New chat" (older).

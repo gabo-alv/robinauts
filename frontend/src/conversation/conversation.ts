@@ -8,7 +8,8 @@
  * (`docs/specs/conversations.md`, "The visible thread"): the one thread it
  * shows, oldest first, and the run in flight or the way the last one ended.
  * The chat is what reads it (`src/chat/assistant-ui/runtime.tsx`); what is
- * here is the shapes, the title rule, and the one call that is not a turn.
+ * here is the shapes, the title rule, and the two calls about a conversation
+ * that are neither a turn nor the panel's.
  */
 import { request } from "../api/client";
 import type { components } from "../api/schema";
@@ -52,4 +53,20 @@ export async function cancelRun(
     "/api/conversations/{conversation_id}/runs/{run_id}/cancel",
     { path: { conversation_id: id, run_id: runId } },
   );
+}
+
+/**
+ * Move it to another model; the conversation as it then is.
+ *
+ * Its next turn runs on that model (`docs/specs/agents.md`). A run in flight
+ * is no reason to refuse: it keeps the model it started with.
+ */
+export async function setModel(
+  id: ConversationId,
+  modelId: string,
+): Promise<Conversation> {
+  return request("put", "/api/conversations/{conversation_id}/model", {
+    path: { conversation_id: id },
+    body: { model_id: modelId },
+  });
 }

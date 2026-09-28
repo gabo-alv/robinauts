@@ -65,14 +65,17 @@ test("a new conversation: what is posted, and what comes back", async () => {
         { headers: streamHeaders(RUN, CONVERSATION) },
       ),
   ]);
-  const attached = await startNewConversation("helper", "hello");
+  const attached = await startNewConversation("helper", "opus", "hello");
   expect(attached.runId).toBe(RUN);
   expect(attached.conversationId).toBe(CONVERSATION);
   const [url, init] = fetch.mock.calls[0] ?? [];
   expect(url).toBe("/api/turns");
   expect(init?.method).toBe("POST");
+  // The model goes with the first message; `null` would be the agent's
+  // default, which the backend copies in (`docs/specs/wire.md`).
   expect(JSON.parse(String(init?.body))).toEqual({
     agent_id: "helper",
+    model_id: "opus",
     text: "hello",
   });
   const seen = await all(attached);
@@ -83,6 +86,19 @@ test("a new conversation: what is posted, and what comes back", async () => {
     "RUN_FINISHED",
   ]);
   expect(seen.map((each) => each.position)).toEqual([1, 2, 3, 9]);
+});
+
+test("no model chosen is said as null: the agent's default", async () => {
+  const fetch = answering([
+    () =>
+      streamed([finished(9)], { headers: streamHeaders(RUN, CONVERSATION) }),
+  ]);
+  await startNewConversation("helper", null, "hello");
+  expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+    agent_id: "helper",
+    model_id: null,
+    text: "hello",
+  });
 });
 
 test("the two shapes of a turn in a conversation that exists", async () => {
@@ -97,6 +113,8 @@ test("the two shapes of a turn in a conversation that exists", async () => {
   expect(fetch.mock.calls[0]?.[0]).toBe(
     `/api/conversations/${CONVERSATION}/turns`,
   );
+  // Neither names a model: a turn runs on the conversation's, which the
+  // server reads (`docs/specs/wire.md`).
   expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
     text: "more",
     parent_id: "m",
@@ -126,9 +144,9 @@ test("a refusal comes before the stream, and is an ApiError", async () => {
 
 test("an answer that is not one of our streams is refused too", async () => {
   answering([() => streamed(["hello"], { headers: {} })]);
-  await expect(startNewConversation("helper", "x")).rejects.toBeInstanceOf(
-    ApiError,
-  );
+  await expect(
+    startNewConversation("helper", null, "x"),
+  ).rejects.toBeInstanceOf(ApiError);
 });
 
 test("the two ids a stream names itself by are uuids or it is not ours", async () => {
@@ -146,7 +164,7 @@ test("the two ids a stream names itself by are uuids or it is not ours", async (
           headers: streamHeaders(run ?? "", conversation ?? ""),
         }),
     ]);
-    const refusedBy = await startNewConversation("helper", "x").catch(
+    const refusedBy = await startNewConversation("helper", null, "x").catch(
       (failure: unknown) => failure,
     );
     expect(refusedBy).toBeInstanceOf(ApiError);
@@ -175,7 +193,7 @@ test("a dropped connection is picked up with Last-Event-ID", async () => {
         { headers: streamHeaders(RUN, CONVERSATION) },
       ),
   ]);
-  const attached = await startNewConversation("helper", "x", at_once);
+  const attached = await startNewConversation("helper", null, "x", at_once);
   const seen = await all(attached);
   expect(seen.map((each) => each.event.type)).toEqual([
     "TEXT_MESSAGE_START",
@@ -205,7 +223,9 @@ test("the position to carry on from is the last one the backend numbered", async
     () =>
       streamed([finished(9)], { headers: streamHeaders(RUN, CONVERSATION) }),
   ]);
-  const seen = await all(await startNewConversation("helper", "x", at_once));
+  const seen = await all(
+    await startNewConversation("helper", null, "x", at_once),
+  );
   expect(seen.map((each) => each.position)).toEqual([5, null, 9]);
   expect(
     (fetch.mock.calls[1]?.[1]?.headers as Record<string, string>)[
@@ -219,7 +239,7 @@ test("a terminal event stops it: no stream is opened again", async () => {
     () =>
       streamed([finished(9)], { headers: streamHeaders(RUN, CONVERSATION) }),
   ]);
-  await all(await startNewConversation("helper", "x", at_once));
+  await all(await startNewConversation("helper", null, "x", at_once));
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
@@ -230,7 +250,9 @@ test("a run that ended in an error is an ending too", async () => {
         headers: streamHeaders(RUN, CONVERSATION),
       }),
   ]);
-  const seen = await all(await startNewConversation("helper", "x", at_once));
+  const seen = await all(
+    await startNewConversation("helper", null, "x", at_once),
+  );
   expect(seen.map((each) => each.event.type)).toEqual(["RUN_ERROR"]);
   expect(fetch).toHaveBeenCalledTimes(1);
 });
@@ -239,7 +261,7 @@ test("the tries are bounded, and giving up is something to say", async () => {
   const dropping = () =>
     streamed([], { headers: streamHeaders(RUN, CONVERSATION) });
   const fetch = answering(Array.from({ length: RETRIES + 2 }, () => dropping));
-  const attached = await startNewConversation("helper", "x", at_once);
+  const attached = await startNewConversation("helper", null, "x", at_once);
   const lost = await all(attached).catch((failure: unknown) => failure);
   expect(lost).toBeInstanceOf(ApiError);
   expect((lost as ApiError).error).toBe("stream_lost");
@@ -260,7 +282,7 @@ test("a re-attach that is refused stops it rather than trying for ever", async (
       () => streamed([], { headers: streamHeaders(RUN, CONVERSATION) }),
       () => refusal(status, error, "no"),
     ]);
-    const attached = await startNewConversation("helper", "x", at_once);
+    const attached = await startNewConversation("helper", null, "x", at_once);
     const stopped = await all(attached).catch((failure: unknown) => failure);
     expect((stopped as ApiError).status).toBe(status);
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -285,7 +307,9 @@ test("a re-attach whose request never arrives is tried again", async () => {
     );
   });
   vi.stubGlobal("fetch", fetch);
-  const seen = await all(await startNewConversation("helper", "x", at_once));
+  const seen = await all(
+    await startNewConversation("helper", null, "x", at_once),
+  );
   expect(seen.map((each) => each.event.type)).toEqual(["RUN_FINISHED"]);
   expect(fetch).toHaveBeenCalledTimes(4);
 });
@@ -307,7 +331,9 @@ test("a deployment that is restarting answers 5xx, and that is tried again", asy
     );
   });
   vi.stubGlobal("fetch", fetch);
-  const seen = await all(await startNewConversation("helper", "x", at_once));
+  const seen = await all(
+    await startNewConversation("helper", null, "x", at_once),
+  );
   expect(seen).toHaveLength(1);
   expect(fetch).toHaveBeenCalledTimes(3);
 });
@@ -321,7 +347,7 @@ test("requests that never arrive are bounded like streams that drop", async () =
       : Promise.reject(new TypeError("no route to host")),
   );
   vi.stubGlobal("fetch", fetch);
-  const attached = await startNewConversation("helper", "x", at_once);
+  const attached = await startNewConversation("helper", null, "x", at_once);
   const lost = await all(attached).catch((failure: unknown) => failure);
   expect((lost as ApiError).error).toBe("stream_lost");
   // The first stream and one `GET` per try, and not a fifth.
@@ -338,7 +364,7 @@ test("a block replayed at a position already seen is not read again", async () =
       { headers: streamHeaders(RUN, CONVERSATION) },
     );
   const fetch = answering(Array.from({ length: 12 }, () => replay));
-  const attached = await startNewConversation("helper", "x", at_once);
+  const attached = await startNewConversation("helper", null, "x", at_once);
   const seen: Numbered[] = [];
   const lost = await (async () => {
     try {
@@ -391,7 +417,9 @@ test("a block with an id of that kind is read, and moves nothing", async () => {
           headers: streamHeaders(RUN, CONVERSATION),
         }),
     ]);
-    const seen = await all(await startNewConversation("helper", "x", at_once));
+    const seen = await all(
+      await startNewConversation("helper", null, "x", at_once),
+    );
     expect(seen.map((each) => each.event)).toEqual([
       { type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: "a" },
       { type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: "b" },
@@ -420,7 +448,9 @@ test("an ending is read whatever its id says", async () => {
         { headers: streamHeaders(RUN, CONVERSATION) },
       ),
   ]);
-  const seen = await all(await startNewConversation("helper", "x", at_once));
+  const seen = await all(
+    await startNewConversation("helper", null, "x", at_once),
+  );
   expect(seen.map((each) => each.event.type)).toEqual([
     "TEXT_MESSAGE_CONTENT",
     "RUN_FINISHED",
@@ -452,7 +482,7 @@ test("the budget is spent on connections that do not deliver, not on time", asyn
     );
   });
   vi.stubGlobal("fetch", fetch);
-  const attached = await startNewConversation("helper", "x", at_once);
+  const attached = await startNewConversation("helper", null, "x", at_once);
   const seen = [];
   for await (const each of attached.events) {
     seen.push(each);
@@ -506,7 +536,7 @@ test("a watcher that goes away stops reading, and says it was its own doing", as
   });
   answering([() => response]);
   const stopping = new AbortController();
-  const attached = await startNewConversation("helper", "x", {
+  const attached = await startNewConversation("helper", null, "x", {
     signal: stopping.signal,
   });
   const seen: string[] = [];
@@ -525,7 +555,7 @@ test("a request that never arrived is an ApiError, not a TypeError", async () =>
     "fetch",
     vi.fn<typeof globalThis.fetch>().mockRejectedValue(new TypeError("no net")),
   );
-  const failed = await startNewConversation("helper", "x").catch(
+  const failed = await startNewConversation("helper", null, "x").catch(
     (failure: unknown) => failure,
   );
   expect(failed).toBeInstanceOf(ApiError);

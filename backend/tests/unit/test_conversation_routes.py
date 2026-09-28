@@ -55,7 +55,7 @@ from robinauts.api import (
     INTERNAL_ERROR,
     NOT_FOUND_DETAIL,
     NOT_FOUND_ERROR,
-    NOT_OFFERED,
+    NOT_OFFERED_DETAIL,
     NOT_WIRED,
     UNKNOWN_FIELD,
     UNREADABLE_RULES,
@@ -1210,8 +1210,8 @@ async def test_moving_to_another_model_answers_the_conversation_the_store_wrote(
 
 
 @asyncio_test
-async def test_a_model_the_deployment_does_not_offer_is_refused_as_the_field_it_is() -> None:
-    """422 naming the field, never the id -- and the 404 is the conversation's alone."""
+async def test_a_model_the_deployment_does_not_offer_is_refused_by_name() -> None:
+    """422 under its own name, naming the field and never the id; the 404 is the conversation's."""
     async with served() as it:
         kept = await it.written()
 
@@ -1222,7 +1222,7 @@ async def test_a_model_the_deployment_does_not_offer_is_refused_as_the_field_it_
         stored = await it.stored(kept.id)
 
     assert refused.status_code == 422
-    assert refused.json() == {"error": "InvalidValueError", "detail": NOT_OFFERED}
+    assert refused.json() == {"error": "UnknownModelError", "detail": NOT_OFFERED_DETAIL}
     assert "haiku" not in refused.text
     assert stored == kept
 
@@ -1249,7 +1249,7 @@ async def test_a_model_not_offered_is_refused_before_the_conversation_is_looked_
 
     assert refusal(asked) == refusal(absent)
     assert asked.status_code == 422
-    assert asked.json() == {"error": "InvalidValueError", "detail": NOT_OFFERED}
+    assert asked.json() == {"error": "UnknownModelError", "detail": NOT_OFFERED_DETAIL}
     assert stored == theirs
 
 

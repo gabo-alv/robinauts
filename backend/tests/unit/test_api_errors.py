@@ -25,8 +25,10 @@ from robinauts.api import (
     GENERIC_DETAIL,
     INTERNAL_ERROR,
     MAX_DETAIL_CHARS,
+    NO_LONGER_OFFERED_DETAIL,
     NOT_FOUND_DETAIL,
     NOT_FOUND_ERROR,
+    NOT_OFFERED_DETAIL,
     QUIET_RUN_DETAIL,
     SIGN_IN_DETAIL,
     STATUS_OF,
@@ -43,6 +45,7 @@ from robinauts.domain import (
     ConversationNotFoundError,
     InvalidValueError,
     MessageNotFoundError,
+    ModelNotOfferedError,
     NotTheOwnerError,
     RobinautsError,
     RunNotFoundError,
@@ -51,6 +54,7 @@ from robinauts.domain import (
     SignInError,
     SignInErrorCode,
     StoredDataError,
+    UnknownModelError,
     UnsupportedFormatError,
     reading_stored,
 )
@@ -121,6 +125,10 @@ def test_the_statuses_are_what_they_should_be() -> None:
     assert status_of(InvalidValueError("no")) == 422
     assert status_of(ConfigError(["no"])) == 500
     assert status_of(SchemaError.missing(expected=1)) == 500
+    # A model the request named is a value refused; a conversation's model
+    # that is gone is the conversation's state, and neither is "not there".
+    assert status_of(UnknownModelError("no")) == 422
+    assert status_of(ModelNotOfferedError("no")) == 409
     # A subclass nobody listed still resolves, through its nearest base.
     assert status_of(type("Later", (AuthenticationError,), {})("no")) == 401
 
@@ -177,6 +185,13 @@ def leaking_app() -> FastAPI:
         raise SignInError(
             SignInErrorCode.PROVIDER_REFUSED,
             f"the provider said {SECRET_IN_A_BUG} about {SECRET_IN_A_BUG}",
+        )
+
+    @app.get("/model/{which}", dependencies=[public()])
+    async def model(which: str) -> dict[str, str]:
+        """A model that is not offered: named by the request, or the conversation's."""
+        raise {"named": UnknownModelError, "conversation's": ModelNotOfferedError}[which](
+            f"no model {SECRET_IN_A_BUG!r} is configured in this deployment"
         )
 
     @app.get("/number/{value}", dependencies=[public()])
@@ -291,6 +306,25 @@ async def test_a_sign_in_failure_says_one_fixed_sentence_and_nothing_of_its_own(
         "detail": SIGN_IN_DETAIL[SignInErrorCode.PROVIDER_REFUSED],
     }
     assert SECRET_IN_A_BUG not in answered.text
+    assert SECRET_IN_A_BUG in caplog.text
+
+
+@asyncio_test
+async def test_a_model_not_offered_is_named_and_says_one_fixed_sentence(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Its class is what a client branches on; the id is the request's, or the
+    conversation's, and goes to the log alone."""
+    with caplog.at_level(logging.WARNING):
+        async with quiet(leaking_app()) as client:
+            named = await client.get("/model/named")
+            gone = await client.get("/model/conversation's")
+
+    assert named.status_code == 422
+    assert named.json() == {"error": "UnknownModelError", "detail": NOT_OFFERED_DETAIL}
+    assert gone.status_code == 409
+    assert gone.json() == {"error": "ModelNotOfferedError", "detail": NO_LONGER_OFFERED_DETAIL}
+    assert SECRET_IN_A_BUG not in named.text + gone.text
     assert SECRET_IN_A_BUG in caplog.text
 
 

@@ -80,7 +80,7 @@ involved, which matters because that one does not pass the dependency policy
 
 ## What you get
 
-Two agents, on one model, one per engine:
+Two agents, one per engine:
 
 - **Assistant (LangGraph)**
 - **Assistant (Pydantic AI)**
@@ -92,6 +92,37 @@ the same model, the same stored format; two frameworks underneath. That is the
 seam the project exists to prove
 ([../docs/specs/agents.md](../docs/specs/agents.md)).
 
+And three models, in the picker beside the agent's. Which three depends on
+the key:
+
+| through | the first, each agent's default | the second | the third |
+|---|---|---|---|
+| OpenRouter | Claude Sonnet 5 (`anthropic/claude-sonnet-5`) | GPT-5.5 (`openai/gpt-5.5`) | Gemini 3.8 Flash (`google/gemini-3.8-flash`) |
+| Anthropic | Claude Sonnet 5 (`claude-sonnet-5`) | Claude Opus 5.5 (`claude-opus-5-5`) | Claude Haiku 4.5 (`claude-haiku-4-5`) |
+
+OpenRouter routes the one Messages API this build speaks to every vendor's
+models, so through it the three are three vendors; Anthropic serves Claude
+alone. The OpenRouter names were on its list of models when they were chosen,
+and **a turn on GPT or Gemini through that API has not been tried here**:
+OpenRouter documents non-Anthropic models behind it with "compatibility
+limitations". If one of them fails every turn, the log says why, and the
+other models still answer.
+
+Unlike the agent, **the model can be changed at any point** in a
+conversation: the next answer comes from the new one, and every answer records
+the model that wrote it. Either engine runs any of the three.
+
+What a conversation and an answer record is the model's **id** in the
+configuration, which names the default model: `claude-sonnet-5` either way,
+and `gpt-5-5` and `gemini-3-8-flash` through OpenRouter, `claude-opus-5-5` and
+`claude-haiku-4-5` through Anthropic. So after a restart on the other key, with
+the default models, a conversation on a model that key does not offer is
+refused, saying the model is no longer offered, and the picker shows its id
+until another is picked; nothing is answered by a different model under the
+old one's id. **That holds only while no model is overridden**: a model named
+by one of the variables below keeps the default's id (see there), and then the
+id no longer names the model that answered.
+
 ## What you can change
 
 Every one of these is read by `start.sh` when it starts, and none of them is
@@ -100,15 +131,24 @@ needed:
 | variable | default | what it does |
 |---|---|---|
 | `ROBINAUTS_DEMO_PROVIDER` | `openrouter` when its key is set | `openrouter` or `anthropic` |
-| `ROBINAUTS_DEMO_MODEL` | `anthropic/claude-sonnet-5`, or `claude-sonnet-5` for Anthropic | the vendor's name for the model to use |
+| `ROBINAUTS_DEMO_MODEL` | `anthropic/claude-sonnet-5`, or `claude-sonnet-5` for Anthropic | the vendor's name for the first model, the agents' default |
+| `ROBINAUTS_DEMO_MODEL_2` | `openai/gpt-5.5`, or `claude-opus-5-5` for Anthropic | the vendor's name for the second |
+| `ROBINAUTS_DEMO_MODEL_3` | `google/gemini-3.8-flash`, or `claude-haiku-4-5` for Anthropic | the vendor's name for the third |
 | `ROBINAUTS_DEMO_PORT` | `8000` | where the server listens |
 | `ROBINAUTS_DEMO_PG_PORT` | `54390` | where the demo's PostgreSQL listens |
 | `ROBINAUTS_DEMO_OPEN` | `1` | `0` does not open a browser |
 
 The model names are the vendor's own: OpenRouter's are `<vendor>/<model>`
-(`anthropic/claude-sonnet-5`), Anthropic's are plain (`claude-sonnet-5`).
-Changing the model takes a restart — `demo/stop.sh` then `demo/start.sh` —
-because the configuration is read once, at start-up.
+(`anthropic/claude-sonnet-5`), Anthropic's are plain (`claude-sonnet-5`). A
+model named this way is shown in the picker by that name, since the demo has no
+title to give it. Changing one takes a restart — `demo/stop.sh` then
+`demo/start.sh` — because the configuration is read once, at start-up.
+
+**A model named this way keeps the id of the one it replaces.**
+`ROBINAUTS_DEMO_MODEL_2=openai/gpt-5.6-sol` is still `gpt-5-5` in the
+configuration, so what the conversations and answers record is that id, not
+the vendor's name: answers written before and after the change carry the same
+one, and the id no longer says which model wrote them.
 
 ## Where the state lives
 
@@ -177,7 +217,7 @@ Every failure is one line, and the server's own log is
 | `The demo needs one model provider key` | neither variable is set | set one of the two, or write `demo/.env` |
 | `demo/.env is mode 644 and may hold a key` | anybody on this machine could read it | `chmod 600 demo/.env` |
 | every answer fails, and the log says `authentication_error` / `API key is invalid` / `User not found` | the key is wrong, expired, or belongs to the other vendor | check the key; `User not found` is OpenRouter's way of saying it has never issued that one |
-| every answer fails, and the log's message names the model | that vendor has retired it, or spells it differently | set `ROBINAUTS_DEMO_MODEL` and start again; OpenRouter lists its ids at <https://openrouter.ai/models> |
+| every answer on one model fails, and the log's message names the model | that vendor has retired it, or spells it differently | pick another in the picker; set `ROBINAUTS_DEMO_MODEL`, `_2` or `_3` and start again; OpenRouter lists its ids at <https://openrouter.ai/models> |
 | `node is not on the PATH` | the interface is built from source | install the Node.js in `frontend/.nvmrc`, or `nvm use` in `frontend/` |
 | `uv is not on the PATH` | everything Python is fetched with it | install uv |
 | `Already running on http://127.0.0.1:8000/` | it is already up | `demo/stop.sh` first, or just open the page |

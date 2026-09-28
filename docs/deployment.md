@@ -208,7 +208,7 @@ Notes on what is and is not there:
 - **An agent's `model` is its default.** It is copied into a conversation
   when the conversation starts, so changing it reaches new conversations
   only. Removing a model that conversations are using refuses their next
-  turn as not found, exactly as removing their agent would, rather than
+  turn, saying the conversation's model is no longer offered, rather than
   answering with another model; the log names the model
   ([specs/agents.md](specs/agents.md)).
 - A file with no `[agents]` table is a deployment with no agents: it

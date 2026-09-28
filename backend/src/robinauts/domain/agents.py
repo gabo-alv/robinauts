@@ -484,9 +484,8 @@ class ModelsConfig:
         This can miss, though the configuration is whole: the id is one a
         conversation carries (``docs/specs/agents.md``), chosen by a person or
         copied from an agent's default when the conversation started, and the
-        operator may have removed that model since. That is refused as not
-        there, the way a removed agent is, rather than answered by some other
-        model.
+        operator may have removed that model since. That is refused, rather
+        than answered by some other model.
         """
         checked_config_id(model_id, "a model's id")
         found = self.models.get(model_id)

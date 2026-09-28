@@ -25,11 +25,13 @@
  * enough conversations to page through, `conversation` the three a
  * conversation can be in --
  * `#/c/c0000000-0000-4000-8000-000000000001` (a branch),
- * `…002` (a run in flight) and `…003` (a run that ended badly).
+ * `…002` (a run in flight) and `…003` (a run that ended badly). In
+ * `conversation`, `…003` is also on a model these fixtures no longer offer,
+ * so its next turn is refused until another is picked.
  *
- * Renaming, deleting and cancelling really change what this serves, so the
- * states after them can be looked at too. Nothing is written to disk: a
- * restart is a fresh set of fixtures.
+ * Renaming, deleting, cancelling and changing a model really change what
+ * this serves, so the states after them can be looked at too. Nothing is
+ * written to disk: a restart is a fresh set of fixtures.
  *
  * **The three scenes with a stream in them** answer the streaming routes of
  * `docs/specs/wire.md` for real -- server-sent events, a position on the last
@@ -66,10 +68,44 @@ const PROVIDERS = [
   { id: "okta", title: "Okta" },
 ];
 
-const AGENTS = [
-  { id: "helper", title: "Helper", engine: "langgraph" },
-  { id: "researcher", title: "Researcher", engine: "pydantic-ai" },
+/**
+ * The models on offer. An agent's `model` is its default, and the two
+ * agents' defaults differ, so switching agent on the empty chat can be seen
+ * to switch the model with it until one is picked.
+ */
+const MODELS = [
+  { id: "claude-sonnet", title: "Claude Sonnet" },
+  { id: "gpt-5-5", title: "GPT 5.5" },
+  { id: "gemini-2-5-pro", title: "Gemini 2.5 Pro" },
 ];
+
+/** A model the operator has removed, which a scene's `retired` is still on. */
+const RETIRED = "claude-opus-3";
+
+const AGENTS = [
+  {
+    id: "helper",
+    title: "Helper",
+    engine: "langgraph",
+    model: "claude-sonnet",
+  },
+  {
+    id: "researcher",
+    title: "Researcher",
+    engine: "pydantic-ai",
+    model: "gpt-5-5",
+  },
+];
+
+/** @param {unknown} id */
+const offered = (id) => MODELS.some((model) => model.id === id);
+
+/** What the backend says about a model a request named and it does not offer. */
+const NOT_OFFERED = "body.model_id: is not a model this deployment offers";
+
+/** And about a turn in a conversation on a model it no longer offers. */
+const NO_LONGER_OFFERED =
+  "this conversation's model is no longer offered here; move the conversation to another";
 
 const SIGNED_IN = {
   sign_in: true,
@@ -129,19 +165,25 @@ const conversationId = (n) =>
  *
  * @param {number} n
  * @param {string} title
+ * @param {{agent: string, model: string}} [bound]
  * @returns {{
  *   id: string,
  *   title: string,
  *   agent: string,
+ *   model: string,
  *   created_at: string,
  *   updated_at: string,
  *   active_leaf_id: string | null,
  * }}
  */
-const summary = (n, title) => ({
+const summary = (
+  n,
+  title,
+  bound = { agent: "helper", model: "claude-sonnet" },
+) => ({
   id: conversationId(n),
   title,
-  agent: "helper",
+  ...bound,
   created_at: "2026-09-18T09:00:00Z",
   updated_at: new Date(Date.parse("2026-09-21T16:00:00Z") - n * 3600_000)
     .toISOString()
@@ -274,8 +316,9 @@ function tree(n) {
 /**
  * @type {Record<string, {
  *   session: unknown,
- *   agents: unknown[],
+ *   agents: typeof AGENTS,
  *   conversations?: number,
+ *   retired?: number,
  *   stream?: "finishes" | "fails",
  *   inFlight?: number,
  *   dropAt?: number,
@@ -295,6 +338,8 @@ const SCENES = {
     session: SIGNED_IN,
     agents: AGENTS,
     conversations: 3,
+    /** `…003` is on a model no longer offered. */
+    retired: 3,
   },
   /** A turn that really streams: a stretch of thinking, then an answer. */
   streaming: {
@@ -396,7 +441,10 @@ if (fixture === undefined) {
  * the process does and is written nowhere.
  */
 const listed = Array.from({ length: fixture.conversations ?? 0 }, (_, index) =>
-  summary(index + 1, TITLES[index] ?? `Conversation ${index + 1}`),
+  summary(index + 1, TITLES[index] ?? `Conversation ${index + 1}`, {
+    agent: "helper",
+    model: fixture.retired === index + 1 ? RETIRED : "claude-sonnet",
+  }),
 );
 /** @type {Map<string, Tree>} */
 const trees = new Map(listed.map((one, index) => [one.id, tree(index + 1)]));
@@ -464,6 +512,7 @@ const CANCEL = new RegExp(
   `^/api/conversations/(${UUID})/runs/(${UUID})/cancel$`,
 );
 const LEAF = new RegExp(`^/api/conversations/(${UUID})/leaf$`);
+const MODEL = new RegExp(`^/api/conversations/(${UUID})/model$`);
 const TURNS = new RegExp(`^/api/conversations/(${UUID})/turns$`);
 const EVENTS = new RegExp(`^/api/runs/(${UUID})/events$`);
 
@@ -574,10 +623,42 @@ async function conversations(request, response, path, query) {
     json(response, 200, moved);
     return true;
   }
+  const model = MODEL.exec(path);
+  if (model !== null && method === "PUT") {
+    // Checked before the conversation, as the backend does.
+    const asked = await body(request);
+    if (!offered(asked?.model_id)) {
+      refuse(response, 422, "UnknownModelError", NOT_OFFERED);
+      return true;
+    }
+    const id = model[1] ?? "";
+    const index = listed.findIndex((each) => each.id === id);
+    const found = listed[index];
+    if (found === undefined) {
+      refuse(
+        response,
+        404,
+        "NotFoundError",
+        "there is nothing here of that id",
+      );
+      return true;
+    }
+    // A change of model dates the conversation, as a rename does.
+    const moved = {
+      ...found,
+      model: String(asked?.model_id),
+      updated_at: new Date().toISOString(),
+    };
+    listed.splice(index, 1);
+    listed.unshift(moved);
+    json(response, 200, moved);
+    return true;
+  }
   const turns = TURNS.exec(path);
   if (turns !== null && method === "POST") {
     const id = turns[1] ?? "";
     const held = trees.get(id);
+    const found = listed.find((each) => each.id === id);
     if (held === undefined) {
       refuse(
         response,
@@ -585,6 +666,12 @@ async function conversations(request, response, path, query) {
         "NotFoundError",
         "there is nothing here of that id",
       );
+      return true;
+    }
+    // Once the conversation is known, and before the run already going: a
+    // model no longer offered refuses the turn by name (`docs/specs/wire.md`).
+    if (!offered(found?.model)) {
+      refuse(response, 409, "ModelNotOfferedError", NO_LONGER_OFFERED);
       return true;
     }
     if (held.run_id !== null) {
@@ -981,6 +1068,10 @@ const server = createServer((request, response) => {
     json(response, 200, { items: fixture.agents });
     return;
   }
+  if (path === "/api/models") {
+    json(response, 200, { items: MODELS });
+    return;
+  }
   if (path === "/auth/logout") {
     response.writeHead(204).end();
     return;
@@ -990,7 +1081,27 @@ const server = createServer((request, response) => {
     // are how the interface learns which one (`docs/specs/wire.md`).
     void body(request).then((sent) => {
       const text = typeof sent?.text === "string" ? sent.text : "";
-      const created = summary(listed.length + 1, text.slice(0, 60));
+      // The scene's agents, which are what its picker offered.
+      const agent = fixture.agents.find((each) => each.id === sent?.agent_id);
+      if (agent === undefined) {
+        refuse(
+          response,
+          404,
+          "NotFoundError",
+          "there is nothing here of that id",
+        );
+        return;
+      }
+      // Absent or null is the agent's default; anything else must be offered.
+      const model = sent?.model_id ?? agent.model;
+      if (!offered(model)) {
+        refuse(response, 422, "UnknownModelError", NOT_OFFERED);
+        return;
+      }
+      const created = summary(listed.length + 1, text.slice(0, 60), {
+        agent: agent.id,
+        model: String(model),
+      });
       const question = message(newId(), null, "user", text);
       listed.unshift(created);
       trees.set(created.id, {

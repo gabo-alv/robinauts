@@ -174,8 +174,8 @@ CREATE INDEX IF NOT EXISTS pending_logins_expires_at_idx ON pending_logins (expi
 -- read off this row alone and never off whatever the agent says today
 -- (docs/specs/agents.md). Like `agent`, it is an id of the configuration and
 -- not a foreign key: the operator may remove the model, and the conversation
--- then keeps its row and its next turn is refused as not found, as a removed
--- agent's is.
+-- then keeps its row and its next turn is refused until it is moved to
+-- another.
 --
 -- `owner_id` cascades. Deleting a user deletes their conversations, with the
 -- messages, runs and events under them, by the chain of foreign keys below.
