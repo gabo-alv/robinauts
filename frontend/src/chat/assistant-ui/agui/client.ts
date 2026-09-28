@@ -106,14 +106,24 @@ const sleep = (ms: number) =>
     setTimeout(done, ms);
   });
 
-/** Begin a conversation with an agent, and watch the run answering it. */
+/**
+ * Begin a conversation with an agent, and watch the run answering it.
+ *
+ * `modelId` is the model the conversation runs on; `null` is the agent's
+ * default, which the backend copies in (`docs/specs/wire.md`).
+ */
 export async function startNewConversation(
   agentId: string,
+  modelId: string | null,
   text: string,
   watching: Watching = {},
 ): Promise<Attached> {
   return attachTo(
-    await post("/api/turns", { agent_id: agentId, text }, watching),
+    await post(
+      "/api/turns",
+      { agent_id: agentId, model_id: modelId, text },
+      watching,
+    ),
     0,
     watching,
   );

@@ -51,6 +51,12 @@ export type ConversationId = string;
 export type AgentId = string;
 
 /**
+ * A model, as the configuration names it and `GET /api/models` offers it
+ * (`docs/specs/agents.md`). The id alone, like the agent's.
+ */
+export type ModelId = string;
+
+/**
  * What the chat is given, and the one thing it says back.
  *
  * `conversationId` is `null` on the empty chat -- the application opens on
@@ -59,7 +65,10 @@ export type AgentId = string;
  * message will start the conversation with, which is a choice only while
  * there is no conversation: after that the agent is a fact about it
  * (`docs/specs/conversations.md`). It is `null` when the deployment has told
- * us no agents, or has not told us yet.
+ * us no agents, or has not told us yet. `modelId` is the model that first
+ * message runs on, and `null` leaves it to the agent's default; a
+ * conversation's model is changed outside the chat, and no later turn names
+ * one, because the server reads it off the conversation.
  *
  * `onConversationStarted` is the one thing the chat cannot decide for the
  * application: a first message creates a conversation
@@ -70,6 +79,7 @@ export type AgentId = string;
 export interface ChatProps {
   conversationId: ConversationId | null;
   agentId: AgentId | null;
+  modelId: ModelId | null;
   onConversationStarted: (id: ConversationId) => void;
   /**
    * What the server says the conversation is, each time it is read.
@@ -90,11 +100,37 @@ export interface ChatProps {
    */
   onTurnEnded?: () => void;
   /**
-   * What to draw above the box on an empty chat: the agent picker.
+   * That the open conversation's model is one the deployment no longer
+   * offers: `true` or `false`, or `null` where the list of models has not
+   * come and nobody can tell. On the empty chat it is `null` in that case
+   * too -- `modelId` is then a remembered one nobody has checked -- and
+   * `false` otherwise.
+   *
+   * The backend refuses a turn in such a conversation with the very 404 a
+   * conversation that is not there answers with (`docs/specs/wire.md`), so a
+   * chat left to itself could only say "not found" about the conversation
+   * somebody is looking at. The shell can tell -- it has the conversation's
+   * model and the list -- and the chat says why instead, or that it may be
+   * why. Going back to `false` -- another model picked -- takes back what
+   * was said.
+   */
+  modelGone?: boolean | null;
+  /**
+   * That a first message naming a model -- `modelId` above -- was refused
+   * as not there, which may be that model or the agent.
+   *
+   * The chat says so and puts the message back; what to do about the model
+   * is the shell's, which holds the choice.
+   */
+  onModelRefused?: (modelId: ModelId) => void;
+  /**
+   * What to draw above the box on an empty chat: the agent and model
+   * pickers.
    *
    * The agent is a choice only while there is no conversation, and the
-   * picker is the shell's -- it is over `GET /api/agents`, it remembers what
-   * was chosen, and it is what `agentId` above comes from. The chat is told
+   * pickers are the shell's -- they are over `GET /api/agents` and
+   * `GET /api/models`, they remember what was chosen, and they are what
+   * `agentId` and `modelId` above come from. The chat is told
    * where it goes rather than how it is built, so nothing about an agent has
    * to cross this seam twice.
    */

@@ -49,7 +49,7 @@ import {
   type ThreadMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { ApiError, detailOf, request } from "../../api/client";
 import { cancelRun } from "../../conversation/conversation";
@@ -84,6 +84,40 @@ export const STILL_ANSWERING =
   "This conversation is still answering. Stop that answer before sending another.";
 
 /**
+ * What a turn refused in a conversation whose model has gone is told.
+ *
+ * The backend's own answer is the 404 of a conversation that is not there
+ * (`docs/specs/wire.md`), which about the conversation on the screen would be
+ * untrue; the shell knows the model has gone and says so (`modelGone`).
+ */
+export const MODEL_GONE =
+  "This conversation's model is no longer offered here, so the turn was refused. Pick another model above.";
+
+/** The same, where the list of models did not come and so nobody can tell. */
+export const MODEL_MAYBE_GONE =
+  "This turn was refused: the conversation is not here, or its model is no longer offered.";
+
+/**
+ * What a first message refused as not there is told, where the pickers are
+ * up to date as far as this page knows.
+ *
+ * A new chat is refused 404 when the deployment does not have the agent or
+ * the model it names (`docs/specs/wire.md`), and the one answer does not say
+ * which: both lists may have been fetched before the operator changed the
+ * configuration.
+ */
+export const NOT_OFFERED_PICK =
+  "This chat was not started: the agent or the model picked is not offered here any more. Pick another above, or reload the page.";
+
+/**
+ * The same, where the list of models did not come: there is no model picker
+ * to pick from, and the model sent was the one this browser remembered,
+ * which the shell then forgets (`onModelRefused`).
+ */
+export const NOT_OFFERED_RETRY =
+  "This chat was not started: the agent or the model it was for is not offered here any more. Send it again to use the agent's default, or reload the page.";
+
+/**
  * What is said when the answer could not be followed to its end.
  *
  * One sentence for every way a **watch** ends badly -- a connection nobody
@@ -110,6 +144,15 @@ function said(failure: unknown): string {
   return detailOf(failure);
 }
 
+/**
+ * How a 404 on a turn is told when it may be about the model: the sentence,
+ * and what else to do about it.
+ */
+interface NotOffered {
+  say: string;
+  then?: () => void;
+}
+
 /** What the component below gets back. */
 export interface Chatting {
   state: ChatState;
@@ -130,6 +173,23 @@ export function useChat(props: ChatProps): Chatting {
   useEffect(() => {
     turns.now(props, state);
   });
+
+  // Another model picked -- a conversation on a model that was gone is on
+  // one that is not -- and the sentence telling them to pick one is no
+  // longer true. Only then: the list arriving late turns "unknown" into
+  // "offered" without anybody having picked anything, and what was said
+  // about a turn refused in the meantime still stands. Only those
+  // sentences, too: anything said since stays.
+  // `null` is kept apart from `false`: unknown is not offered.
+  const modelGone = props.modelGone === undefined ? false : props.modelGone;
+  const wasGone = useRef(modelGone);
+  useEffect(() => {
+    const before = wasGone.current;
+    wasGone.current = modelGone;
+    if (before !== true || modelGone !== false) return;
+    dispatch({ kind: "unsaid", detail: MODEL_GONE });
+    dispatch({ kind: "unsaid", detail: MODEL_MAYBE_GONE });
+  }, [modelGone]);
 
   // Which conversation is on the screen. Reading one is one call
   // (`docs/specs/conversations.md`), and leaving one abandons it.
@@ -385,7 +445,19 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
    */
   function follow(
     start: (signal: AbortSignal) => Promise<Attached>,
-    { watch = false, afterLoss = false } = {},
+    {
+      watch = false,
+      afterLoss = false,
+      text = "",
+      notOffered = null,
+    }: {
+      watch?: boolean;
+      afterLoss?: boolean;
+      /** What was written, to put back if the turn is refused for its model. */
+      text?: string;
+      /** What a 404 is to be told as, decided when the turn was sent. */
+      notOffered?: NotOffered | null;
+    } = {},
   ): Promise<void> {
     const control = new AbortController();
     starting.add(control);
@@ -410,13 +482,42 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       (failure: unknown) => {
         starting.delete(control);
         if (control.signal.aborted) return;
-        dispatch(
-          watch
-            ? { kind: "lost", detail: LOST_TOUCH }
-            : { kind: "refused", detail: said(failure) },
-        );
+        if (watch) {
+          dispatch({ kind: "lost", detail: LOST_TOUCH });
+          return;
+        }
+        const forModel =
+          notOffered !== null &&
+          failure instanceof ApiError &&
+          failure.status === 404;
+        dispatch({
+          kind: "refused",
+          detail: forModel ? notOffered.say : said(failure),
+        });
+        if (!forModel) return;
+        // **Refused for its model, the message goes back in the box**: what
+        // the person is told to do is pick another model and send again, and
+        // the box emptied itself when it handed the message over -- or, for
+        // an edit, the edit box closed. Only then: any other refusal is left
+        // as it always was.
+        if (text !== "") wanted = { text };
+        notOffered.then?.();
       },
     );
+  }
+
+  /**
+   * What a 404 on a turn in this conversation is to be told as, if it may be
+   * about the model rather than the conversation.
+   *
+   * Read **when the turn is sent**, from what the shell said then: a model
+   * picked while the request is in the air changes what the shell says, not
+   * what the backend was asked.
+   */
+  function goneModel(): NotOffered | null {
+    if (props.modelGone === true) return { say: MODEL_GONE };
+    if (props.modelGone === null) return { say: MODEL_MAYBE_GONE };
+    return null;
   }
 
   async function consume(
@@ -475,31 +576,53 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
     const conversationId = state.conversationId;
     if (conversationId !== null) {
-      await follow((signal) =>
-        startTurn(conversationId, { text, parentId }, { signal }),
+      await follow(
+        (signal) => startTurn(conversationId, { text, parentId }, { signal }),
+        { text, notOffered: goneModel() },
       );
       return;
     }
-    const agentId = props.agentId;
+    const { agentId, modelId } = props;
     if (agentId === null) {
       dispatch({ kind: "lost", detail: NO_AGENT });
       return;
     }
-    await follow(async (signal) => {
-      const attached = await startNewConversation(agentId, text, { signal });
-      // **Only if this page is still the empty chat.** Somebody who opened
-      // another conversation while the request was in the air is not to be
-      // taken to this one instead, and claiming it as ours would stop the
-      // conversation they *did* open from being read at all. The
-      // conversation exists either way; the panel's next refresh lists it.
-      if (signal.aborted) return attached;
-      // The interface has one to be on now: a route to go to and a row for
-      // the panel. What to do about it is the application's
-      // (`src/chat/index.ts`).
-      ours = attached.conversationId;
-      props.onConversationStarted(attached.conversationId);
-      return attached;
-    });
+    // A first message that names a model and is refused as not there may
+    // have been refused for that model; the shell is told which, and decides
+    // what to do about it (`onModelRefused`). `modelGone` is `null` here
+    // while the list of models has not come, and there is then no picker.
+    const notOffered: NotOffered | null =
+      modelId === null
+        ? null
+        : {
+            say:
+              props.modelGone === null ? NOT_OFFERED_RETRY : NOT_OFFERED_PICK,
+            then: () => {
+              props.onModelRefused?.(modelId);
+            },
+          };
+    await follow(
+      async (signal) => {
+        // The model goes with the first message and never again: every later
+        // turn runs on the conversation's, which the server reads.
+        const attached = await startNewConversation(agentId, modelId, text, {
+          signal,
+        });
+        // **Only if this page is still the empty chat.** Somebody who opened
+        // another conversation while the request was in the air is not to be
+        // taken to this one instead, and claiming it as ours would stop the
+        // conversation they *did* open from being read at all. The
+        // conversation exists either way; the panel's next refresh lists it.
+        if (signal.aborted) return attached;
+        // The interface has one to be on now: a route to go to and a row for
+        // the panel. What to do about it is the application's
+        // (`src/chat/index.ts`).
+        ours = attached.conversationId;
+        props.onConversationStarted(attached.conversationId);
+        return attached;
+      },
+      { text, notOffered },
+    );
   }
 
   async function onEdit(message: AppendMessage): Promise<void> {
@@ -520,8 +643,11 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     if (isUnsent(parentId)) return;
     if (busy()) return told(text);
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
-    await follow((signal) =>
-      startTurn(conversationId, { text, parentId }, { signal }),
+    // Refused for its model, the edited text comes back in the box, as it
+    // does for a new message (`follow`).
+    await follow(
+      (signal) => startTurn(conversationId, { text, parentId }, { signal }),
+      { text, notOffered: goneModel() },
     );
   }
 
@@ -543,8 +669,11 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // off the screen with everything after it, which is what `parentId` --
     // the question -- cuts the thread after.
     dispatch({ kind: "again", after: parentId });
-    await follow((signal) =>
-      startTurn(conversationId, { regenerate }, { signal }),
+    await follow(
+      (signal) => startTurn(conversationId, { regenerate }, { signal }),
+      {
+        notOffered: goneModel(),
+      },
     );
   }
 

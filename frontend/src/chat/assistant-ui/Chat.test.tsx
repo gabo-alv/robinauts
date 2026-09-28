@@ -19,6 +19,7 @@ import {
   type AgentId,
   type ChatProps,
   type ConversationId,
+  type ModelId,
 } from "../index";
 
 const RUN = "11111111-2222-4333-8444-555555555555";
@@ -53,6 +54,7 @@ function draw(props: Partial<ChatProps> = {}) {
     <Chat
       conversationId={null}
       agentId="helper"
+      modelId="sonnet"
       onConversationStarted={started}
       {...props}
     />,
@@ -137,6 +139,7 @@ test("sending a first message posts a turn and reports the conversation", async 
 
   expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
     agent_id: "helper",
+    model_id: "sonnet",
     text: "Why do robins sing before dawn?",
   });
   expect(started).toHaveBeenCalledWith(CONVERSATION);
@@ -410,32 +413,38 @@ test("a conversation that is not here has no thread to draw", async () => {
   expect(screen.queryByRole("textbox", { name: "Message input" })).toBeNull();
 });
 
-test("the seam is a component and six names, and nothing of a library", () => {
+test("the seam is a component and nine names, and nothing of a library", () => {
   // **A claim about the types, checked by the type checker.** `tsc -b` reads
-  // this file, so the three assertions below fail the build rather than a
-  // run: the seam is exactly these six names, they are exactly these types,
+  // this file, so the four assertions below fail the build rather than a
+  // run: the seam is exactly these nine names, they are exactly these types,
   // and none of them comes from assistant-ui (ADR 0001, the discard test).
   expectTypeOf<ChatProps>().toEqualTypeOf<{
     conversationId: ConversationId | null;
     agentId: AgentId | null;
+    modelId: ModelId | null;
     onConversationStarted: (id: ConversationId) => void;
     onConversationOpened?: (conversation: Conversation) => void;
     onTurnEnded?: () => void;
+    modelGone?: boolean | null;
+    onModelRefused?: (modelId: ModelId) => void;
     welcome?: ReactNode;
   }>();
-  // A seventh name does not belong to it, whatever it is called.
+  // A tenth name does not belong to it, whatever it is called.
   const extra = {
     conversationId: null,
     agentId: null,
+    modelId: null,
     onConversationStarted: () => undefined,
     // @ts-expect-error -- nothing of a chat library crosses this seam, and
     // nothing else is added to it without being written down above.
     runtime: "assistant-ui",
   } satisfies ChatProps;
-  // And `ConversationId` and `AgentId` are what the rest of the application
-  // already calls these, which is a string and not a library's handle.
+  // And `ConversationId`, `AgentId` and `ModelId` are what the rest of the
+  // application already calls these, which is a string and not a library's
+  // handle.
   expectTypeOf<ConversationId>().toEqualTypeOf<string>();
   expectTypeOf<AgentId>().toEqualTypeOf<string>();
+  expectTypeOf<ModelId>().toEqualTypeOf<string>();
   expect(typeof Chat).toBe("function");
   expect(extra.conversationId).toBeNull();
 });

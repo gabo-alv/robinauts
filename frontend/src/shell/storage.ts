@@ -3,7 +3,7 @@
 
 /**
  * What this browser remembers about the interface: the rail, the theme, the
- * agent last talked to.
+ * agent last talked to and the model last picked.
  *
  * Per browser, never per account: it is a preference about this window, not
  * something the backend is told. Keys are namespaced, because the deployment
@@ -20,6 +20,14 @@ export function remembered(key: string): string | null {
     return localStorage.getItem(PREFIX + key);
   } catch {
     return null;
+  }
+}
+
+export function forget(key: string): void {
+  try {
+    localStorage.removeItem(PREFIX + key);
+  } catch {
+    // Off. Nothing was kept, so nothing is left behind.
   }
 }
 

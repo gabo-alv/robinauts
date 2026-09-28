@@ -11,10 +11,11 @@
  * deployment still offers: an agent removed from the configuration is not
  * one this picker will quietly keep selecting.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { request } from "../api/client";
 import type { components } from "../api/schema";
+import { type Offered, useOffered } from "./offered";
 import { remember, remembered } from "./storage";
 
 export type Agent = components["schemas"]["AgentSummary"];
@@ -22,10 +23,10 @@ export type Agent = components["schemas"]["AgentSummary"];
 export const AGENT_KEY = "agent";
 
 /** What this deployment offers, as far as the one call has got. */
-export type Agents =
-  | { status: "loading" }
-  | { status: "ready"; items: Agent[] }
-  | { status: "failed"; detail: string };
+export type Agents = Offered<Agent>;
+
+const askAgents = (signal: AbortSignal) =>
+  request("get", "/api/agents", { signal });
 
 /**
  * The agents, asked for once.
@@ -37,27 +38,7 @@ export type Agents =
  * server.
  */
 export function useAgents(): Agents {
-  const [agents, setAgents] = useState<Agents>({ status: "loading" });
-  useEffect(() => {
-    const dropped = new AbortController();
-    request("get", "/api/agents", { signal: dropped.signal }).then(
-      (answer) => {
-        setAgents({ status: "ready", items: answer.items });
-      },
-      (failure: unknown) => {
-        // An abort is this component going away, not a failure to show.
-        if (dropped.signal.aborted) return;
-        setAgents({
-          status: "failed",
-          detail: failure instanceof Error ? failure.message : String(failure),
-        });
-      },
-    );
-    return () => {
-      dropped.abort();
-    };
-  }, []);
-  return agents;
+  return useOffered(askAgents);
 }
 
 /** The remembered agent if it is still offered, otherwise the first one. */

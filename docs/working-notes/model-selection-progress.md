@@ -35,6 +35,18 @@ selection adds to it.
   offered (checked before the conversation, so it says nothing about it);
   `NewChatRequest.model_id` (absent or null is the agent's default, unknown
   is 404); `ConversationSummary.model`; `AgentSummary.model`.
+- Frontend: `shell/ModelPicker.tsx` (`useModels`, `useChosenModel`, the
+  `ModelPicker` select, `ConversationModel` which makes the PUT) and
+  `shell/offered.ts` (`useOffered`, the fetch-once hook `useAgents` shares).
+  The empty chat's model sits beside the agent; it follows the agent's
+  default until picked, then is remembered (storage key `model`). The open
+  conversation's model sits on the "with <agent>" line; changes are
+  sent last-wins and the shell keeps the later of the PUT's answer and the
+  chat's reads by `updated_at`. `ChatProps.modelId`, `modelGone`
+  (`null` while the list is not known) and `onModelRefused`. A turn refused
+  with 404 on a model no longer offered says so and puts the text back.
+  `scripts/fixture-server.mjs` serves the models (scene `conversation` has
+  a retired one) but still speaks the pre-#18 branch API.
 
 ## Steps
 
@@ -124,3 +136,27 @@ Not done / to watch: for step 5, a turn in a conversation whose model was
 removed is the same 404 as a missing conversation while opening it is 200;
 the frontend explains it by comparing the conversation's `model` with
 `GET /api/models`.
+
+### Step 5 — frontend   (feature/model-selection-5-frontend)
+
+Summary: the model picker beside the agent picker on the empty chat and on
+the agent line of an open conversation; `model_id` on the first message
+only; `PUT` on change, last-wins while one is in flight; a conversation on a
+model no longer offered shows it marked, explains a refused turn and keeps
+the typed text. frontend.md, the README and the fixture server follow. The
+3e02925 agent picker was already on main (#16).
+
+Review: 4 rounds.
+- High: 0
+- Medium: 3 (3/0)
+- Low: 17 (12/5) — left: every 422 on the PUT read as "not offered" (no
+  other 422 can happen today); the chat's read preferred over a newer panel
+  row for the model across tabs; a "model gone" sentence kept after a
+  change that lands before the turn's 404.
+
+Checks: frontend check (prettier, eslint, tsc, 406 tests, build, audit);
+screenshots through the fixture server with Playwright at 1280 and 390
+wide.
+Not done / to watch: the backend answers the same 404 for a removed agent
+and a removed model on a new chat, so the first-message sentence names
+both. The fixture server's branch fixtures still show a discarded answer.

@@ -22,9 +22,9 @@
  *   and outlives the run that follows it: a message that was not sent, a
  *   stop that did not reach the server. Only their next turn clears it.
  *
- * The welcome slot is the shell's agent picker on an empty chat: in the
- * Thread's empty state the welcome sits directly above the box, which is
- * where a choice of who you are about to talk to belongs
+ * The welcome slot is the shell's agent and model pickers on an empty chat:
+ * in the Thread's empty state the welcome sits directly above the box, which
+ * is where a choice of who you are about to talk to belongs
  * (`docs/specs/agents.md`).
  */
 import { AssistantRuntimeProvider } from "@assistant-ui/react";

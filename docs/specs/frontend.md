@@ -11,10 +11,17 @@
   sign-out. Collapsed, it becomes an icon rail. The state is remembered
   per browser.
 - The application opens on an empty chat, ready for a first message, with
-  the agent to talk to selectable.
+  the agent to talk to and the model selectable side by side. The model
+  picker lists the operator's models, with no "default" entry: until one is
+  picked it shows the chosen agent's default, and a pick is remembered per
+  browser, as the agent is.
 - An open conversation names the agent it is with, under its title: once
   the conversation exists the agent is a fact about it and not a choice
-  ([agents.md](agents.md)), so it is shown as a line, not a control.
+  ([agents.md](agents.md)), so it is shown as a line, not a control. The
+  model stays a choice, so the model picker sits on that line, showing the
+  conversation's model; changing it applies from the next turn, a run in
+  flight included. A model the deployment no longer offers is shown as
+  such, and a turn refused for it says so.
 - On a small screen the panel becomes an overlay drawer opened from a
   button, and the chat is usable on a phone.
 - The theme follows the operating system by default. A light / dark /

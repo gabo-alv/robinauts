@@ -8,10 +8,10 @@ What is here is the whole interface: the design tokens and the Tailwind
 theme over them, the collapsible panel with the profile block, the session
 and the sign-in page, the theme toggle and the banner of the local
 development mode, the hash routing, the history in the panel with renaming
-and deleting, and **the chat** -- the message box, the answer arriving a
-word at a time, re-attaching to a run that is already going, stopping one,
-editing a question, asking for an answer again, and the branch picker over
-the tree that makes.
+and deleting, the agent and model pickers, and **the chat** -- the message
+box, the answer arriving a word at a time, re-attaching to a run that is
+already going, stopping one, editing a question, asking for an answer again,
+and the branch picker over the tree that makes.
 
 The chat is behind `src/chat/index.ts` and nothing outside
 `src/chat/assistant-ui/` knows what draws it
@@ -30,11 +30,11 @@ hash is the one part of a URL no server sees, so the static files need no
 fallback route and nothing depends on the `/ui/` the backend serves them
 under.
 
-| hash                    | what it is                                  |
-| ----------------------- | ------------------------------------------- |
-| `#/`                    | the empty chat, with the agent picker       |
-| `#/c/<conversation id>` | that conversation                           |
-| anything else           | the empty chat, with the hash left as it is |
+| hash                    | what it is                                       |
+| ----------------------- | ------------------------------------------------ |
+| `#/`                    | the empty chat, with the agent and model pickers |
+| `#/c/<conversation id>` | that conversation, with its model picker         |
+| anything else           | the empty chat, with the hash left as it is      |
 
 `#/sign-in?error=<code>` is where the backend sends a failed sign-in; the
 sign-in page reads it for itself, and the router neither claims nor rewrites
@@ -63,7 +63,7 @@ interface shows its permanent banner. From `../backend/`:
 
 `--dev-no-sign-in` serves the loopback interface and refuses any other
 `--host`. With `ROBINAUTS_CONFIG` naming a file, only its model tables are
-read, and the agents it defines are the ones the picker offers.
+read, and the agents and models it defines are the ones the pickers offer.
 
 Signing in for real needs a `public_url`, a provider registration and the
 redirect URI — that is a deployment, not a laptop. To see the sign-in page
@@ -72,19 +72,21 @@ itself, use the fixture server below.
 ### Looking at the shell without a backend
 
 `scripts/fixture-server.mjs` serves a built `dist/` and answers the session,
-the agents and the conversation routes from fixtures, which is how the states
-that would otherwise take a real sign-in and a database are looked at:
+the agents, the models and the conversation routes from fixtures, which is
+how the states that would otherwise take a real sign-in and a database are
+looked at:
 
     npm run build
     node scripts/fixture-server.mjs signed-out 5173
 
 The scenes are `signed-in`, `signed-out`, `local`, `one-agent`, `no-agents`,
 `history` (enough conversations to page through) and `conversation` (three of
-them: a branch, a run in flight, and a run that ended badly). Which
-conversation is open is the hash, so both conversation scenes serve every
-route; renaming, deleting and cancelling really change what is served, for as
-long as the process runs. It is a development tool: it is in no check, no
-bundle and no wheel.
+them: a branch, a run in flight, and a run that ended badly, which is also on
+a model the fixtures no longer offer). Which conversation is open is the
+hash, so both conversation scenes serve every route; renaming, deleting,
+cancelling and changing a model really change what is served, for as long as
+the process runs. It is a development tool: it is in no check, no bundle and
+no wheel.
 
 Three more scenes **really stream**, over server-sent events, with a position
 on the last wire event derived from each of the run's own and the two headers
