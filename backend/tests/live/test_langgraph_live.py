@@ -23,15 +23,18 @@ The key is read from a variable of its own rather than from the one a
 deployment uses, so that running the suite on a machine that has a deployment
 configured does not quietly start spending its key.
 
-**Anthropic's own endpoint only.** The engine also reaches an
-``anthropic-compatible`` provider -- any endpoint that speaks the same Messages
-API at a configured ``base_url``, OpenRouter's among them -- and that route has
-a test of its own that needs no key at all
-(``tests/live/test_vendor_routing.py``), so there is nothing here to repeat.
-What is still out of reach is ``openai`` and ``openai-compatible``, through
-``langchain-openai``, which is installed but not yet wired into the engine:
-there is no ``ROBINAUTS_LIVE_OPENAI_KEY`` test to write until the engine
-offers those kinds.
+**The two vendors' own endpoints**, one turn each, each skipped without its
+own key: Anthropic's with ``ROBINAUTS_LIVE_ANTHROPIC_KEY``, OpenAI's with
+``ROBINAUTS_LIVE_OPENAI_KEY``::
+
+    ROBINAUTS_LIVE_OPENAI_KEY=sk-... \\
+        uv run pytest tests/live/test_langgraph_live.py
+
+The engine also reaches the two ``-compatible`` kinds -- any endpoint that
+speaks one of the two protocols at a configured ``base_url``, OpenRouter's
+among them -- and those routes have a test of their own that needs no key at
+all (``tests/live/test_vendor_routing.py``), so there is nothing here to
+repeat.
 """
 
 from __future__ import annotations
@@ -69,7 +72,21 @@ ANTHROPIC_MODEL_VARIABLE = "ROBINAUTS_LIVE_ANTHROPIC_MODEL"
 DEFAULT_MODEL = "claude-haiku-4-5"
 """The cheapest model that can answer the question below."""
 
-PROVIDER = "anthropic"
+OPENAI_KEY_VARIABLE = "ROBINAUTS_LIVE_OPENAI_KEY"
+"""The OpenAI key this test spends, and nothing else in the repository reads."""
+
+OPENAI_MODEL_VARIABLE = "ROBINAUTS_LIVE_OPENAI_MODEL"
+"""Which OpenAI model to ask, for when the default has been retired."""
+
+DEFAULT_OPENAI_MODEL = "gpt-5.4-nano"
+"""A cheap model that answers the question below without reasoning first.
+
+Chosen over a newer cheap one because it does not reason by default: on a
+model that does, the ceiling below covers the reasoning as well, and could be
+spent on it before a word of the answer.
+"""
+
+PROVIDER = "live"
 MODEL = "live"
 AGENT = "live"
 
@@ -85,25 +102,25 @@ MAX_TOKENS = 64
 """A ceiling, so that a model that misreads the question costs nothing much."""
 
 
-def live_key() -> str:
-    key = os.environ.get(ANTHROPIC_KEY_VARIABLE)
+def live_key(variable: str = ANTHROPIC_KEY_VARIABLE, vendor: str = "Anthropic") -> str:
+    key = os.environ.get(variable)
     if not key:
-        pytest.skip(f"set {ANTHROPIC_KEY_VARIABLE} to run one real turn against Anthropic")
+        pytest.skip(f"set {variable} to run one real turn against {vendor}")
     return key
 
 
-def live_models() -> ModelsConfig:
+def live_models(
+    kind: ProviderKind = ProviderKind.ANTHROPIC,
+    variable: str = ANTHROPIC_KEY_VARIABLE,
+    name: str | None = None,
+) -> ModelsConfig:
     return ModelsConfig(
-        providers={
-            PROVIDER: ModelProviderConfig(
-                id=PROVIDER, kind=ProviderKind.ANTHROPIC, api_key_env=ANTHROPIC_KEY_VARIABLE
-            )
-        },
+        providers={PROVIDER: ModelProviderConfig(id=PROVIDER, kind=kind, api_key_env=variable)},
         models={
             MODEL: ModelConfig(
                 id=MODEL,
                 provider=PROVIDER,
-                name=os.environ.get(ANTHROPIC_MODEL_VARIABLE) or DEFAULT_MODEL,
+                name=name or os.environ.get(ANTHROPIC_MODEL_VARIABLE) or DEFAULT_MODEL,
                 timeout_seconds=TURN_SECONDS,
                 max_output_tokens=MAX_TOKENS,
             )
@@ -123,6 +140,23 @@ def live_models() -> ModelsConfig:
 async def test_one_real_turn_against_anthropic_streams_and_completes() -> None:
     models = live_models()
     agent = LangGraphAgent(models, ProviderKeys({PROVIDER: live_key()}))
+    await one_real_turn(agent, models)
+
+
+@asyncio_test
+async def test_one_real_turn_against_openai_streams_and_completes() -> None:
+    """The same turn over Chat Completions, at OpenAI's own endpoint."""
+    key = live_key(OPENAI_KEY_VARIABLE, "OpenAI")
+    models = live_models(
+        ProviderKind.OPENAI,
+        OPENAI_KEY_VARIABLE,
+        os.environ.get(OPENAI_MODEL_VARIABLE) or DEFAULT_OPENAI_MODEL,
+    )
+    agent = LangGraphAgent(models, ProviderKeys({PROVIDER: key}))
+    await one_real_turn(agent, models)
+
+
+async def one_real_turn(agent: LangGraphAgent, models: ModelsConfig) -> None:
     seen: list[EngineEvent] = []
 
     async for event in agent.run_turn(models.agents[AGENT], (question(ASKED),), (), model=MODEL):

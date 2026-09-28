@@ -65,8 +65,9 @@ blamed on the template, or be replaced by the value of another.
 BASE_URL = "@BASE_URL@"
 """The template's line for it. A provider kind that has no ``base_url`` is not
 a provider with an empty one: the line goes altogether, because ``base_url =
-""`` is a start-up refusal and ``base_url`` at all is one for the ``anthropic``
-kind (``docs/specs/agents.md``)."""
+""`` is a start-up refusal and ``base_url`` at all is one for a vendor's own
+kind, ``anthropic`` or ``openai``, whose endpoint the engines pin
+(``docs/specs/agents.md``)."""
 
 TOOLS = "@TOOLS@"
 GITHUB_SERVER = "@GITHUB_SERVER@"

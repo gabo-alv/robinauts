@@ -189,14 +189,30 @@ runs every turn the same way:
   deliberate act on their own machine.
 - **A vendor's endpoint is not taken from the environment either.** Every
   client is built with the endpoint it is to use: the one the operator
-  configured (`base_url`, for an `openai-compatible` provider) or the
+  configured (`base_url`, for the two protocol kinds) or the
   vendor's own, named as a constant in the adapter. Left to the client,
   `ANTHROPIC_BASE_URL` and its equivalents would send a turn — and the
   operator's key — to whatever host a stale export named. For the same
   reason the key is always passed and never left to a client's
   `*_API_KEY` fallback, and a vendor-specific proxy variable is pinned off;
   an operator's proxy is `HTTPS_PROXY`, which every outbound call of the
-  process obeys.
+  process obeys. What a client reads that no argument can override — headers
+  it merges in (`ANTHROPIC_CUSTOM_HEADERS`, `OPENAI_CUSTOM_HEADERS`), and the
+  OpenAI client's organisation, project and admin key, which it reads
+  whenever the argument is left out and leaves out only when it finds nothing
+  — is taken out of the environment when the engine is built, and the key is
+  pinned as its own header as well, where the caller's value wins. There is
+  no way to configure an OpenAI organisation or project in this version: a
+  key belongs to one project already, and a header nobody wrote in the
+  configuration is not sent.
+- **The OpenAI kinds speak Chat Completions**, both of them and under both
+  engines: `ChatOpenAI` with the Responses API switched off, and Pydantic
+  AI's `OpenAIChatModel` rather than its Responses model. An
+  `openai-compatible` endpoint — a gateway, vLLM, OpenRouter — speaks Chat
+  Completions, and one protocol for both kinds keeps the two kinds and the
+  two engines symmetric: the same request goes out under either engine,
+  bar the few differences "Known findings" records. The Responses API is a
+  later decision (see "Known findings" for what it would buy).
 
 ## Tools
 
@@ -307,11 +323,11 @@ The decisions behind this, and their order of work, are in
     `langchain-google-genai`, `langchain-aws`;
   - Pydantic AI: `pydantic-ai-slim` with the provider extras needed, not
     the all-inclusive `pydantic-ai`.
-  - An OpenAI-compatible endpoint goes through the OpenAI-compatible
-    client with a base URL. **OpenRouter does not have to**: it also serves
-    Anthropic's Messages API, and an `anthropic-compatible` provider
-    reaches it with the Anthropic client both engines already have, which
-    is how it is reached in this build (below).
+  - An OpenAI-compatible endpoint goes through the OpenAI client with a
+    base URL, and an Anthropic-compatible one through the Anthropic client.
+    **OpenRouter serves both protocols**, so it may be configured as either
+    kind (below); the two are two providers, with a model list each, and not
+    two spellings of one.
 - Every one of these packages passes the licence and vulnerability gates
   at its pinned version, with its transitive tree
   ([open-source.md](open-source.md)). A provider whose client is not in the
@@ -348,14 +364,13 @@ system_prompt = "Play fair."
 ```
 
   An `anthropic-compatible` provider is the same thing with the endpoint
-  written down. **This is how OpenRouter is reached in this build**: it
-  serves Anthropic's Messages API and takes the key in the same
-  `x-api-key` header, so both engines reach it with the Anthropic client
-  they already have and no OpenAI client is needed. `base_url` is a
-  **prefix** the client appends the protocol's own path to, so it stops at
-  `/api` and the request goes to
-  `https://openrouter.ai/api/v1/messages`; the model names are
-  OpenRouter's, `<vendor>/<model>`:
+  written down. **This is one way OpenRouter is reached**: it serves
+  Anthropic's Messages API and takes the key in the same `x-api-key`
+  header, so both engines reach it with the Anthropic client. `base_url` is
+  a **prefix** the client appends the protocol's own path to, and
+  Anthropic's client appends `/v1/messages`, so it stops at `/api` and the
+  request goes to `https://openrouter.ai/api/v1/messages`; the model names
+  are OpenRouter's, `<vendor>/<model>`:
 
 ```toml
 [model_providers.openrouter]
@@ -373,20 +388,59 @@ model = "sonnet-via-openrouter"
 engine = "pydantic-ai"
 ```
 
-  The other two kinds are written the same way — here a self-hosted
-  gateway speaking OpenAI's protocol, which is a different provider from
-  the two above and not another spelling of one. **This build refuses
-  them** at start-up, naming the provider, because the engines do not
-  offer them yet (see "Known findings" below);
-  the shape is settled all the same, and `base_url` belongs to the two
-  protocol kinds and to nothing else:
+  The OpenAI kinds are written the same way: `openai` is OpenAI itself,
+  with no `base_url`, and `openai-compatible` any endpoint that speaks
+  OpenAI's Chat Completions — here a self-hosted gateway, which is a
+  different provider from the ones above and not another spelling of one.
+  `base_url` belongs to the two protocol kinds and to nothing else, and it
+  is again a **prefix**, but of a different path: OpenAI's client appends
+  `/chat/completions` alone, so the API's version is part of what the
+  operator writes. OpenAI's own endpoint, which the engines pin, is
+  `https://api.openai.com/v1`; a gateway at
+  `https://gateway.example.com/v1` is sent its requests at
+  `https://gateway.example.com/v1/chat/completions`; and OpenRouter over
+  this protocol is `base_url = "https://openrouter.ai/api/v1"`, reached at
+  `https://openrouter.ai/api/v1/chat/completions` — one `/v1` more than the
+  `anthropic-compatible` spelling above, because that client writes the
+  version itself. The key travels as `Authorization: Bearer <key>`:
 
 ```toml
+[model_providers.openai]
+kind = "openai"
+api_key_env = "ROBINAUTS_OPENAI_KEY"
+
 [model_providers.gateway]
 kind = "openai-compatible"
 base_url = "https://gateway.example.com/v1"
 api_key_env = "ROBINAUTS_GATEWAY_KEY"
+
+[models.gpt]
+provider = "openai"
+name = "gpt-5.5"
+title = "GPT-5.5"
+
+[models.scout-on-the-gateway]
+provider = "gateway"
+name = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+
+[agents.assistant-gpt]
+title = "Assistant (GPT)"
+model = "gpt"
+engine = "langgraph"
 ```
+
+  `max_output_tokens` means the same thing under every kind; what an
+  engine sends when it is left out differs by protocol. Anthropic's API
+  requires a ceiling on every request, so over it the engines send 8192;
+  Chat Completions requires none, and over it the engines send none, since
+  on OpenAI's reasoning models the ceiling covers the reasoning as well as
+  the answer and a number chosen to bound an answer can be spent entirely
+  on thinking. A configured one is sent in the field the kind takes: to
+  `openai` as `max_completion_tokens`, the field OpenAI's current models
+  take (its reasoning models refuse the older one), and to
+  `openai-compatible` as `max_tokens`, the field OpenRouter and older
+  compatible servers know and some know alone — Pydantic AI's own
+  OpenRouter profile makes the same choice. Both engines send the same.
 
   A tool server is a table beside the providers, `[mcp_servers.<id>]`, and
   an agent names the servers it may use in `tools`: the server's `url`;
@@ -456,22 +510,129 @@ tools = ["github", "jira", "learn"]
   `Apache-2.0 AND CNRI-Python`. Neither resolved under the policy. Both are
   settled now -- CNRI-Python is on the allowed list, and `tiktoken` 0.14.0 is
   excepted by name for its licence text (its package licence only: the BPE
-  tokenizer files it fetches at runtime are assets, a separate question
-  before the kinds are offered). The client is now a dependency, but the
-  engine does not offer the kinds yet: wiring them is a change of its own,
-  and until it is made `openai` and `openai-compatible` wait. The
-  configuration still names all four kinds — the vocabulary is the
-  platform's — and a deployment asking for a kind this build cannot reach
-  is refused at start-up, saying so.
-- The same holds for the **Pydantic AI** engine: `pydantic-ai-slim[openai]`
-  is installed too, and not wired either, so the same two kinds are out
-  of it.
-- So both engines reach **`anthropic` and `anthropic-compatible`**, with
-  one client each and nothing else added, and the swap holds for every
-  model either of them has. OpenRouter is reached as an
-  `anthropic-compatible` provider, which is what the exclusion above costs
-  and does not cost: a vendor behind an OpenAI-only endpoint is still out
-  of reach, and one that also speaks the Messages API is not.
+  tokenizer files it fetches at runtime are assets, a separate question).
+  **Nothing on a turn's path asks `tiktoken` for anything**: `ChatOpenAI`
+  reaches for it only to count tokens (`get_num_tokens` and its relatives),
+  which neither the engine nor the platform calls, and Pydantic AI only in
+  its embeddings, which are not used; so no tokenizer file is fetched and
+  the asset question does not arise. A turn is held to that by the
+  engines' tests: in each, the OpenAI turn test
+  (`test_an_openai_turn_streams_its_text_and_sends_the_configuration_s_request`,
+  in `tests/unit/test_langgraph_engine.py` and
+  `tests/unit/test_pydantic_ai_engine.py`) replaces `tiktoken`'s
+  `get_encoding` and `encoding_for_model` with functions that fail the test,
+  so a warm tokenizer cache, which closed sockets would not notice, cannot
+  hide a call.
+- So **both engines reach all four kinds**: `anthropic` and
+  `anthropic-compatible` through the Anthropic client, `openai` and
+  `openai-compatible` through the OpenAI one (`langchain-openai` under
+  LangGraph, `pydantic-ai-slim[openai]` under Pydantic AI), and the swap
+  holds for every model either of them has. The configuration names the same
+  four kinds, and a kind no engine of a build reaches is still refused at
+  start-up, saying so; in this build there is none.
+- **Chat Completions, and what it costs.** Both OpenAI kinds speak Chat
+  Completions under both engines ("Model providers" above). What that
+  leaves out, for the day the Responses API is decided on: OpenAI's signed
+  reasoning, which only the Responses API returns — an answer over Chat
+  Completions carries no `extras`, and nothing is replayed to the model — and
+  OpenAI's own server-side tools, which the platform does not use. And
+  **tools with reasoning**, on the newest models. OpenAI's model pages say,
+  for GPT-6 Sol and GPT-6 Luna (checked 2026-09-28), that Chat Completions
+  "supports function calling only with `reasoning_effort` set to `none`",
+  and send GPT-6 Astra's tools to the Responses API. For GPT-5.6 Sol, an
+  OpenAI Support reply on OpenAI's developer forum (community.openai.com,
+  post 1386454, 2026-09-07) quotes the refusal: "Function tools with
+  reasoning_effort are not supported for gpt-5.6-sol in
+  /v1/chat/completions. To use function tools, use /v1/responses or set
+  reasoning_effort to 'none'." GPT-5.6 Luna and Terra reason by default
+  (at `medium`) and are untried. The engines send no `reasoning_effort`, so
+  on any of these a turn with tools may be refused by the vendor, and a turn
+  without tools answers. The libraries pinned here know GPT-5.6 Sol, Luna
+  and Terra and GPT-6 Astra by name, and not GPT-6 Sol or Luna, which are
+  newer; nothing more than the sources above is claimed for any of them. The
+  demo's OpenAI models are GPT-5.5 and the GPT-5.4 family, which carry no
+  such note and whose smaller models do not reason unless asked
+  (`demo/README.md`).
+- **The request goes out as the same bytes under both engines.** The two
+  frameworks write Chat Completions messages differently, and the LangGraph
+  adapter moves to Pydantic AI's spelling, after `ChatOpenAI` has built the
+  request: an answer's text as a string beside its calls, a call's
+  arguments as compact JSON (no spaces, no ASCII escaping), `""` rather than
+  `null` for an answer with calls and no text, every message's keys in
+  Pydantic AI's order, and a result that went wrong written as
+  `{"error": <text>}` — the protocol has no field for "this went wrong", and
+  that is how Pydantic AI tells the model. A test runs both engines' real
+  clients over one history, for each OpenAI kind, and compares the request
+  byte for byte (`tests/unit/test_engine_swap.py`): the model, the
+  `messages`, the `tools` (one with a description and a schema carrying
+  titles, one with no description), `stream` and `stream_options`, and the
+  ceiling in the field the kind takes; the one field only one engine sends
+  is named below. Parity is proved **for the shapes that test writes**: a
+  call's arguments are serialised by a different library under each engine
+  (`json` under LangGraph, `pydantic_core` under Pydantic AI), and they agree
+  on the nested objects, integers and non-ASCII text the test holds — not
+  necessarily on every value a model could write, a float's spelling for
+  one.
+- **What is still not the same request**, left as each framework has it:
+  Pydantic AI sends `tool_choice: "auto"` with a turn's tools, which is the
+  protocol's default and what `langchain-openai` leaves unsaid; the system
+  prompt's role differs on the o-series — `langchain-openai` sends it as
+  `developer` for every model name beginning `o` and a digit, and Pydantic
+  AI keeps `system` except for names beginning `o1-mini`, which it sends as
+  `user` (that model takes no `system` role), so on `o1-mini` the two send
+  `developer` and `user` and on the other o-series models `developer` and
+  `system`; and for names beginning `o1` `langchain-openai` adds
+  `temperature: 1` when none is configured, which Pydantic AI does not.
+- **A `<think>` in the text is text, under both engines.** Pydantic AI would
+  otherwise lift a streamed `<think>` delta, and what follows it up to
+  `</think>`, out of the answer and into thinking; the Pydantic AI adapter
+  gives its OpenAI models no thinking tags, so, as under `langchain-openai`,
+  which has no such rule, what the vendor wrote is the answer, streamed and
+  stored with its tags.
+- **Reasoning a compatible endpoint streams in a field of its own is shown by
+  one engine only.** Some `openai-compatible` servers stream a model's
+  reasoning beside the text, in a field that is not OpenAI's: `reasoning`
+  (gpt-oss through Ollama or OpenRouter) or `reasoning_content` (DeepSeek,
+  Moonshot, vLLM). Pydantic AI reads either as thinking, and the Pydantic AI
+  engine streams it as reasoning; `langchain-openai` reads neither, and the
+  LangGraph engine shows nothing and does not fail. Neither engine keeps it:
+  it is unsigned, and what is stored is the answer. Both engines' tests pin
+  their side of it.
+- **How a streamed call may arrive, and what each engine makes of it.** Both
+  engines key a streamed call by its index — by its id, when a compatible
+  server sends a delta with no index, which OpenAI never does — and take a
+  server that sends the
+  id first and the name in a later delta, and one that repeats the id and
+  the name on every delta (Pydantic AI appends every name it is sent, so the
+  Pydantic AI adapter drops a name equal to the one the call has before the
+  framework sees it). Both refuse a call that is never named — the
+  framework would otherwise drop it silently, and the Pydantic AI adapter's
+  stream checks every call it saw begin at the end — a call whose name changes after
+  it is announced (a name streamed in pieces, which Pydantic AI would store
+  truncated), and a call the final message holds that the stream never
+  announced. They differ in one shape: a call whose **name arrives before its
+  id** is taken by the LangGraph engine, which announces a call once both
+  are known, and refused by the Pydantic AI engine, whose framework
+  announces it at once under an id of its own and then finds the vendor's.
+  And a delta with no `function` object at all fails a LangGraph turn inside
+  `langchain-openai` (an `AttributeError`, before the adapter sees the
+  chunk), a shape the tests do not pin. Every other shape above has a test
+  under each engine, and so do index-less calls: a single one, one after an
+  indexed call, one that repeats its id and name, each taken with the same
+  result under both, and one never named, refused by both.
+- **OpenAI's `refusal` field is not read.** Chat Completions carries a
+  separate `refusal` in place of the content only for Structured Outputs,
+  which the platform never asks for; a model declining a question otherwise
+  says so in its text, which is streamed and stored like any other.
+- **`ChatOpenAI` is handed clients the adapter built**, where
+  `ChatAnthropic` is handed arguments. Left to build its own,
+  `langchain-openai` takes its HTTP client from a cache shared by every turn
+  of the process and gives it TCP socket options read from
+  `LANGCHAIN_OPENAI_TCP_*`; the adapter's own clients are built per turn,
+  as the other client and the other engine's are, with exactly what the
+  configuration says. Every other default it would take from the
+  environment — `OPENAI_PROXY`, `LC_OUTPUT_VERSION`, its own stream timeout,
+  whether to ask for the stream's usage — is passed as an argument.
 - `langsmith` is a hard dependency of `langchain-core`, and the LangGraph
   adapter imports it for **one call**: `langsmith.configure(enabled=False)`,
   made when the engine is constructed, which is the switch langchain-core

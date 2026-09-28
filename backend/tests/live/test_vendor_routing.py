@@ -3,16 +3,21 @@
 
 """Where a turn's request really goes, asked of the vendor rather than of a mock.
 
-One turn per engine against a real ``anthropic-compatible`` endpoint --
-OpenRouter's -- with a **bogus key**. The answer is a 401, and that is the
-point: a refusal from ``openrouter.ai`` is proof that the request was built
-from the configuration and arrived at ``https://openrouter.ai/api/v1/messages``,
-which is the one thing no test with a stubbed client can show. Everything else
-about the two engines is proved without a network
-(``tests/unit/test_langgraph_engine.py``,
-``tests/unit/test_pydantic_ai_engine.py``); what is proved here is that
-``base_url`` plus the vendor SDK's own path really compose into the endpoint
-``docs/specs/agents.md`` tells an operator to expect.
+One turn per engine and per protocol against a real endpoint that speaks both
+-- OpenRouter's -- with a **bogus key**: as an ``anthropic-compatible``
+provider, and as an ``openai-compatible`` one. The answer is a 401, and that
+is the point: a refusal from ``openrouter.ai`` is proof that the request was
+built from the configuration and arrived at
+``https://openrouter.ai/api/v1/messages``, or at
+``https://openrouter.ai/api/v1/chat/completions``, which is the one thing no
+test with a stubbed client can show. Everything else about the two engines is
+proved without a network (``tests/unit/test_langgraph_engine.py``,
+``tests/unit/test_pydantic_ai_engine.py``, where each engine's OpenAI client
+is also run over a transport the test writes); what is proved here is that
+``base_url`` plus each vendor SDK's own path really compose into the endpoint
+``docs/specs/agents.md`` tells an operator to expect -- and the two
+``base_url`` values differ by a ``/v1``, because one client writes the version
+itself and the other does not.
 
 **No ordinary test run reaches a provider, and this is why it is here.**
 ``tests/live/`` is not collected by a plain ``pytest`` (``norecursedirs`` in
@@ -47,6 +52,7 @@ from typing import Any
 
 import anthropic
 import httpx
+import openai
 import pytest
 
 from aio import asyncio_test
@@ -79,25 +85,44 @@ beside it. Nothing else in the repository reads it.
 """
 
 PROVIDER = "openrouter"
-MODEL = "sonnet-via-openrouter"
+MODEL = "via-openrouter"
 AGENT = "assistant"
 
-BASE_URL = "https://openrouter.ai/api"
-"""What an operator writes, exactly as ``docs/specs/agents.md`` prints it."""
 
-ENDPOINT = "https://openrouter.ai/api/v1/messages"
-"""Where the SDK therefore sends the request: the base URL plus its own path.
+@dataclass(frozen=True)
+class Route:
+    """One protocol to OpenRouter: the kind, what an operator writes, where it goes."""
 
-The claim this module exists to check. A query string may be added by a
-framework (Pydantic AI asks for the beta), so it is the scheme, the host and
-the path that are compared and not the whole of the URL.
-"""
+    kind: ProviderKind
+    base_url: str
+    """What an operator writes, exactly as ``docs/specs/agents.md`` prints it."""
+    endpoint: str
+    """Where the SDK therefore sends the request: the base URL plus its own path.
 
-MODEL_NAME = "anthropic/claude-sonnet-5"
-"""OpenRouter's own name for the model. It is never reached: the key is refused
-first. It is a real id all the same, so that the 401 is about the credential
-and not about a model that does not exist.
-"""
+    The claim this module exists to check. A query string may be added by a
+    framework (Pydantic AI asks Anthropic for the beta), so it is the scheme,
+    the host and the path that are compared and not the whole of the URL.
+    """
+    model_name: str
+    """OpenRouter's own name for the model. It is never reached: the key is
+    refused first. It is a real id all the same, so that the 401 is about the
+    credential and not about a model that does not exist."""
+
+
+ROUTES = {
+    "anthropic-compatible": Route(
+        ProviderKind.ANTHROPIC_COMPATIBLE,
+        "https://openrouter.ai/api",
+        "https://openrouter.ai/api/v1/messages",
+        "anthropic/claude-sonnet-5",
+    ),
+    "openai-compatible": Route(
+        ProviderKind.OPENAI_COMPATIBLE,
+        "https://openrouter.ai/api/v1",
+        "https://openrouter.ai/api/v1/chat/completions",
+        "openai/gpt-5.5",
+    ),
+}
 
 BOGUS_KEY = "sk-or-v1-" + "0" * 64
 """Key-shaped, and nobody's.
@@ -112,7 +137,12 @@ REFUSAL = "User not found."
 
 UNAUTHORIZED = 401
 
-UNREACHABLE = (anthropic.APIConnectionError, httpx.TransportError, OSError)
+UNREACHABLE = (
+    anthropic.APIConnectionError,
+    openai.APIConnectionError,
+    httpx.TransportError,
+    OSError,
+)
 """What "there is no route to the vendor from here" arrives as. See ``refusal_in``."""
 
 TURN_SECONDS = 30.0
@@ -148,44 +178,54 @@ ENGINES: dict[Engine, Wiring] = {
     Engine.LANGGRAPH: Wiring(LangGraphAgent, langgraph_chat_model, "chat_model_for"),
     Engine.PYDANTIC_AI: Wiring(PydanticAIAgent, pydantic_ai_chat_model, "model_for"),
 }
-"""Both engines, which reach an ``anthropic-compatible`` provider by
-different routes through the same SDK. Written out here rather than imported
+"""Both engines, which reach each compatible kind by different routes through
+the same SDK. Written out here rather than imported
 from ``robinauts.app``: this is a test of the two adapters, and the table the
 composition root keeps is a claim of its own.
 """
 
 
-def clients_of(built: object) -> list[anthropic.AsyncAnthropic | anthropic.Anthropic]:
+VendorClient = anthropic.AsyncAnthropic | anthropic.Anthropic | openai.AsyncOpenAI | openai.OpenAI
+"""What an engine's factory may hold: either vendor's client, either way round."""
+
+
+def clients_of(built: object) -> list[VendorClient]:
     """The vendor clients inside whatever an engine's factory produced.
 
     Read off the framework object by name, since that is where each framework
-    keeps it: ``ChatAnthropic`` holds an async and a sync client,
-    ``AnthropicModel`` the one it was given.
+    keeps it: ``ChatAnthropic`` holds an async and a sync client under
+    ``_async_client`` and ``_client``, ``ChatOpenAI`` the two it was handed
+    under ``root_async_client`` and ``root_client``, and ``AnthropicModel`` and
+    ``OpenAIChatModel`` the one each was given, as ``client``.
     """
-    found = [getattr(built, name, None) for name in ("_async_client", "_client", "client")]
+    names = ("_async_client", "_client", "root_async_client", "root_client", "client")
+    found = [getattr(built, name, None) for name in names]
     return [
         client
         for client in found
-        if isinstance(client, anthropic.AsyncAnthropic | anthropic.Anthropic)
+        if isinstance(
+            client,
+            anthropic.AsyncAnthropic | anthropic.Anthropic | openai.AsyncOpenAI | openai.OpenAI,
+        )
     ]
 
 
-def models_for(engine: Engine) -> ModelsConfig:
+def models_for(engine: Engine, route: Route) -> ModelsConfig:
     """A deployment of one OpenRouter provider, one model and one agent on it."""
     return ModelsConfig(
         providers={
             PROVIDER: ModelProviderConfig(
                 id=PROVIDER,
-                kind=ProviderKind.ANTHROPIC_COMPATIBLE,
+                kind=route.kind,
                 api_key_env="ROBINAUTS_OPENROUTER_KEY",
-                base_url=BASE_URL,
+                base_url=route.base_url,
             )
         },
         models={
             MODEL: ModelConfig(
                 id=MODEL,
                 provider=PROVIDER,
-                name=MODEL_NAME,
+                name=route.model_name,
                 timeout_seconds=TURN_SECONDS,
                 max_output_tokens=MAX_TOKENS,
             )
@@ -210,10 +250,12 @@ def question() -> Message:
     )
 
 
-def answer_in(raised: BaseException) -> anthropic.APIStatusError:
+def answer_in(
+    raised: BaseException, endpoint: str
+) -> anthropic.APIStatusError | openai.APIStatusError:
     """The vendor's own answer from anywhere in that exception's chain.
 
-    Each engine wraps what the SDK raised in its framework's own error
+    Each engine may wrap what the SDK raised in its framework's own error
     (``AnthropicAuthenticationError``, ``ModelHTTPError``), so the chain is
     walked rather than the outermost exception read: what is being asked about
     is the **request the SDK made**, and only the SDK's own exception carries
@@ -235,22 +277,24 @@ def answer_in(raised: BaseException) -> anthropic.APIStatusError:
     cause: BaseException | None = raised
     while cause is not None and cause not in causes:
         causes.append(cause)
-        if isinstance(cause, anthropic.APIStatusError):
+        if isinstance(cause, anthropic.APIStatusError | openai.APIStatusError):
             return cause
         cause = cause.__cause__ or cause.__context__
     if any(isinstance(cause, UNREACHABLE) for cause in causes):
-        pytest.skip(f"{ENDPOINT} could not be reached from this machine")
+        pytest.skip(f"{endpoint} could not be reached from this machine")
     raise raised
 
 
 @pytest.mark.skipif(not os.environ.get(SWITCH), reason=f"set {SWITCH}=1 to run this")
+@pytest.mark.parametrize("route", sorted(ROUTES))
 @pytest.mark.parametrize("engine", sorted(ENGINES), ids=lambda engine: engine.value)
 @asyncio_test
-async def test_an_anthropic_compatible_turn_reaches_the_configured_endpoint(
-    engine: Engine,
+async def test_a_compatible_turn_reaches_the_configured_endpoint(
+    engine: Engine, route: str
 ) -> None:
     wiring = ENGINES[engine]
-    models = models_for(engine)
+    reached = ROUTES[route]
+    models = models_for(engine, reached)
     opened: list[object] = []
 
     def remembering(*arguments: Any) -> Any:
@@ -270,12 +314,12 @@ async def test_an_anthropic_compatible_turn_reaches_the_configured_endpoint(
         # left to a finaliser in the middle of another test (`Wiring`).
         for built in opened:
             for client in clients_of(built):
-                if isinstance(client, anthropic.AsyncAnthropic):
+                if isinstance(client, anthropic.AsyncAnthropic | openai.AsyncOpenAI):
                     await client.close()
                 else:
                     client.close()
 
-    answered = answer_in(raised.value)
+    answered = answer_in(raised.value, reached.endpoint)
     # Where the request went, which is the whole claim: the configured base URL
     # with the SDK's own path under it. Asserted for **every** answer, whatever
     # its status, because arriving at the wrong host is the failure this test
@@ -283,11 +327,11 @@ async def test_an_anthropic_compatible_turn_reaches_the_configured_endpoint(
     # asks the vendor for a beta -- and the key is not in a URL at all, being a
     # header.
     sent = answered.response.request.url
-    assert f"{sent.scheme}://{sent.host}{sent.path}" == ENDPOINT
+    assert f"{sent.scheme}://{sent.host}{sent.path}" == reached.endpoint
     # What came back should be a refusal about the credential. Anything else is
     # the vendor having a view of its own today -- a rate limit, a block, a bad
     # gateway -- and is not this build's business, so it is a skip that says
     # what was answered rather than a red build.
     if answered.status_code != UNAUTHORIZED:
-        pytest.skip(f"{ENDPOINT} answered {answered.status_code}, not {UNAUTHORIZED}")
+        pytest.skip(f"{reached.endpoint} answered {answered.status_code}, not {UNAUTHORIZED}")
     assert REFUSAL in str(answered.body)

@@ -168,6 +168,21 @@ api_key_env = "ROBINAUTS_ANTHROPIC_KEY"
 # base_url = "https://openrouter.ai/api"
 # api_key_env = "ROBINAUTS_OPENROUTER_KEY"
 
+# Or OpenAI itself, whose endpoint the engines pin, so there is no base_url:
+# [model_providers.openai]
+# kind = "openai"
+# api_key_env = "ROBINAUTS_OPENAI_KEY"
+#
+# Or any endpoint that speaks OpenAI's Chat Completions -- a gateway, vLLM,
+# OpenRouter again. base_url is again a PREFIX, but OpenAI's client appends
+# /chat/completions alone, so the API's version is part of it: requests to
+# this one go to https://gateway.example.com/v1/chat/completions, and
+# OpenRouter this way is base_url = "https://openrouter.ai/api/v1".
+# [model_providers.gateway]
+# kind = "openai-compatible"
+# base_url = "https://gateway.example.com/v1"
+# api_key_env = "ROBINAUTS_GATEWAY_KEY"
+
 [models.sonnet]
 provider = "anthropic"
 name = "claude-sonnet-5"
@@ -195,12 +210,33 @@ Notes on what is and is not there:
   who may sign in is a user, and a file with an `admin` table does not
   start ([specs/sign-in.md](specs/sign-in.md)).
 - **Engines**: `langgraph` and `pydantic-ai`, both wired. **Provider
-  kinds**: `anthropic` and `anthropic-compatible` in this build, which one
-  Anthropic client reaches between them — the second is any endpoint that
-  speaks Anthropic's Messages API at a `base_url` you give, and is how
-  OpenRouter is reached. `openai` and `openai-compatible` are refused at
-  start-up saying so: their clients are installed, but the engines do not
-  offer those kinds yet ([specs/agents.md](specs/agents.md)).
+  kinds**: all four, under both engines. `anthropic` and `openai` are the
+  vendors themselves, at the endpoint the engines pin, and take no
+  `base_url`; `anthropic-compatible` is any endpoint that speaks Anthropic's
+  Messages API and `openai-compatible` any that speaks OpenAI's Chat
+  Completions, at a `base_url` you give. **What `base_url` means differs by
+  protocol**: it is the prefix the client appends its own path to, which is
+  `/v1/messages` for Anthropic's (so OpenRouter is
+  `https://openrouter.ai/api`) and `/chat/completions` alone for OpenAI's
+  (so OpenRouter is `https://openrouter.ai/api/v1`, and a vLLM server on
+  this machine `http://127.0.0.1:8000/v1`). The OpenAI kinds speak Chat
+  Completions, never the Responses API, and the key is sent as
+  `Authorization: Bearer`. `max_output_tokens` left out means 8192 over
+  Anthropic's protocol, which requires a ceiling, and no ceiling at all over
+  OpenAI's; one that is set is sent to `openai` as `max_completion_tokens`
+  and to `openai-compatible` as `max_tokens`, the field OpenRouter and older
+  servers know ([specs/agents.md](specs/agents.md)).
+- **What the engines take out of the environment.** The vendors' clients
+  would otherwise read settings from variables nobody wrote in this file, so
+  the engines pass everything as arguments and, when they are built at
+  start-up, remove the variables an argument cannot override:
+  `ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_LOG`, `OPENAI_CUSTOM_HEADERS`,
+  `OPENAI_LOG`, `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT_ID`
+  and `OPENAI_ADMIN_KEY`. `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
+  `OPENAI_API_BASE`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and the
+  vendor-specific proxy variables are never consulted; a proxy is
+  `HTTPS_PROXY`. An `OPENAI_API_KEY` in the unit's environment is used only
+  if a provider's `api_key_env` names it.
 - `token_endpoint_auth` is `client_secret_basic` by default, or
   `client_secret_post`.
 - **Titles.** An agent's or a model's `title` is the name a person picks it
@@ -620,7 +656,11 @@ engine = "pydantic-ai"
 | `unknown key 'sessions_hours'` | a misspelt key | spell it as the example does; unknown keys are never ignored |
 | `providers.<id>: the client secret is read from the environment variable X, which is unset or empty` | the variable is unset, empty, or not in the unit's `EnvironmentFile` | set it; an empty variable counts as unset |
 | `model_providers.<id>: the API key is read from the environment variable X, which is unset or empty` | as above, for a model provider | set it; every *declared* provider needs its key, used or not |
-| `model_providers.<id>.kind: this build cannot reach 'openai' providers; it was built with anthropic, anthropic-compatible` | the engines do not offer that kind yet | use `anthropic`, or `anthropic-compatible` with the endpoint's `base_url`; otherwise wait for a build that offers it |
+| `model_providers.<id>.kind: this build cannot reach '…' providers; it was built with …` | a build whose engines do not offer that kind; this one offers all four, so it is a build of something else | use one of the kinds the message lists |
+| every turn on an `openai-compatible` provider fails, most often with a `404` | `base_url` is missing the API's version: OpenAI's client appends `/chat/completions` alone | end `base_url` where the endpoint's own documentation puts `/chat/completions` after it, usually at `/v1` |
+| every turn on an `openai-compatible` provider fails with a `400` naming `max_tokens` | the endpoint knows only the newer `max_completion_tokens`, and a compatible endpoint is sent the older field every server has known | leave `max_output_tokens` out for that model |
+| every turn on one OpenAI model fails, and the vendor's message says the model is not supported on this endpoint, or to use the Responses API | OpenAI serves some models (several `-pro` and agentic ones) only over the Responses API, and this build speaks Chat Completions for both OpenAI kinds | pick a model whose page on OpenAI's site lists `v1/chat/completions` ([specs/agents.md](specs/agents.md)) |
+| a turn with tools on GPT-6 Sol, GPT-6 Luna or GPT-5.6 Sol is refused by OpenAI (for GPT-5.6 Sol, "Function tools with reasoning_effort are not supported … in /v1/chat/completions"), and the same model answers without tools | OpenAI documents function calling over Chat Completions on GPT-6 Sol and Luna only with reasoning off, OpenAI Support reported the GPT-5.6 Sol refusal (2026-09-07), and the other GPT-5.6 models reason by default and are untried; the engines do not turn reasoning off (not yet seen in a live turn here) | use another model for an agent with tools ([specs/agents.md](specs/agents.md), "Known findings") |
 | `agents.<id>.engine: one of langgraph, pydantic-ai, not '…'` | a misspelt engine | `langgraph` or `pydantic-ai`; both are wired in this build |
 | `admin: roles are not in this release …` | an `[[admin]]` table | remove it; roles are deferred |
 | `allow: no entry, so nobody could sign in` | providers configured, allow list empty | add at least one `[[allow]]` |

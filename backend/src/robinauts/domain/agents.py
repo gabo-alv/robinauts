@@ -172,12 +172,14 @@ class ProviderKind(StrEnum):
     **Not every kind is reachable from every build.** A kind no engine of the
     build builds a client for is not offered, which is why
     ``robinauts.core.parse_models_config`` is told which kinds the deployment
-    can build rather than assuming all of them. This build reaches
-    ``ANTHROPIC`` and ``ANTHROPIC_COMPATIBLE``, which is how OpenRouter is
-    reached here: it serves Anthropic's Messages API at
-    ``https://openrouter.ai/api/v1/messages`` and takes the key in the same
-    ``x-api-key`` header, so the Anthropic client the engines already have is
-    the client for it.
+    can build rather than assuming all of them. This build reaches all four,
+    under both engines: the two Anthropic kinds through Anthropic's client,
+    and the two OpenAI kinds through OpenAI's, over Chat Completions.
+    OpenRouter speaks both protocols, so it is either kind -- an
+    ``ANTHROPIC_COMPATIBLE`` provider at ``https://openrouter.ai/api``, or an
+    ``OPENAI_COMPATIBLE`` one at ``https://openrouter.ai/api/v1`` -- the
+    ``base_url`` being in each case the prefix that protocol's client appends
+    its own path to (``docs/specs/agents.md``).
     """
 
     ANTHROPIC = "anthropic"

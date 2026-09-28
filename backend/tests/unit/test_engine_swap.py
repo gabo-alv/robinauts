@@ -27,6 +27,10 @@ Three things, which are the whole of the claim:
    format version, and differ in one value: ``provenance.engine``. That is
    what makes the swap a change of configuration rather than a migration.
 
+And over OpenAI's Chat Completions, a fourth: **the two engines send the
+same history, byte for byte** -- each through its real client and its real
+framework, to a vendor the test writes (``tests/chat_completions.py``).
+
 The other half of the swap -- doing it by editing the configuration file and
 restarting -- is an integration test over the real PostgreSQL
 (``tests/integration/test_create_app.py``).
@@ -35,16 +39,39 @@ restarting -- is an integration test over the real PostgreSQL
 from __future__ import annotations
 
 import asyncio
+import json
+import uuid
 from typing import Any
 
+import pytest
+
+import chat_completions
 from aio import asyncio_test
-from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition
+from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition, answer, question
 from engines import MODELS, Scripts, both_engines, scripts
 from fakes import CountingIdSource, FakeClock, MemoryConversationStore
-from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
+from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals, ProviderKeys
+from robinauts.adapters.agents.langgraph import LangGraphAgent
+from robinauts.adapters.agents.langgraph import chat_model as langgraph_chat_model
+from robinauts.adapters.agents.pydantic_ai import PydanticAIAgent
+from robinauts.adapters.agents.pydantic_ai import chat_model as pydantic_ai_chat_model
 from robinauts.application import Turns
 from robinauts.core import message_to_data
-from robinauts.domain import FORMAT_VERSION, Engine, Message, Role, Run
+from robinauts.domain import (
+    FORMAT_VERSION,
+    Engine,
+    Message,
+    ModelConfig,
+    ModelProviderConfig,
+    ModelsConfig,
+    ProviderKind,
+    Role,
+    Run,
+    TextPart,
+    ToolCallPart,
+    ToolDefinition,
+    ToolResultPart,
+)
 from turns import AUTHOR, NOW, stored_messages
 
 SYSTEM_PROMPT = "Play fair."
@@ -260,6 +287,186 @@ async def test_a_conversation_moved_to_another_model_runs_on_it_under_either_eng
         for message in messages
         if message.provenance is not None
     ] == said.built
+
+
+# --- the same request over Chat Completions ----------------------------------
+
+
+GPT = "gpt"
+
+SEARCH = ToolDefinition(
+    name="github__search",
+    description="",
+    input_schema={"type": "object", "properties": {"q": {"type": "string"}}},
+)
+"""A tool with no description, which the two frameworks would otherwise spell differently."""
+
+READ = ToolDefinition(
+    name="github__read_file",
+    description="Read a file of a repository.",
+    input_schema={
+        "type": "object",
+        "title": "Read",
+        "properties": {"path": {"type": "string", "title": "Path"}},
+        "required": ["path"],
+    },
+)
+"""A described tool whose schema carries titles, which one framework would strip."""
+
+SHARED_FIELDS = ("model", "messages", "tools", "stream", "stream_options")
+"""The fields of the request both engines send, compared byte for byte.
+
+What is left out is sent by one engine only: ``tool_choice: "auto"``, which
+Pydantic AI adds and which is the protocol's default (``docs/specs/agents.md``,
+"Known findings"). The ceiling is compared on its own, per kind.
+"""
+
+CEILING_FIELDS = ("max_completion_tokens", "max_tokens")
+
+
+def _answered_calls(parent: Message, text: str, *calls: ToolCallPart) -> Message:
+    return answer(parent, parts=(*((TextPart(text),) if text else ()), *calls))
+
+
+def _results(parent: Message, *results: ToolResultPart) -> Message:
+    return Message(
+        id=uuid.uuid4(),
+        conversation_id=parent.conversation_id,
+        parent_id=parent.id,
+        role=Role.TOOL,
+        parts=results,
+        created_at=parent.created_at,
+    )
+
+
+def _history() -> tuple[Message, ...]:
+    """A history holding every shape an answer and a result take over this protocol.
+
+    Text beside a call; a call with no text; a result that went wrong and one
+    that did not, with text that is not ASCII; an answer that said nothing;
+    and the question being answered last.
+    """
+    first = question("Find the robinauts.")
+    looked = _answered_calls(
+        first, "Let me look.", ToolCallPart("call_1", SEARCH.name, {"q": "robinauts", "n": 3})
+    )
+    failed = _results(looked, ToolResultPart("call_1", "rate limited", is_error=True))
+    again = _answered_calls(failed, "", ToolCallPart("call_2", SEARCH.name, {"q": "café"}))
+    found = _results(again, ToolResultPart("call_2", "found «3»"))
+    told = answer(found, "Three.")
+    second = question("And now?", parent=told)
+    silent = answer(second, parts=(TextPart(""),))
+    last = question("Well?", parent=silent)
+    return (first, looked, failed, again, found, told, second, silent, last)
+
+
+def _openai_models(engine: Engine, kind: ProviderKind) -> ModelsConfig:
+    base_url = "https://gateway.example.test/v1" if kind is ProviderKind.OPENAI_COMPATIBLE else None
+    return ModelsConfig(
+        providers={
+            "openai": ModelProviderConfig(
+                id="openai", kind=kind, api_key_env="K", base_url=base_url
+            )
+        },
+        models={
+            GPT: ModelConfig(
+                id=GPT, provider="openai", name=chat_completions.MODEL_NAME, max_output_tokens=1234
+            )
+        },
+        agents={
+            AGENT: agent_definition(id=AGENT, model=GPT, engine=engine, system_prompt=SYSTEM_PROMPT)
+        },
+    )
+
+
+async def _sent_by(engine: Engine, kind: ProviderKind) -> dict[str, Any]:
+    """The request the engine sends for the history, as the JSON it is."""
+    vendor = chat_completions.Vendor(
+        chat_completions.streamed(*chat_completions.said("Fine."), *chat_completions.finished())
+    )
+    models = _openai_models(engine, kind)
+    keys = ProviderKeys({"openai": "not-a-real-key"})
+
+    def plugged(model: ModelConfig, provider: ModelProviderConfig, key: str) -> Any:
+        if engine is Engine.LANGGRAPH:
+            built: Any = langgraph_chat_model(model, provider, key)
+            vendor.plugged_into(built.root_async_client)
+        else:
+            built = pydantic_ai_chat_model(model, provider, key)
+            vendor.plugged_into(built.client)
+        return built
+
+    agent: Any = (
+        LangGraphAgent(models, keys, chat_model_for=plugged)
+        if engine is Engine.LANGGRAPH
+        else PydanticAIAgent(models, keys, model_for=plugged)
+    )
+    async for _ in agent.run_turn(models.agents[AGENT], _history(), (SEARCH, READ), model=GPT):
+        pass
+    body = json.loads(vendor.request.content)
+    assert isinstance(body, dict)
+    return body
+
+
+def _bytes(body: dict[str, Any], *fields: str) -> bytes:
+    """Those fields of a request, in the order they were sent, as JSON bytes."""
+    return json.dumps(
+        {key: value for key, value in body.items() if key in fields}, ensure_ascii=False
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    ("kind", "ceiling"),
+    [
+        (ProviderKind.OPENAI, "max_completion_tokens"),
+        (ProviderKind.OPENAI_COMPATIBLE, "max_tokens"),
+    ],
+    ids=["openai", "openai-compatible"],
+)
+@asyncio_test
+async def test_both_engines_send_the_same_request_over_chat_completions(
+    kind: ProviderKind, ceiling: str
+) -> None:
+    """The history, the tools, the stream options and the ceiling, byte for byte.
+
+    For the shapes written here: the arguments of a call are serialised by a
+    different library under each engine (``json`` under LangGraph,
+    ``pydantic_core`` under Pydantic AI), so what is proved is parity for
+    these values -- nested objects, integers, text that is not ASCII -- and not
+    for every value a model could write.
+    """
+    langgraph = await _sent_by(Engine.LANGGRAPH, kind)
+    pydantic_ai = await _sent_by(Engine.PYDANTIC_AI, kind)
+
+    assert _bytes(langgraph, *SHARED_FIELDS) == _bytes(pydantic_ai, *SHARED_FIELDS)
+    assert _bytes(langgraph, *CEILING_FIELDS) == _bytes(pydantic_ai, *CEILING_FIELDS)
+    assert langgraph[ceiling] == 1234
+    assert not (set(CEILING_FIELDS) - {ceiling}) & set(langgraph)
+    assert set(pydantic_ai) - set(langgraph) == {"tool_choice"}
+    # And it is the request it should be, not merely the same one twice.
+    sent = langgraph["messages"]
+    assert [message["role"] for message in sent] == [
+        "system", "user", "assistant", "tool", "assistant", "tool",
+        "assistant", "user", "assistant", "user",
+    ]  # fmt: skip
+    assert sent[2]["tool_calls"][0]["function"]["arguments"] == '{"q":"robinauts","n":3}'
+    assert sent[3]["content"] == '{"error":"rate limited"}'
+    assert sent[4]["content"] == ""
+    assert sent[4]["tool_calls"][0]["function"]["arguments"] == '{"q":"café"}'
+    assert sent[5]["content"] == "found «3»"
+    assert sent[8]["content"] == ""
+    assert langgraph["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": dict(tool.input_schema),
+            },
+        }
+        for tool in (SEARCH, READ)
+    ]
+    assert langgraph["stream_options"] == {"include_usage": True}
 
 
 def _shared(document: dict[str, Any]) -> dict[str, Any]:
