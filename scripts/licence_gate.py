@@ -30,7 +30,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.parser import BytesParser
 from enum import Enum
 from pathlib import Path
@@ -131,6 +131,12 @@ _SPELLINGS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # unversioned name is a family, listed with the others below.
     ("PSF-2.0", ("psf-2", "python software foundation license 2.0")),
     ("Python-2.0", ("python license 2.0",)),
+    # The licence CNRI released Python 1.6.1 under, and a third identifier
+    # beside the two above: SPDX keeps PSF-2.0, Python-2.0 and CNRI-Python
+    # apart, and so does this table. CNRI-Python-GPL-Compatible is a fourth,
+    # and is deliberately not spelt here -- it is on no list, and an
+    # identifier nobody spelt stays unknown.
+    ("CNRI-Python", ("cnri python license", "cnri-python license")),
     ("CC0-1.0", ("cc0", "cc0 1.0 universal (cc0 1.0) public domain dedication")),
     ("Unlicense", ("the unlicense", "the unlicense (unlicense)")),
     # Restricted.
@@ -348,6 +354,12 @@ class Policy:
     """Canonical package name -> the row of the restricted table."""
     development_exceptions: dict[str, NamedException]
     """Canonical package name -> the row of the development-only table."""
+    licence_text_exceptions: dict[str, NamedException] = field(default_factory=dict)
+    """Canonical package name -> the row of the licence-text table.
+
+    Empty unless the document says otherwise, so that a policy built some other
+    way than from DEPENDENCIES.md excepts nothing it was not told to.
+    """
 
     def category(self, identifier: str) -> Verdict:
         """What the policy makes of one licence.
@@ -443,11 +455,13 @@ def _named_packages(row: str) -> list[str]:
     return [canonical_name(name) for name in re.findall(r"`([^`]+)`", row)]
 
 
-def _exceptions(section: str, *, versioned: bool) -> dict[str, NamedException]:
+def _exceptions(section: str, *, versioned: bool, scope: str = "") -> dict[str, NamedException]:
     """One exception table of DEPENDENCIES.md, read by its column headings.
 
     The columns are found by name rather than by position, so a column may be
     added to the document without silently changing what the gate reads.
+    `scope` is what every row of the table means by being in it, for a table
+    that has no scope column of its own.
     """
     header, rows = _table(section)
     for wanted in ("package", "licence") + (("version",) if versioned else ()):
@@ -466,26 +480,42 @@ def _exceptions(section: str, *, versioned: bool) -> dict[str, NamedException]:
         if not names:
             raise ValueError("a row of DEPENDENCIES.md names no package in backticks")
         version = cells[version_at].strip("` ") if version_at is not None else ""
-        # A development-only exception says so by being in that table at all.
-        scope = "development only" if versioned else ""
-        if scope_at is not None:
-            scope = cells[scope_at]
+        stated = cells[scope_at] if scope_at is not None else scope
         for name in names:
-            exceptions[name] = NamedException(cells[licence_at].strip("` "), version, scope)
+            exceptions[name] = NamedException(cells[licence_at].strip("` "), version, stated)
     return exceptions
 
 
 def parse_policy(document: str) -> Policy:
-    """Read the categories and the named exceptions out of DEPENDENCIES.md."""
+    """Read the categories and the named exceptions out of DEPENDENCIES.md.
+
+    A package is excepted from being unclassifiable in one table or the other,
+    never both: the two tables hold a package to different conditions, and a
+    row in each would leave which of them applies to the order of the code.
+    """
+    development_exceptions = _exceptions(
+        _section(document, "Excepted development-only dependencies"),
+        versioned=True,
+        # A development-only exception says so by being in that table at all.
+        scope="development only",
+    )
+    licence_text_exceptions = _exceptions(
+        _section(document, "Excepted licence texts"), versioned=True
+    )
+    both = sorted(set(development_exceptions) & set(licence_text_exceptions))
+    if both:
+        raise ValueError(
+            "DEPENDENCIES.md excepts " + ", ".join(both) + " in two tables; "
+            "a package is excepted once, in the table whose conditions it meets"
+        )
     return Policy(
         allowed=_identifier_list(_section(document, "Allowed"), "allowed"),
         restricted=_identifier_list(_section(document, "Restricted"), "restricted"),
         restricted_packages=_exceptions(
             _section(document, "Restricted dependencies in use"), versioned=False
         ),
-        development_exceptions=_exceptions(
-            _section(document, "Excepted development-only dependencies"), versioned=True
-        ),
+        development_exceptions=development_exceptions,
+        licence_text_exceptions=licence_text_exceptions,
     )
 
 
@@ -629,12 +659,45 @@ class Finding:
     This is the one kind of vagueness a by-name exception may cover: a person
     can open the package and read the licence the classifier would not say.
     Metadata that states no licence at all, or one we cannot read, is not
-    vague -- it is missing, and DEPENDENCIES.md forbids that outright. One
+    vague -- it is missing, and DEPENDENCIES.md forbids that outright. (A
+    licence text pasted whole is the one unreadable case a row may cover, and
+    it does so through `title`, in a table of its own, never through this.) One
     claim out of several being readable is not vagueness either: it is a
     contradiction, and a person settles that by fixing the metadata upstream.
     """
     identifiers: frozenset[str] = frozenset()
     """The licences the claims resolved to, whatever the verdict made of them."""
+    title: str | None = None
+    """The licence the first line of a pasted licence text names, if it names one.
+
+    Set only for metadata whose one licence claim is the free-text field, and
+    whose field named nothing as a whole -- the licence text pasted where its
+    name belongs. A licence text begins with its title ("MIT License"), so the
+    first line is the part of it that says which licence it is, and what it
+    says is held against a row of the "Excepted licence texts" table. It is evidence
+    for that row and for nothing else: it is never a claim, and it never makes
+    a verdict.
+    """
+    text_names: frozenset[str] = frozenset()
+    """The licences a tripwire over that same pasted text found, the title's included.
+
+    Set alongside `title`, and for the same row: a text headed "MIT License"
+    that says "Portions: GPL-3.0-only" further down is not the text a row
+    saying MIT was written about, however well its first line reads. It is a
+    tripwire, not a reading. What is looked at is each whole line, the pieces
+    of a line between punctuation and the SPDX operators, and each word shaped
+    like an identifier -- one with a digit, a hyphen or a "+" in it, or one
+    written in capitals -- which is also held to the forbidden pattern, so
+    `CC-BY-NC-4.0` or `GPL-licensed` is caught though no spelling names it.
+
+    A licence named only in running prose -- "licensed under the GNU General
+    Public License version 3" in the middle of a sentence -- is **not** seen,
+    and matching prose for substrings is deliberately not attempted: it would
+    refuse the permissive texts themselves ("commercial" is a spelling of a
+    forbidden term, and an ordinary word in more than one of them). The
+    safeguard for prose is the person who signs the row for that version,
+    having read the whole text.
+    """
 
 
 def assess(metadata: Metadata, policy: Policy) -> Finding:
@@ -687,17 +750,63 @@ def _unresolved(metadata: Metadata) -> Finding:
 
     Three different things, which the policy treats differently: licence
     families we recognise but cannot pin down, which an exception may cover;
-    something we cannot read, which it may not; and no statement at all, which
-    DEPENDENCIES.md lists among the forbidden outright.
+    something we cannot read, which it may not -- save the one narrow case of
+    a licence text standing alone in the free-text field, whose title line is
+    carried on the finding for the "Excepted licence texts" table to check;
+    and no statement at all, which DEPENDENCIES.md lists among the forbidden
+    outright.
     """
-    claims = [metadata.declared] if metadata.declared else []
-    claims += [c for c in metadata.classifiers if c.startswith("License ::")]
+    classifiers = [c for c in metadata.classifiers if c.startswith("License ::")]
+    claims = ([metadata.declared] if metadata.declared else []) + classifiers
 
     if claims and all(names_a_family(text.split("::")[-1]) for text in claims):
         return Finding(Verdict.UNKNOWN, f"a licence family only ({claims[0].strip()})", True)
     if claims:
-        return Finding(Verdict.UNKNOWN, f"nothing we can read ({claims[0].strip()[:60]})")
+        # Only when the text is all the metadata says: a classifier beside it,
+        # even one that names a mere family, is a second claim the row was not
+        # written about.
+        alone = metadata.declared if metadata.declared and not classifiers else None
+        return Finding(
+            Verdict.UNKNOWN,
+            f"nothing we can read ({' '.join(claims[0].split())[:60]})",
+            title=_title_of(alone) if alone else None,
+            text_names=_named_in_text(alone) if alone else frozenset(),
+        )
     return Finding(Verdict.FORBIDDEN, "no licence at all")
+
+
+def _title_of(text: str) -> str | None:
+    """The licence the first non-empty line of a licence text names, if any."""
+    first = next((line for line in text.splitlines() if line.strip()), "")
+    return identifier_for(first)
+
+
+# What separates one licence name from another inside a line of prose: the
+# punctuation of "Portions: GPL-3.0-only" or "(MIT)", and the SPDX operators.
+_FRAGMENT_BREAK = re.compile(r"[:;,()\[\]]|\bAND\b|\bOR\b|\bWITH\b")
+# A word shaped like an identifier rather than like prose.
+_IDENTIFIER_SHAPED = re.compile(r"[0-9+-]")
+
+
+def _named_in_text(text: str) -> frozenset[str]:
+    """What the tripwire of `Finding.text_names` finds in a pasted licence text."""
+    found: set[str] = set()
+    for line in text.splitlines():
+        words = [word.strip(".,;:()[]\"'") for word in line.split()]
+        shaped = [w for w in words if w and (_IDENTIFIER_SHAPED.search(w) or w.isupper())]
+        for candidate in [line, *_FRAGMENT_BREAK.split(line), *shaped]:
+            identifier = identifier_for(candidate)
+            if identifier is not None:
+                found.add(identifier)
+        # A word shaped like an identifier that no spelling knows --
+        # `CC-BY-NC-4.0`, `AGPL-3.0`, `GPL-licensed` -- is still held to the
+        # forbidden pattern, and kept as written.
+        found.update(
+            word
+            for word in shaped
+            if identifier_for(word) is None and _FORBIDDEN_IDENTIFIER.match(word)
+        )
+    return frozenset(found)
 
 
 # ---------------------------------------------------------------------------
@@ -1105,13 +1214,16 @@ def _unclassified(
     finding: Finding,
     policy: Policy,
 ) -> tuple[bool, str]:
+    text_row = policy.licence_text_exceptions.get(package.name)
+    if text_row is not None:
+        return _licence_text(package, finding, policy, text_row)
     named = policy.development_exceptions.get(package.name)
     if named is None:
         return False, "no licence this gate can classify; it does not pass unclassified"
     if not finding.family_only:
         return False, (
-            "excepted in DEPENDENCIES.md, but an exception covers metadata that names a "
-            f"licence family and no more; this says {finding.licence}"
+            "excepted in DEPENDENCIES.md as development-only, but that exception covers "
+            f"metadata that names a licence family and no more; this says {finding.licence}"
         )
     if not development_only:
         return False, (
@@ -1131,6 +1243,84 @@ def _unclassified(
     return True, (
         f"excepted by name in DEPENDENCIES.md: {named.licence}, read by hand "
         f"in {named.version}, development-only"
+    )
+
+
+def _licence_text(
+    package: LockedPackage,
+    finding: Finding,
+    policy: Policy,
+    row: NamedException,
+) -> tuple[bool, str]:
+    """A row of "Excepted licence texts": a pasted licence text, read by a person.
+
+    The narrowest loosening the gate has, so every condition is held, and none
+    of them depends on where the package is used -- the row answers which
+    licence a text is, and the answer has to be on the allowed list either way:
+
+    - the metadata named nothing at all that resolves. Its one claim is the
+      free-text field, and that field is not an identifier, not a family, and
+      not an expression with anything in it we could read (a `WITH` included).
+      Metadata that names something is judged by what it names;
+    - the version is the one the text was read in;
+    - the row's licence is on the allowed list;
+    - the text's own first line names that same licence. That is what keeps
+      the row a check rather than a switch: a release that swaps the text for
+      another licence fails, whatever the row says;
+    - and the tripwire of `Finding.text_names` finds no other licence in the
+      text -- a forbidden or restricted one above all, but an allowed one too,
+      since a second licence is a second question the row did not answer. It
+      sees lines, punctuation-separated pieces and identifier-shaped words,
+      not running prose; for that, the person who signed the row for this
+      version, having read the whole text, is the safeguard.
+
+    Forbidden and restricted findings never reach here; `decide` settles them
+    first.
+    """
+    if (
+        finding.verdict is not Verdict.UNKNOWN
+        or finding.identifiers
+        or finding.family_only
+        or finding.title is None
+    ):
+        return False, (
+            "excepted in DEPENDENCIES.md as a licence text, but that exception covers "
+            "metadata whose one claim is a licence text headed by a title the gate can "
+            f"read; this says {finding.licence}"
+        )
+    if row.version != package.version:
+        return False, (
+            f"excepted in DEPENDENCIES.md at version {row.version}, but the lock pins "
+            f"{package.version} -- read the licence of that version and update the table"
+        )
+    stated = identifier_for(row.licence)
+    if stated is None or policy.category(stated) is not Verdict.ALLOWED:
+        return False, (
+            f"excepted in DEPENDENCIES.md as {row.licence}, which is not on the allowed list"
+        )
+    if finding.title != stated:
+        return False, (
+            f"excepted in DEPENDENCIES.md as {row.licence}, but the licence text in its "
+            f"metadata is headed {finding.title} -- re-read it and update the table"
+        )
+    others = sorted(finding.text_names - {stated})
+    if others:
+        kinds = sorted(
+            {
+                policy.category(identifier).value
+                for identifier in others
+                if policy.category(identifier) in (Verdict.FORBIDDEN, Verdict.RESTRICTED)
+            }
+        )
+        worse = f" ({' and '.join(kinds)})" if kinds else ""
+        return False, (
+            f"excepted in DEPENDENCIES.md as {row.licence}, but the licence text in its "
+            f"metadata also names {', '.join(others)}{worse} -- a person has to read "
+            "what that text really grants"
+        )
+    return True, (
+        f"excepted by name in DEPENDENCIES.md: {row.licence}, a licence text headed "
+        f"{finding.title} and read by hand in {row.version}"
     )
 
 
@@ -1199,10 +1389,18 @@ def _report(outcomes: Sequence[Outcome], policy: Policy, out) -> int:
         if not outcome.passed or outcome.finding.verdict is not Verdict.ALLOWED:
             print(f"       {outcome.reason}", file=out)
 
-    named = set(policy.restricted_packages) | set(policy.development_exceptions)
-    stale = sorted(named - {outcome.package.name for outcome in outcomes})
+    locked = {outcome.package.name for outcome in outcomes}
+    stale = sorted((set(policy.restricted_packages) | set(policy.development_exceptions)) - locked)
     for name in stale:
         print(f"\nnote: DEPENDENCIES.md excepts {name}, which is no longer locked", file=out)
+    # A licence-text row may name a package ahead of its adoption, so its
+    # absence from the lock is said as that rather than as something that left.
+    for name in sorted(set(policy.licence_text_exceptions) - locked):
+        print(
+            f"\nnote: DEPENDENCIES.md excepts {name}, which is not locked "
+            "(a row may name a package ahead of its adoption)",
+            file=out,
+        )
 
     failed = [outcome for outcome in outcomes if not outcome.passed]
     unchecked = [outcome for outcome in failed if outcome.unchecked]

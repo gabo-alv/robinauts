@@ -75,7 +75,7 @@ Anthropic's Messages API at `https://openrouter.ai/api/v1/messages` and takes
 the key in the same `x-api-key` header, so this build reaches it as an
 `anthropic-compatible` provider whose `base_url` is `https://openrouter.ai/api`
 — the prefix the client appends `/v1/messages` to. No OpenAI client is
-involved, which matters because that one does not pass the dependency policy
+involved, which matters because that one is not adopted in this build
 ([../DEPENDENCIES.md](../DEPENDENCIES.md), "Known exclusions").
 
 ## What you get

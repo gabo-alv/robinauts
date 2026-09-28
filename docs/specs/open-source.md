@@ -48,7 +48,7 @@ The ASF category model — the strictest in use. Written for contributors
 in `DEPENDENCIES.md`.
 
 - **Allowed:** Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC,
-  Zlib, PostgreSQL, PSF-2.0, CC0-1.0, Unlicense.
+  Zlib, PostgreSQL, PSF-2.0, CNRI-Python, CC0-1.0, Unlicense.
 - **Restricted:** MPL-2.0 (also EPL-2.0, CDDL), only as an unmodified,
   unbundled dependency, each one listed by name with its reason.
 - **Forbidden, including transitively:** GPL, AGPL, LGPL (every version,
@@ -57,6 +57,14 @@ in `DEPENDENCIES.md`.
   and **no licence at all**.
 - Development-only and test-only dependencies follow the same lists. One
   may be excepted only by name, with a reason.
+- One narrow exception to "unknown fails", for any **Python** dependency,
+  runtime included: metadata that pastes an allowed licence's *text* where
+  its name belongs, and names nothing else. It is excepted by name, pinned to
+  the version that was read, and the gate checks the text's title line
+  against the licence the row states (`DEPENDENCIES.md`, "Excepted licence
+  texts"; the project owner's decision, 2026-09-28). The npm gate has no
+  such exception, and bundled code — the JavaScript bundle — is excepted
+  nowhere.
 - The JavaScript bundle is bundled code: the allowed list only.
 - Assets — fonts, icons, images, fixtures, sample data, model files,
   tokenizers — need a stated licence on the allowed list. No model weights
@@ -70,7 +78,8 @@ in `DEPENDENCIES.md`.
 On GitHub Actions, all blocking, all present from day zero:
 
 - Python: a licence gate over the full locked set, failing on unknown
-  licences too; a vulnerability audit.
+  licences too — save the by-name, by-version licence-text exception above;
+  a vulnerability audit.
 - JavaScript: the build-time licence allowlist; the committed list of
   bundled packages compared with the build; `npm audit`;
   `npm audit signatures`.

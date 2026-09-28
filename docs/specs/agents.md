@@ -314,8 +314,9 @@ The decisions behind this, and their order of work, are in
     is how it is reached in this build (below).
 - Every one of these packages passes the licence and vulnerability gates
   at its pinned version, with its transitive tree
-  ([open-source.md](open-source.md)). A provider whose client fails is not
-  offered by that engine until it passes.
+  ([open-source.md](open-source.md)). A provider whose client is not in the
+  build -- because it fails the gates, or because it has not been adopted --
+  is not offered by that engine.
 - Not every model has to exist under both engines, but an agent's engine
   can be swapped only if the models its conversations run on do.
 - A sketch of the configuration. It is written in the **same file** as
@@ -376,7 +377,7 @@ engine = "pydantic-ai"
   gateway speaking OpenAI's protocol, which is a different provider from
   the two above and not another spelling of one. **This build refuses
   them** at start-up, naming the provider, because the client that reaches
-  them does not pass the dependency policy (see "Known findings" below);
+  them is not adopted in this build (see "Known findings" below);
   the shape is settled all the same, and `base_url` belongs to the two
   protocol kinds and to nothing else:
 
@@ -452,14 +453,20 @@ tools = ["github", "jira", "learn"]
   core is not affected.
 - `langchain-openai` requires `tiktoken`, which states its licence as the
   licence *text* and no identifier, and which in turn requires `regex`,
-  `Apache-2.0 AND CNRI-Python`. Neither resolves under the policy, so the
-  client is not adopted and `openai` and `openai-compatible` wait for a
-  tree that passes ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known
-  exclusions"). The configuration still names all four kinds — the
-  vocabulary is the platform's — and a deployment asking for a kind this
-  build cannot reach is refused at start-up, saying so.
-- The same tree keeps the same two kinds out of the **Pydantic AI** engine:
-  `pydantic-ai-slim[openai]` requires `tiktoken` too.
+  `Apache-2.0 AND CNRI-Python`. Neither resolved under the policy. Both are
+  settled now -- CNRI-Python is on the allowed list, and `tiktoken` 0.14.0 is
+  excepted by name for its licence text (its package licence only: the BPE
+  tokenizer files it fetches at runtime are assets, a separate question
+  when the client is adopted) -- but the client is not adopted:
+  adopting it is a dependency change of its own, with its whole tree read
+  then, and until it is made `openai` and `openai-compatible` wait
+  ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known exclusions"). The
+  configuration still names all four kinds — the vocabulary is the
+  platform's — and a deployment asking for a kind this build cannot reach
+  is refused at start-up, saying so.
+- The same holds for the **Pydantic AI** engine: `pydantic-ai-slim[openai]`
+  requires `tiktoken` too, and is not adopted either, so the same two kinds
+  are out of it.
 - So both engines reach **`anthropic` and `anthropic-compatible`**, with
   one client each and nothing else added, and the swap holds for every
   model either of them has. OpenRouter is reached as an

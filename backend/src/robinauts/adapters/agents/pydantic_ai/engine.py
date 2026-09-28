@@ -537,11 +537,12 @@ class PydanticAIAgent(Agent):
     What is still not here is ``openai`` and ``openai-compatible``, which are
     reached through ``pydantic-ai-slim[openai]``, which requires ``tiktoken``
     and through it ``regex`` -- the same tree that keeps those kinds out of the
-    LangGraph engine, and that does not pass the licence policy
-    (``DEPENDENCIES.md``, "Known exclusions"). A provider whose client fails
-    the gate is not offered until it passes (``docs/specs/agents.md``), so the
-    configuration refuses the kind at start-up rather than the engine failing
-    at the first turn. Adding it back is this set, a branch in ``chat_model``
+    LangGraph engine. The licences of those two are settled now, but the extra
+    is not adopted: adopting it is a dependency change of its own, with the
+    whole tree read then (``DEPENDENCIES.md``, "Known exclusions"). A provider
+    whose client is not in the build is not offered (``docs/specs/agents.md``),
+    so the configuration refuses the kind at start-up rather than the engine
+    failing at the first turn. Adding it back is this set, a branch in ``chat_model``
     and the dependency -- nothing else.
 
     It is declared by the port (``robinauts.ports.Agent.kinds``) and answered

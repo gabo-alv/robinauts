@@ -169,9 +169,9 @@ class ProviderKind(StrEnum):
     (``KINDS_WITH_BASE_URL``); the vendors' own kinds have one endpoint each
     and their engines pin it.
 
-    **Not every kind is reachable from every build.** A kind whose client does
-    not pass the dependency policy is not offered until it does
-    (``DEPENDENCIES.md``), which is why ``robinauts.core.parse_models_config``
+    **Not every kind is reachable from every build.** A kind whose client the
+    build does not carry -- not adopted, or not passing the dependency policy
+    -- is not offered (``DEPENDENCIES.md``), which is why ``robinauts.core.parse_models_config``
     is told which kinds the deployment can build rather than assuming all of
     them. This build reaches ``ANTHROPIC`` and ``ANTHROPIC_COMPATIBLE``, which
     is how OpenRouter is reached here: it serves Anthropic's Messages API at
