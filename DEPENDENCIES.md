@@ -14,7 +14,18 @@ it**: the whole locked set is checked, not the direct dependencies alone.
 ### Allowed
 
 Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Zlib, PostgreSQL,
-PSF-2.0, CC0-1.0, Unlicense.
+PSF-2.0, CNRI-Python, CC0-1.0, Unlicense.
+
+`CNRI-Python` is the licence CNRI released Python 1.6.1 under: permissive and
+OSI-approved, with no copyleft term. The ASF's category list does not name it;
+its nearest entry is the PSF licence, in Category A, which is the licence that
+grew out of it. It is on this list by the project owner's decision
+(2026-09-28), taken for `regex`, which states `Apache-2.0 AND CNRI-Python` — a
+conjunction of two allowed licences, which now passes. `regex` is not locked
+today: only `tiktoken` brings it, and what brings `tiktoken` is not adopted.
+SPDX `CNRI-Python`, `PSF-2.0` and `Python-2.0` are three **different
+identifiers**, and so is `CNRI-Python-GPL-Compatible`: allowing the first
+allows neither of the others (see the `argparse` row below).
 
 ### Restricted
 
@@ -36,14 +47,29 @@ test-only dependencies too.
 
 ## Development-only and test-only dependencies
 
-They follow the same categories. One may be excepted only by name, below,
-with the licence somebody read, the version they read it in, and the reason.
+They follow the same categories. One may be excepted only by name, in
+["Excepted development-only dependencies"](#excepted-development-only-dependencies)
+below, with the licence somebody read, the version they read it in, and the
+reason.
 
-There are three tables of exceptions below, and every one of them is in this
-file — a dependency is excepted here or nowhere. Two are Python's,
-["Restricted dependencies in use"](#restricted-dependencies-in-use) and
-["Excepted development-only dependencies"](#excepted-development-only-dependencies),
-and `scripts/licence_gate.py` reads them against `backend/uv.lock`. The third
+## Where exceptions are written
+
+There are four tables of exceptions below, and every one of them is in this
+file — a dependency is excepted here or nowhere. Not all of them are about
+development-only dependencies: a row of
+["Restricted dependencies in use"](#restricted-dependencies-in-use) may be
+runtime, and ["Excepted licence texts"](#excepted-licence-texts) is a separate
+table that does not look at scope at all — it answers which licence a pasted
+text is, for runtime and development-only dependencies alike.
+
+Three are Python's,
+["Restricted dependencies in use"](#restricted-dependencies-in-use),
+["Excepted development-only dependencies"](#excepted-development-only-dependencies)
+and ["Excepted licence texts"](#excepted-licence-texts), and
+`scripts/licence_gate.py` reads them against `backend/uv.lock`. The first two
+are held to that lock: every row names a package it has. The third is not — a
+row there may name a package ahead of its adoption, and the gate notes it as
+not locked rather than failing. The fourth
 is npm's, ["JavaScript build tooling"](#javascript-build-tooling), and
 `frontend/scripts/check-licences.mjs` reads it against
 `frontend/package-lock.json` and what npm installed. They are separate tables
@@ -60,8 +86,11 @@ a licence family and no more — the trove classifier
 `License :: OSI Approved :: BSD License` names no version of the BSD licence,
 and only a person can open the package and see which one it is. It can never
 cover a forbidden licence, a package that states no licence at all, or
-metadata nobody can read; and it holds for the version it names, so the next
-upgrade fails until somebody reads the licence again.
+metadata nobody can read — with one narrow case, set out under
+["Excepted licence texts"](#excepted-licence-texts): the whole licence *text*
+pasted where its name belongs, which the gate can still hold the row to by
+its title line and by what else it names. And it holds for the version it
+names, so the next upgrade fails until somebody reads the licence again.
 
 ## Assets
 
@@ -93,9 +122,13 @@ yourself with `scripts/check-licences.sh`, from the root of the repository.
 The gate reads the categories above and the tables below out of this
 document, so a dependency is excepted here or nowhere. It fails closed: a
 licence it cannot resolve to an identifier stops the build as surely as a
-forbidden one. Metadata that names only a family resolves to nothing — the
-classifier `License :: OSI Approved :: BSD License` names no version of the
-BSD licence, and the gate will not guess one. It reads that metadata from the
+forbidden one, save the single case
+["Excepted licence texts"](#excepted-licence-texts) sets out — an allowed
+licence's text pasted where its name belongs, excepted by name at one version,
+with the text's title line checked against the row. Metadata that names only
+a family resolves to nothing — the classifier
+`License :: OSI Approved :: BSD License` names no version of the BSD licence,
+and the gate will not guess one. It reads that metadata from the
 environment `uv` synced from this lockfile, or — for a package locked from
 PyPI and not installed here — from the very file this lockfile pins by hash,
 whose metadata PyPI publishes with a digest of its own. Metadata it cannot
@@ -159,6 +192,62 @@ in; the gate checks both.
 | package | version | licence | why it is acceptable |
 |---|---|---|---|
 | `colorama` | 0.4.6 | BSD-3-Clause | development only; brought by `pytest` on Windows. Its metadata states the classifier `License :: OSI Approved :: BSD License` and nothing else, which names no version of the BSD licence; the LICENSE.txt shipped in the 0.4.6 wheel is the three-clause text |
+
+## Excepted licence texts
+
+Some packages put the whole licence *text* in the free-text `License` field
+and state no identifier anywhere: no `License-Expression`, no `License ::`
+classifier. The gate reads that as nothing it can read, and it is right to — a
+page of prose is not a name. A row here is a person saying which licence that
+text is, for one version of one package, and each row is a one-off: it is not a
+rule about a kind of metadata, it is a signature under one text somebody read.
+The table exists by the project owner's decision (2026-09-28), taken for
+`tiktoken`. It is Python's only: the npm gate has no such table, and what ships
+in the JavaScript bundle is excepted nowhere.
+
+It is narrower than the development-only table, on purpose, and separate from
+it — it is not a development-only rule. The gate holds every row to all of
+this:
+
+- the free-text field is the metadata's **only** licence claim, and it names
+  nothing the gate can resolve — no identifier, no family, no expression with
+  anything readable in it, `WITH` included. Metadata that names something is
+  judged by what it names, and no row here changes that; a package that states
+  no licence at all, or a forbidden or restricted one, is never reached;
+- the **version** is the one the text was read in;
+- the **licence** is on the allowed list;
+- the row is checked against the text rather than believed. A licence text
+  begins with its title, so the first line of the field has to name the very
+  licence the row states: `MIT License` is MIT, and a text headed
+  `BSD 3-Clause License` under a row saying MIT fails. The first line is not
+  the licence — a person still reads the rest, and that is what the row signs —
+  but it means a release that swaps the text for another licence fails, whatever
+  the row says;
+- and a tripwire over the rest of the text finds no other licence. It looks
+  at every line, at the pieces of a line between punctuation and `AND`, `OR`
+  and `WITH`, and at every word shaped like an identifier, which it also holds
+  to the forbidden pattern: a text headed `MIT License` that says
+  `Portions: GPL-3.0-only` or `Data: CC-BY-NC-4.0` further down fails, and so
+  does one that names a second allowed licence, which is a second question the
+  row did not answer. It is a tripwire, not a reading: a licence named only in
+  running prose — "licensed under the GNU General Public License version 3"
+  mid-sentence — is not seen. The safeguard there is the person who signs the
+  row for that version, having read the whole text.
+
+It holds for runtime and development-only dependencies alike: what a row
+answers is which licence a text is, not where the package is used, and the
+answer has to be on the allowed list either way.
+
+A row may name a package **ahead of its adoption**. The gate then notes that
+it is not locked and that a row here may be ahead of adoption, and the test
+that holds the other tables to `backend/uv.lock` does not hold this one. That
+is so for `tiktoken` below: what needs it is not adopted (see
+["Known exclusions"](#known-exclusions)), and adopting it is a dependency
+change of its own.
+
+| package | version | licence | why it is acceptable |
+|---|---|---|---|
+| `tiktoken` | 0.14.0 | MIT | its metadata states no `License-Expression` and no `License ::` classifier, and its `License` field — as PyPI publishes it for 0.14.0 — holds the whole licence text: the line `MIT License`, then `Copyright (c) 2022 OpenAI, Shantanu Jain`, then the MIT permission notice and disclaimer, unchanged. Named ahead of its adoption: `langchain-openai` and `pydantic-ai-slim[openai]` need it, and neither is adopted. The row settles the **package's** licence only. `tiktoken` fetches its BPE tokenizer data (`cl100k_base.tiktoken` and the like) at runtime, and a tokenizer is an asset: its stated licence on the allowed list, and its entry in [docs/legal/third-party.md](docs/legal/third-party.md), are a separate question under ["Assets"](#assets), to settle when the client is adopted |
 
 ## JavaScript build tooling
 
@@ -274,10 +363,8 @@ then, the by-hand list is the record.
 |---|---|---|
 | `psycopg`, `psycopg-pool` | LGPL-3.0-only | not used; the PostgreSQL driver is `asyncpg` |
 | `langgraph-checkpoint-postgres` | MIT, but depends on `psycopg` | cannot be adopted as it is ([ADR 0002](docs/adr/0002-conversation-persistence.md)) |
-| `tiktoken` | MIT by its LICENSE file, but its metadata puts the licence *text* in the `License` field and states no identifier anywhere | the gate fails closed and cannot classify it |
-| `regex` | `Apache-2.0 AND CNRI-Python`, and CNRI-Python is on no list above | not classifiable under the policy as it stands; adding a licence to the allowed list is a decision for a person, not for a build |
-| `langchain-openai` | MIT, but requires `tiktoken`, which requires `regex` | not adopted: the LangGraph engine offers the `anthropic` and `anthropic-compatible` kinds alone. OpenAI and any other OpenAI-compatible endpoint go through this client ([docs/specs/agents.md](docs/specs/agents.md)) and wait for a tree that passes. **OpenRouter does not wait for it**: it also serves Anthropic's Messages API, so it is reached through the `anthropic-compatible` kind with the Anthropic client this build already has |
-| `pydantic-ai-slim[openai]` | MIT, but the extra requires `tiktoken`, which requires `regex` | the same tree, and the same answer: the Pydantic AI engine offers the same two kinds. Only the `anthropic` extra is installed, so the exclusion costs the build nothing but a vendor reachable over OpenAI's protocol alone |
+| `langchain-openai` | MIT; requires `tiktoken`, which requires `regex` | not adopted: the LangGraph engine offers the `anthropic` and `anthropic-compatible` kinds alone. OpenAI and any other OpenAI-compatible endpoint go through this client ([docs/specs/agents.md](docs/specs/agents.md)). The two licences that kept its tree out are settled — `regex`'s CNRI-Python under ["Allowed"](#allowed), `tiktoken`'s licence text under ["Excepted licence texts"](#excepted-licence-texts) — but the rest of that tree has not been re-read, and what remains is adoption itself — a dependency change of its own, under ["Adopting or upgrading a dependency"](#adopting-or-upgrading-a-dependency), with the gate reading the whole tree then. **OpenRouter does not wait for it**: it also serves Anthropic's Messages API, so it is reached through the `anthropic-compatible` kind with the Anthropic client this build already has |
+| `pydantic-ai-slim[openai]` | MIT; the extra requires `tiktoken`, which requires `regex` | the same tree, and the same answer: not adopted, and the Pydantic AI engine offers the same two kinds. Only the `anthropic` extra is installed; adopting the `openai` extra is the same dependency change as `langchain-openai`'s, since a framework and its provider clients are adopted together |
 | `mcp` (the MCP Python SDK) | MIT, but requires `pyjwt[crypto]`, which requires `cryptography`, which requires `cffi`; and `pywin32` on Windows | not adopted (checked 2026-09-28, at 2.2.0). The rest of its tree passes -- `mcp-types`, `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `pycparser` (BSD-3-Clause), and what is in the lock already -- and the two below do not. So the MCP adapter is a **client of our own over `httpx`** for the three calls a client needs -- `initialize`, `tools/list`, `tools/call` -- over Streamable HTTP ([docs/specs/agents.md](docs/specs/agents.md), "Tools"), which is the fallback the plan named for exactly this case ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), step 2). The import rule confining the SDK to `adapters/tools/mcp/` is written all the same, before the fact, so that the day the tree passes it belongs there and nowhere else |
 | `cffi` | `MIT-0` (the MIT No Attribution licence), stated as its `License-Expression` since 2.1.0 (2026-07); 2.0.0 still states `MIT` | on no list above. It is strictly more permissive than MIT, the ASF category model this document adopts lists it under Category A, and the JavaScript table below already carries it twice for that reason -- so the edit is one identifier on the allowed list, and it is still a decision for a person, not for a build ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), "Open"). It has not been taken. Brought by `cryptography`, and through it by anything that needs `pyjwt[crypto]` |
 | `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence | the gate fails closed and cannot classify it. Windows-only (`sys_platform == "win32"`), which the gate deliberately does not read: the locked set is checked whole, whatever this machine installs |

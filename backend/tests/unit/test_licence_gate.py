@@ -10,6 +10,7 @@ apart unnoticed.
 """
 
 import hashlib
+import io
 import json
 import re
 import tomllib
@@ -26,6 +27,8 @@ from licence_gate import (
     NamedException,
     Policy,
     Verdict,
+    _metadata_from_message,
+    _report,
     assess,
     decide,
     evaluate_expression,
@@ -41,7 +44,7 @@ POLICY_DOCUMENT = """# A policy
 
 ### Allowed
 
-Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, PSF-2.0.
+Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, PSF-2.0, CNRI-Python.
 
 Prose that follows the list and must not be read as part of it.
 
@@ -60,6 +63,12 @@ MPL-2.0, CDDL-1.x.
 | package | version | licence | why it is acceptable |
 |---|---|---|---|
 | `colorama` | 0.4.6 | BSD-3-Clause | checked by hand |
+
+## Excepted licence texts
+
+| package | version | licence | why it is acceptable |
+|---|---|---|---|
+| `tiktoken` | 0.14.0 | MIT | the licence text, read by hand |
 
 ## Known exclusions
 
@@ -96,9 +105,14 @@ def test_only_the_exception_tables_are_read_as_exceptions(policy):
     assert policy.development_exceptions == {
         "colorama": NamedException("BSD-3-Clause", "0.4.6", "development only")
     }
+    # No scope: a licence-text row says which licence a text is, not where the
+    # package is used, and it is not development-only for being in a table
+    # with a version column.
+    assert policy.licence_text_exceptions == {"tiktoken": NamedException("MIT", "0.14.0")}
     # The known exclusions are the opposite of an exception.
     assert "psycopg" not in policy.restricted_packages
     assert "psycopg" not in policy.development_exceptions
+    assert "psycopg" not in policy.licence_text_exceptions
 
 
 def test_the_columns_are_found_by_their_heading_not_their_place(policy):
@@ -113,11 +127,34 @@ def test_the_columns_are_found_by_their_heading_not_their_place(policy):
 
 
 def test_a_development_exception_without_a_version_is_an_error():
-    document = POLICY_DOCUMENT.replace("| version | licence |", "| licence |").replace(
+    # The first table with a version column is the development-only one.
+    document = POLICY_DOCUMENT.replace("| version | licence |", "| licence |", 1).replace(
         "| `colorama` | 0.4.6 | BSD-3-Clause |", "| `colorama` | BSD-3-Clause |"
     )
     assert document != POLICY_DOCUMENT
     with pytest.raises(ValueError, match="version"):
+        parse_policy(document)
+
+
+def test_a_licence_text_exception_without_a_version_is_an_error():
+    document = POLICY_DOCUMENT.replace(
+        "| package | version | licence | why it is acceptable |\n|---|---|---|---|\n"
+        "| `tiktoken` | 0.14.0 | MIT |",
+        "| package | licence | why it is acceptable |\n|---|---|---|\n| `tiktoken` | MIT |",
+    )
+    assert document != POLICY_DOCUMENT
+    with pytest.raises(ValueError, match="version"):
+        parse_policy(document)
+
+
+def test_a_package_is_excepted_in_one_table_not_two():
+    # The two tables hold a package to different conditions; a row in each
+    # would leave which of them applies to the order of the code.
+    document = POLICY_DOCUMENT.replace(
+        "| `tiktoken` | 0.14.0 | MIT |", "| `tiktoken`, `colorama` | 0.14.0 | MIT |"
+    )
+    assert document != POLICY_DOCUMENT
+    with pytest.raises(ValueError, match="colorama"):
         parse_policy(document)
 
 
@@ -199,6 +236,28 @@ def test_the_unversioned_psf_name_is_a_family_like_any_other():
 
 
 @pytest.mark.parametrize(
+    ("text", "identifier"),
+    [
+        ("CNRI-Python", "CNRI-Python"),
+        ("cnri-python", "CNRI-Python"),
+        ("CNRI Python License", "CNRI-Python"),
+        # A different SPDX identifier, on no list: it is not spelt, so it
+        # stays unknown rather than borrowing CNRI-Python's place.
+        ("CNRI-Python-GPL-Compatible", None),
+    ],
+)
+def test_cnri_python_is_an_identifier_of_its_own(text, identifier):
+    assert identifier_for(text) == identifier
+
+
+def test_cnri_python_is_not_the_psf_licence_nor_python_2(policy):
+    assert len({identifier_for(name) for name in ("CNRI-Python", "PSF-2.0", "Python-2.0")}) == 3
+    assert policy.category("CNRI-Python") is Verdict.ALLOWED
+    # Allowing one of the three allows neither of the others.
+    assert policy.category("Python-2.0") is Verdict.UNKNOWN
+
+
+@pytest.mark.parametrize(
     ("classifier", "identifier"),
     [
         ("License :: OSI Approved :: MIT License", "MIT"),
@@ -239,6 +298,9 @@ def test_classifiers_are_read_only_when_they_name_one_licence(classifier, identi
         ("MPL-2.0 AND MIT", Verdict.RESTRICTED),
         ("MIT AND GPL-3.0-only", Verdict.FORBIDDEN),
         ("MIT AND BSD-3-Clause", Verdict.ALLOWED),
+        # regex's own expression: two allowed licences, both binding.
+        ("Apache-2.0 AND CNRI-Python", Verdict.ALLOWED),
+        ("CNRI-Python AND MPL-2.0", Verdict.RESTRICTED),
         ("(MIT OR GPL-3.0-only) AND Apache-2.0", Verdict.ALLOWED),
         ("MIT AND (GPL-3.0-only OR AGPL-3.0-only)", Verdict.FORBIDDEN),
         # AND binds tighter than OR, as SPDX says.
@@ -606,6 +668,315 @@ def test_an_unclassified_licence_does_not_pass(policy):
     assert decide(_package("mystery"), True, finding, policy)[0] is False
 
 
+@pytest.mark.parametrize("development_only", [True, False])
+def test_regex_passes_on_its_own_expression_with_no_row(policy, development_only):
+    finding = assess(Metadata(expression="Apache-2.0 AND CNRI-Python"), policy)
+    assert finding == Finding(
+        Verdict.ALLOWED,
+        "Apache-2.0 AND CNRI-Python",
+        identifiers=frozenset({"Apache-2.0", "CNRI-Python"}),
+    )
+    passed, reason = decide(_package("regex", "2026.9.1"), development_only, finding, policy)
+    assert passed is True
+    assert reason == "on the allowed list"
+
+
+# ---------------------------------------------------------------------------
+# A licence text excepted by name
+# ---------------------------------------------------------------------------
+
+# tiktoken 0.14.0's `License` field, as PyPI publishes it: the whole MIT
+# licence, with no License-Expression and no `License ::` classifier beside
+# it. Its disclaimer is shouted, so it is full of uppercase OR, AND and WITH,
+# which is exactly what the expression reader splits on.
+TIKTOKEN_LICENCE = """MIT License
+
+Copyright (c) 2022 OpenAI, Shantanu Jain
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+assert " OR " in TIKTOKEN_LICENCE and " WITH " in TIKTOKEN_LICENCE
+
+
+def _tiktoken(text=TIKTOKEN_LICENCE, policy=None, **metadata):
+    return assess(Metadata(declared=text, **metadata), policy or parse_policy(POLICY_DOCUMENT))
+
+
+def test_a_licence_text_alone_is_read_as_nothing_but_its_title_is_kept(policy):
+    finding = _tiktoken(policy=policy)
+    assert finding.verdict is Verdict.UNKNOWN
+    assert finding.identifiers == frozenset()
+    assert finding.family_only is False
+    assert finding.title == "MIT"
+    # The body is prose: nothing in it names a licence but the title does.
+    assert finding.text_names == frozenset({"MIT"})
+    assert finding.licence.startswith("nothing we can read (MIT License Copyright")
+
+
+@pytest.mark.parametrize("development_only", [False, True])
+def test_a_licence_text_row_covers_the_text_it_was_written_about(policy, development_only):
+    # A runtime dependency as much as a development-only one: the row says
+    # which licence the text is, not where the package is used.
+    passed, reason = decide(
+        _package("tiktoken", "0.14.0"), development_only, _tiktoken(policy=policy), policy
+    )
+    assert passed is True
+    assert "MIT" in reason and "0.14.0" in reason
+
+
+def test_a_licence_text_row_holds_for_the_version_it_names(policy):
+    passed, reason = decide(_package("tiktoken", "0.15.0"), False, _tiktoken(policy=policy), policy)
+    assert passed is False
+    assert "0.14.0" in reason and "0.15.0" in reason
+
+
+def test_a_licence_text_headed_by_another_licence_fails_the_row(policy):
+    # The release swapped its text for the three-clause BSD licence, also on
+    # the allowed list. The row says MIT, and nobody has read this one.
+    text = TIKTOKEN_LICENCE.replace("MIT License", "BSD 3-Clause License", 1)
+    finding = _tiktoken(text, policy)
+    assert finding.title == "BSD-3-Clause"
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "BSD-3-Clause" in reason and "MIT" in reason
+
+
+def test_a_licence_text_with_no_title_the_gate_can_read_fails_the_row(policy):
+    finding = _tiktoken(LICENCE_BODY, policy)
+    assert finding.title is None
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "licence text" in reason
+
+
+@pytest.mark.parametrize(
+    ("row", "title"),
+    [
+        # Permissive, but not on this policy's allowed list.
+        ("Zlib", "zlib License"),
+        # Forbidden: a row cannot wave through a text it names correctly.
+        ("GPL", "GNU General Public License"),
+    ],
+)
+def test_a_licence_text_row_must_state_an_allowed_licence(row, title):
+    policy = parse_policy(
+        POLICY_DOCUMENT.replace("| `tiktoken` | 0.14.0 | MIT |", f"| `tiktoken` | 0.14.0 | {row} |")
+    )
+    finding = _tiktoken(TIKTOKEN_LICENCE.replace("MIT License", title, 1), policy)
+    assert finding.title == identifier_for(row)
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "allowed list" in reason
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # Metadata that names a family: the development-only table's case,
+        # not this one's.
+        Metadata(declared="BSD", classifiers=("License :: OSI Approved :: BSD License",)),
+        # The text beside a classifier. The classifier names a mere family,
+        # but it is a second claim, and the row was not written about it.
+        Metadata(
+            declared=TIKTOKEN_LICENCE,
+            classifiers=("License :: OSI Approved :: BSD License",),
+        ),
+        # An expression that names an identifier nothing here knows: the
+        # SPDX field, unreadable, beside a text that is headed MIT.
+        Metadata(expression="Frobnicate-1.0", declared=TIKTOKEN_LICENCE),
+        # Something resolved, and something did not: that is not a licence
+        # text, it is a claim only half understood.
+        Metadata(expression="MIT AND Frobnicate-1.0"),
+        # An exception rewrites the licence it is attached to.
+        Metadata(declared="MIT License WITH Frobnicate-exception"),
+        Metadata(expression="MIT WITH Frobnicate-exception"),
+    ],
+)
+def test_a_licence_text_row_covers_nothing_but_a_licence_text(policy, metadata):
+    finding = assess(metadata, policy)
+    assert finding.verdict is Verdict.UNKNOWN
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "licence text" in reason
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # States nothing at all.
+        Metadata(),
+        Metadata(classifiers=("Development Status :: 5 - Production/Stable",)),
+        # A licence text headed MIT beside a forbidden claim the gate can read.
+        Metadata(
+            declared=TIKTOKEN_LICENCE,
+            classifiers=("License :: OSI Approved :: GNU General Public License v3 (GPLv3)",),
+        ),
+        Metadata(expression="GPL-3.0-only", declared=TIKTOKEN_LICENCE),
+    ],
+)
+def test_a_licence_text_row_never_reaches_a_forbidden_finding(policy, metadata):
+    finding = assess(metadata, policy)
+    assert finding.verdict is Verdict.FORBIDDEN
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "forbidden" in reason
+
+
+def test_a_licence_text_row_never_reaches_a_restricted_finding(policy):
+    finding = assess(Metadata(expression="MPL-2.0", declared=TIKTOKEN_LICENCE), policy)
+    assert finding.verdict is Verdict.RESTRICTED
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "Restricted dependencies in use" in reason
+
+
+def test_the_development_only_table_does_not_cover_a_licence_text(policy):
+    # colorama's row is for a family; a text headed MIT is not one, however
+    # readable its first line.
+    passed, reason = decide(_package("colorama", "0.4.6"), True, _tiktoken(policy=policy), policy)
+    assert passed is False
+    assert "family" in reason
+
+
+def test_a_licence_text_with_no_row_does_not_pass(policy):
+    passed, reason = decide(_package("mystery", "1.0"), False, _tiktoken(policy=policy), policy)
+    assert passed is False
+    assert "does not pass unclassified" in reason
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        # A clause further down that puts part of it under something else.
+        ("MIT License\n\nPortions: GPL-3.0-only\n", "GPL-3.0"),
+        (TIKTOKEN_LICENCE + "\nThe bundled data is under the MPL-2.0.\n", "MPL-2.0"),
+        (TIKTOKEN_LICENCE + "\nMozilla Public License 2.0\n", "MPL-2.0"),
+        # Allowed, and still a second licence the row did not answer for.
+        (TIKTOKEN_LICENCE + "\nSome files (see vendor/) are BSD-3-Clause.\n", "BSD-3-Clause"),
+        (TIKTOKEN_LICENCE + "\nnon-commercial use only\n", "non-commercial"),
+        # Identifier-shaped, spelt nowhere in the gate, and forbidden all the
+        # same by the pattern every forbidden identifier is held to.
+        (TIKTOKEN_LICENCE + "\nData: CC-BY-NC-4.0\n", "CC-BY-NC-4.0"),
+        (TIKTOKEN_LICENCE + "\nThe server part is AGPL-3.0-or-later.\n", "AGPL-3.0"),
+        (TIKTOKEN_LICENCE + "\nThe GPL-licensed parts are not included.\n", "GPL-licensed"),
+    ],
+)
+def test_a_licence_text_that_names_another_licence_fails_the_row(policy, text, named):
+    finding = _tiktoken(text, policy)
+    assert finding.verdict is Verdict.UNKNOWN
+    assert finding.title == "MIT"
+    assert named in finding.text_names
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert named in reason and "also names" in reason
+
+
+def test_an_unspelt_forbidden_identifier_in_the_text_is_called_forbidden(policy):
+    finding = _tiktoken(TIKTOKEN_LICENCE + "\nData: CC-BY-NC-4.0\n", policy)
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
+    assert passed is False
+    assert "CC-BY-NC-4.0 (forbidden)" in reason
+
+
+def test_the_tripwire_does_not_read_running_prose(policy):
+    # Documented, not wished away: a licence named only inside a sentence is
+    # not seen, and the person who signed the row is the safeguard for it.
+    prose = "Parts are licensed under the GNU General Public License version 3."
+    finding = _tiktoken(TIKTOKEN_LICENCE + "\n" + prose + "\n", policy)
+    assert finding.text_names == frozenset({"MIT"})
+
+
+# tiktoken 0.14.0's METADATA as the wheel carries it: the licence folded into
+# the `License` header, every continuation line indented with eight spaces --
+# the empty lines of the licence included, which are eight spaces and nothing
+# else.
+TIKTOKEN_METADATA = (
+    "Metadata-Version: 2.4\n"
+    "Name: tiktoken\n"
+    "Version: 0.14.0\n"
+    "Summary: tiktoken is a fast BPE tokeniser for use with OpenAI's models\n"
+    "Author: Shantanu Jain\n"
+    "License: "
+    + "\n".join(
+        line if index == 0 else "        " + line
+        for index, line in enumerate(TIKTOKEN_LICENCE.rstrip("\n").split("\n"))
+    )
+    + "\n"
+    "Requires-Python: >=3.9\n"
+    "Description-Content-Type: text/markdown\n"
+    "License-File: LICENSE\n"
+    "Requires-Dist: regex>=2022.1.18\n"
+    "Requires-Dist: requests>=2.26.0\n"
+    "\n"
+    "# tiktoken\n"
+).encode()
+assert b"\n        \n        Copyright (c) 2022" in TIKTOKEN_METADATA
+
+
+@pytest.mark.parametrize("development_only", [False, True])
+def test_tiktoken_as_its_wheel_states_it_passes_on_its_row(policy, development_only):
+    metadata = _metadata_from_message(TIKTOKEN_METADATA, "PyPI")
+    assert metadata.expression is None
+    assert metadata.classifiers == ()
+    finding = assess(metadata, policy)
+    assert finding.verdict is Verdict.UNKNOWN
+    assert finding.identifiers == frozenset()
+    assert finding.title == "MIT"
+    assert finding.text_names == frozenset({"MIT"})
+    passed, reason = decide(_package("tiktoken", "0.14.0"), development_only, finding, policy)
+    assert passed is True, reason
+
+
+def test_a_forbidden_or_restricted_licence_in_the_text_is_said_to_be_one(policy):
+    text = "MIT License\n\nPortions: GPL-3.0-only\nOthers: MPL-2.0\n"
+    passed, reason = decide(_package("tiktoken", "0.14.0"), False, _tiktoken(text, policy), policy)
+    assert passed is False
+    assert "forbidden and restricted" in reason
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        # Words that spell a licence term, used as words.
+        "Use in commercial products is permitted.",
+        "Copyright (C) 2022-2026 The Authors, all of them.",
+        'THE SOFTWARE IS PROVIDED "AS IS" (SEE ABOVE).',
+        "The MIT licence applies to every file.",
+    ],
+)
+def test_ordinary_prose_in_a_licence_text_names_nothing_more(policy, prose):
+    finding = _tiktoken(TIKTOKEN_LICENCE + "\n" + prose + "\n", policy)
+    assert finding.text_names == frozenset({"MIT"})
+    assert decide(_package("tiktoken", "0.14.0"), False, finding, policy)[0] is True
+
+
+def test_a_licence_text_row_for_a_package_not_locked_is_noted_as_ahead_of_adoption(policy):
+    out = io.StringIO()
+    _report([], policy, out)
+    printed = out.getvalue()
+    assert "excepts tiktoken, which is not locked (a row may name a package ahead" in printed
+    assert "tiktoken, which is no longer locked" not in printed
+    # The other tables keep saying what they always said.
+    assert "excepts colorama, which is no longer locked" in printed
+    assert "excepts pathspec, which is no longer locked" in printed
+
+
 # ---------------------------------------------------------------------------
 # Reading the locked set
 # ---------------------------------------------------------------------------
@@ -904,8 +1275,10 @@ def test_the_real_document_parses_and_says_what_the_gate_expects():
 
     assert {"apache-2.0", "mit", "bsd-2-clause", "bsd-3-clause", "0bsd", "isc"} <= policy.allowed
     assert {"zlib", "postgresql", "psf-2.0", "cc0-1.0", "unlicense"} <= policy.allowed
+    assert "cnri-python" in policy.allowed
     assert policy.restricted == {"mpl-2.0", "epl-2.0", "cddl-1.0", "cddl-1.1"}
     assert "pathspec" in policy.restricted_packages
+    assert policy.licence_text_exceptions["tiktoken"] == NamedException("MIT", "0.14.0")
 
 
 @pytest.mark.io
@@ -933,6 +1306,15 @@ def test_every_package_the_document_excepts_is_really_in_the_locked_set():
     # An exception for a development-only dependency is worth nothing if the
     # dependency is not development-only.
     assert set(policy.development_exceptions) <= development_only
+    # "Excepted licence texts" is deliberately not held to the lock. A row
+    # there says which licence a text is, and DEPENDENCIES.md lets it name a
+    # package ahead of its adoption -- tiktoken, which only the OpenAI clients
+    # bring, and they are not adopted -- so the gate notes such a row as not
+    # locked rather than failing on it. What this test does insist on is that
+    # a row there is not also a row of a table that is held to the lock.
+    assert not set(policy.licence_text_exceptions) & (
+        set(policy.restricted_packages) | set(policy.development_exceptions)
+    )
 
 
 @pytest.mark.io

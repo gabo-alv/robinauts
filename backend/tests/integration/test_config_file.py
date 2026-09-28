@@ -407,8 +407,8 @@ def test_the_model_example_in_the_specification_reads_and_parses(tmp_path: Path)
 
 def test_the_second_example_is_the_shape_this_build_refuses(tmp_path: Path) -> None:
     # It is in the spec because the configuration language is settled; it is
-    # refused because the client that reaches it does not pass the licence
-    # policy (DEPENDENCIES.md, "Known exclusions").
+    # refused because the client that reaches it is not adopted in this build
+    # (DEPENDENCIES.md, "Known exclusions").
     _, _, not_buildable = models_examples()
     tables = read_toml(written(tmp_path, not_buildable))
 

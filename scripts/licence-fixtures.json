@@ -29,6 +29,7 @@
     ["Zlib", "not-forbidden"],
     ["PostgreSQL", "not-forbidden"],
     ["PSF-2.0", "not-forbidden"],
+    ["CNRI-Python", "not-forbidden"],
     ["MPL-2.0", "not-forbidden"],
     ["EPL-2.0", "not-forbidden"],
     ["CDDL-1.1", "not-forbidden"],

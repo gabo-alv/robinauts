@@ -88,6 +88,15 @@ describe("the allowed list, over SPDX expressions", () => {
     expect(isAllowed("(MIT AND CC-BY-3.0)")).toBe(false);
   });
 
+  test("CNRI-Python is allowed, and only under its own identifier", () => {
+    // regex's expression is a conjunction of two allowed licences. The
+    // GPL-compatible variant is a different SPDX identifier, on no list.
+    expect(isAllowed("CNRI-Python")).toBe(true);
+    expect(isAllowed("Apache-2.0 AND CNRI-Python")).toBe(true);
+    expect(isAllowed("CNRI-Python-GPL-Compatible")).toBe(false);
+    expect(isAllowed("Python-2.0")).toBe(false);
+  });
+
   test("an exception makes one thing the list does not name", () => {
     expect(isAllowed("Apache-2.0 WITH LLVM-exception")).toBe(false);
   });
@@ -308,6 +317,7 @@ describe("the lists come from the document, not from a second copy", () => {
       "bsd-2-clause",
       "bsd-3-clause",
       "cc0-1.0",
+      "cnri-python",
       "isc",
       "mit",
       "postgresql",
