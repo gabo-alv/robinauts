@@ -29,9 +29,9 @@ API at a configured ``base_url``, OpenRouter's among them -- and that route has
 a test of its own that needs no key at all
 (``tests/live/test_vendor_routing.py``), so there is nothing here to repeat.
 What is still out of reach is ``openai`` and ``openai-compatible``, through
-``langchain-openai``, which this build does not have (``DEPENDENCIES.md``,
-"Known exclusions"): there is no ``ROBINAUTS_LIVE_OPENAI_KEY`` test to write
-until there is a client to write it against.
+``langchain-openai``, which is installed but not yet wired into the engine:
+there is no ``ROBINAUTS_LIVE_OPENAI_KEY`` test to write until the engine
+offers those kinds.
 """
 
 from __future__ import annotations

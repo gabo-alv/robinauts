@@ -1308,9 +1308,9 @@ def test_every_package_the_document_excepts_is_really_in_the_locked_set():
     assert set(policy.development_exceptions) <= development_only
     # "Excepted licence texts" is deliberately not held to the lock. A row
     # there says which licence a text is, and DEPENDENCIES.md lets it name a
-    # package ahead of its adoption -- tiktoken, which only the OpenAI clients
-    # bring, and they are not adopted -- so the gate notes such a row as not
-    # locked rather than failing on it. What this test does insist on is that
+    # package ahead of its adoption -- as tiktoken's was before the OpenAI
+    # clients brought it -- so the gate notes such a row as not locked rather
+    # than failing on it. What this test does insist on is that
     # a row there is not also a row of a table that is held to the lock.
     assert not set(policy.licence_text_exceptions) & (
         set(policy.restricted_packages) | set(policy.development_exceptions)

@@ -21,8 +21,8 @@ OSI-approved, with no copyleft term. The ASF's category list does not name it;
 its nearest entry is the PSF licence, in Category A, which is the licence that
 grew out of it. It is on this list by the project owner's decision
 (2026-09-28), taken for `regex`, which states `Apache-2.0 AND CNRI-Python` — a
-conjunction of two allowed licences, which now passes. `regex` is not locked
-today: only `tiktoken` brings it, and what brings `tiktoken` is not adopted.
+conjunction of two allowed licences, which now passes. It is locked because
+`tiktoken` brings it, and the OpenAI clients bring `tiktoken`.
 SPDX `CNRI-Python`, `PSF-2.0` and `Python-2.0` are three **different
 identifiers**, and so is `CNRI-Python-GPL-Compatible`: allowing the first
 allows neither of the others (see the `argparse` row below).
@@ -241,9 +241,8 @@ answer has to be on the allowed list either way.
 A row may name a package **ahead of its adoption**. The gate then notes that
 it is not locked and that a row here may be ahead of adoption, and the test
 that holds the other tables to `backend/uv.lock` does not hold this one. That
-is so for `tiktoken` below: what needs it is not adopted (see
-["Known exclusions"](#known-exclusions)), and adopting it is a dependency
-change of its own.
+was so for `tiktoken` below until the OpenAI clients that need it were
+adopted.
 
 | package | version | licence | why it is acceptable |
 |---|---|---|---|
@@ -363,8 +362,6 @@ then, the by-hand list is the record.
 |---|---|---|
 | `psycopg`, `psycopg-pool` | LGPL-3.0-only | not used; the PostgreSQL driver is `asyncpg` |
 | `langgraph-checkpoint-postgres` | MIT, but depends on `psycopg` | cannot be adopted as it is ([ADR 0002](docs/adr/0002-conversation-persistence.md)) |
-| `langchain-openai` | MIT; requires `tiktoken`, which requires `regex` | not adopted: the LangGraph engine offers the `anthropic` and `anthropic-compatible` kinds alone. OpenAI and any other OpenAI-compatible endpoint go through this client ([docs/specs/agents.md](docs/specs/agents.md)). The two licences that kept its tree out are settled — `regex`'s CNRI-Python under ["Allowed"](#allowed), `tiktoken`'s licence text under ["Excepted licence texts"](#excepted-licence-texts) — but the rest of that tree has not been re-read, and what remains is adoption itself — a dependency change of its own, under ["Adopting or upgrading a dependency"](#adopting-or-upgrading-a-dependency), with the gate reading the whole tree then. **OpenRouter does not wait for it**: it also serves Anthropic's Messages API, so it is reached through the `anthropic-compatible` kind with the Anthropic client this build already has |
-| `pydantic-ai-slim[openai]` | MIT; the extra requires `tiktoken`, which requires `regex` | the same tree, and the same answer: not adopted, and the Pydantic AI engine offers the same two kinds. Only the `anthropic` extra is installed; adopting the `openai` extra is the same dependency change as `langchain-openai`'s, since a framework and its provider clients are adopted together |
 | `mcp` (the MCP Python SDK) | MIT, but requires `pyjwt[crypto]`, which requires `cryptography`, which requires `cffi`; and `pywin32` on Windows | not adopted (checked 2026-09-28, at 2.2.0). The rest of its tree passes -- `mcp-types`, `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `pycparser` (BSD-3-Clause), and what is in the lock already -- and the two below do not. So the MCP adapter is a **client of our own over `httpx`** for the three calls a client needs -- `initialize`, `tools/list`, `tools/call` -- over Streamable HTTP ([docs/specs/agents.md](docs/specs/agents.md), "Tools"), which is the fallback the plan named for exactly this case ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), step 2). The import rule confining the SDK to `adapters/tools/mcp/` is written all the same, before the fact, so that the day the tree passes it belongs there and nowhere else |
 | `cffi` | `MIT-0` (the MIT No Attribution licence), stated as its `License-Expression` since 2.1.0 (2026-07); 2.0.0 still states `MIT` | on no list above. It is strictly more permissive than MIT, the ASF category model this document adopts lists it under Category A, and the JavaScript table below already carries it twice for that reason -- so the edit is one identifier on the allowed list, and it is still a decision for a person, not for a build ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), "Open"). It has not been taken. Brought by `cryptography`, and through it by anything that needs `pyjwt[crypto]` |
 | `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence | the gate fails closed and cannot classify it. Windows-only (`sys_platform == "win32"`), which the gate deliberately does not read: the locked set is checked whole, whatever this machine installs |

@@ -169,15 +169,15 @@ class ProviderKind(StrEnum):
     (``KINDS_WITH_BASE_URL``); the vendors' own kinds have one endpoint each
     and their engines pin it.
 
-    **Not every kind is reachable from every build.** A kind whose client the
-    build does not carry -- not adopted, or not passing the dependency policy
-    -- is not offered (``DEPENDENCIES.md``), which is why ``robinauts.core.parse_models_config``
-    is told which kinds the deployment can build rather than assuming all of
-    them. This build reaches ``ANTHROPIC`` and ``ANTHROPIC_COMPATIBLE``, which
-    is how OpenRouter is reached here: it serves Anthropic's Messages API at
+    **Not every kind is reachable from every build.** A kind no engine of the
+    build builds a client for is not offered, which is why
+    ``robinauts.core.parse_models_config`` is told which kinds the deployment
+    can build rather than assuming all of them. This build reaches
+    ``ANTHROPIC`` and ``ANTHROPIC_COMPATIBLE``, which is how OpenRouter is
+    reached here: it serves Anthropic's Messages API at
     ``https://openrouter.ai/api/v1/messages`` and takes the key in the same
     ``x-api-key`` header, so the Anthropic client the engines already have is
-    the client for it and no OpenAI tree is needed.
+    the client for it.
     """
 
     ANTHROPIC = "anthropic"

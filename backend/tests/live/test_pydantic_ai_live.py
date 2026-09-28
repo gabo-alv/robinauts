@@ -28,8 +28,8 @@ files is then one export.
 **Anthropic's own endpoint only**, for the same reasons as the other engine:
 the ``anthropic-compatible`` route is covered without a key by
 ``tests/live/test_vendor_routing.py``, and ``openai`` and
-``openai-compatible`` need ``pydantic-ai-slim[openai]``, whose tree this build
-does not have (``DEPENDENCIES.md``, "Known exclusions").
+``openai-compatible`` go through ``pydantic-ai-slim[openai]``, which is
+installed but not yet wired into the engine.
 """
 
 from __future__ import annotations
