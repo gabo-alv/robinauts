@@ -47,6 +47,13 @@ selection adds to it.
   with 404 on a model no longer offered says so and puts the text back.
   `scripts/fixture-server.mjs` serves the models (scene `conversation` has
   a retired one) but still speaks the pre-#18 branch API.
+- Demo: `demo/robinauts.toml.in` declares three models through the one
+  provider, ids and titles filled in by `demo/start.sh` per provider kind
+  (OpenRouter: `claude-sonnet-5`, `gpt-5-5`, `gemini-3-8-flash`; Anthropic:
+  `claude-sonnet-5`, `claude-opus-5-5`, `claude-haiku-4-5`), overridable by
+  `ROBINAUTS_DEMO_MODEL`, `_2`, `_3` (an override keeps the default's id).
+  `demo/config.py` takes `--model ID NAME TITLE` three times and checks what
+  it wrote.
 
 ## Steps
 
@@ -160,3 +167,27 @@ wide.
 Not done / to watch: the backend answers the same 404 for a removed agent
 and a removed model on a new chat, so the first-message sentence names
 both. The fixture server's branch fixtures still show a discarded answer.
+
+### Step 6 — demo   (feature/model-selection-6-demo)
+
+Summary: three models in the demo configuration, chosen by provider kind,
+each with an id naming its default model and a title; both agents default
+to Claude Sonnet 5. `config.py` refuses blank or over-long values and
+placeholder-like input, and a template placeholder nothing fills. The
+README says what the ids record, and that an override keeps the default's
+id.
+
+Review: 2 rounds.
+- High: 0
+- Medium: 2 (2/0)
+- Low: 7 (3/4) — left: an argparse usage dump for a name starting with
+  `-`, and an unchecked `--provider-id` (both older than this step, and
+  `start.sh` passes only constants); OpenRouter serving GPT and Gemini
+  through its Messages API, unverified; the progress entry (this one).
+
+Checks: lint; unit suite 2764 passed; the template rendered for both kinds
+and parsed by the backend's loader, `GET /api/models` served through
+`create_app` in the local mode.
+Not done / to watch: no real model call was made. That GPT-5.5 and Gemini
+3.8 Flash answer through OpenRouter's Messages API, and the Anthropic ids
+`claude-opus-5-5` and `claude-haiku-4-5`, are to be confirmed with a key.

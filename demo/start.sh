@@ -36,12 +36,33 @@ OPENROUTER_BASE_URL="https://openrouter.ai/api"
 # at /api. OpenRouter serves Anthropic's Messages API, so this build reaches it
 # as an `anthropic-compatible` provider (docs/specs/agents.md).
 
+# The three models the picker offers: the id each has in the configuration, the
+# vendor's name for it, which ROBINAUTS_DEMO_MODEL, ROBINAUTS_DEMO_MODEL_2 and
+# ROBINAUTS_DEMO_MODEL_3 override, and the title the picker shows. OpenRouter's
+# names are `<vendor>/<model>` and reach every vendor, so it offers three;
+# Anthropic's are its own, and it serves Claude alone, so its three are all
+# Claude. The first is the agents' default and the same model both ways, so it
+# has the same id both ways; the others have ids of their own, so that a
+# conversation on a model the other key does not offer is refused as not
+# offered rather than answered by another (docs/specs/agents.md). An override
+# keeps the id. A model that has been retired is a turn on it that fails saying
+# `not found`, and README.md says which variable to set then.
+DEFAULT_ID=claude-sonnet-5
+DEFAULT_TITLE="Claude Sonnet 5"
 DEFAULT_OPENROUTER_MODEL="anthropic/claude-sonnet-5"
 DEFAULT_ANTHROPIC_MODEL="claude-sonnet-5"
-# What ROBINAUTS_DEMO_MODEL overrides. The first is the id OpenRouter lists, the
-# second Anthropic's own name for the same model; a model that has been retired
-# is a run that fails saying `not found`, and README.md says which variable to
-# set then.
+OPENROUTER_ID_2=gpt-5-5
+OPENROUTER_MODEL_2="openai/gpt-5.5"
+OPENROUTER_TITLE_2="GPT-5.5"
+OPENROUTER_ID_3=gemini-3-8-flash
+OPENROUTER_MODEL_3="google/gemini-3.8-flash"
+OPENROUTER_TITLE_3="Gemini 3.8 Flash"
+ANTHROPIC_ID_2=claude-opus-5-5
+ANTHROPIC_MODEL_2="claude-opus-5-5"
+ANTHROPIC_TITLE_2="Claude Opus 5.5"
+ANTHROPIC_ID_3=claude-haiku-4-5
+ANTHROPIC_MODEL_3="claude-haiku-4-5"
+ANTHROPIC_TITLE_3="Claude Haiku 4.5"
 
 HEALTH_SECONDS=120
 # Generous on purpose: a first start has just built an interface, and the server
@@ -146,6 +167,16 @@ if [ "${ROBINAUTS_DEMO_PROVIDER:-}" = openrouter ] && [ -z "$openrouter_key" ]; 
     fail "ROBINAUTS_DEMO_PROVIDER=openrouter, but $OPENROUTER_VARIABLE is not set." 2
 fi
 
+title_of() {
+    # The title the picker shows for model $1: $3 when it is the default $2, and
+    # nothing for a model the operator chose, since a title written here for
+    # another model would name the wrong one. demo/config.py calls that one by
+    # the vendor's name, cut to the length a title may have.
+    if [ "$1" = "$2" ]; then
+        printf '%s\n' "$3"
+    fi
+}
+
 # OpenRouter wins when both are set, unless it is asked not to: it is the one
 # key a reader of README.md is most likely to have, and it reaches Anthropic's
 # models as well.
@@ -154,7 +185,14 @@ if [ -n "$openrouter_key" ] && [ "${ROBINAUTS_DEMO_PROVIDER:-}" != anthropic ]; 
     provider_kind=anthropic-compatible
     key_variable=$OPENROUTER_VARIABLE
     base_url=$OPENROUTER_BASE_URL
-    model_name=${ROBINAUTS_DEMO_MODEL:-$DEFAULT_OPENROUTER_MODEL}
+    model=${ROBINAUTS_DEMO_MODEL:-$DEFAULT_OPENROUTER_MODEL}
+    title=$(title_of "$model" "$DEFAULT_OPENROUTER_MODEL" "$DEFAULT_TITLE")
+    id_2=$OPENROUTER_ID_2
+    model_2=${ROBINAUTS_DEMO_MODEL_2:-$OPENROUTER_MODEL_2}
+    title_2=$(title_of "$model_2" "$OPENROUTER_MODEL_2" "$OPENROUTER_TITLE_2")
+    id_3=$OPENROUTER_ID_3
+    model_3=${ROBINAUTS_DEMO_MODEL_3:-$OPENROUTER_MODEL_3}
+    title_3=$(title_of "$model_3" "$OPENROUTER_MODEL_3" "$OPENROUTER_TITLE_3")
     key_value=$openrouter_key
 else
     provider_id=anthropic
@@ -163,10 +201,17 @@ else
     # `anthropic` has one endpoint and both engines pin it; a base_url there is
     # a start-up refusal, so there is none to write.
     base_url=
-    model_name=${ROBINAUTS_DEMO_MODEL:-$DEFAULT_ANTHROPIC_MODEL}
+    model=${ROBINAUTS_DEMO_MODEL:-$DEFAULT_ANTHROPIC_MODEL}
+    title=$(title_of "$model" "$DEFAULT_ANTHROPIC_MODEL" "$DEFAULT_TITLE")
+    id_2=$ANTHROPIC_ID_2
+    model_2=${ROBINAUTS_DEMO_MODEL_2:-$ANTHROPIC_MODEL_2}
+    title_2=$(title_of "$model_2" "$ANTHROPIC_MODEL_2" "$ANTHROPIC_TITLE_2")
+    id_3=$ANTHROPIC_ID_3
+    model_3=${ROBINAUTS_DEMO_MODEL_3:-$ANTHROPIC_MODEL_3}
+    title_3=$(title_of "$model_3" "$ANTHROPIC_MODEL_3" "$ANTHROPIC_TITLE_3")
     key_value=$anthropic_key
 fi
-say "Provider: $provider_kind ($provider_id); model $model_name; key from $key_variable."
+say "Provider: $provider_kind ($provider_id); models $model, $model_2, $model_3; key from $key_variable."
 
 # --- the database ------------------------------------------------------------
 
@@ -179,8 +224,8 @@ say "Database: $database_url"
 
 # --- the configuration -------------------------------------------------------
 
-# By demo/config.py rather than by `sed`: a model name is the one value here a
-# person types, `sed` would read a `&`, a `|` or a backslash in it as part of
+# By demo/config.py rather than by `sed`: the model names are the values here a
+# person types, `sed` would read a `&`, a `|` or a backslash in one as part of
 # its own language, and a value that broke out of the string it was written
 # into would be a configuration that means something nobody asked for.
 # config.py substitutes literally, refuses what TOML cannot hold, and reads the
@@ -188,7 +233,10 @@ say "Database: $database_url"
 uv run --no-project --python "$PYTHON" python "$demo/config.py" \
     --template "$demo/robinauts.toml.in" --out "$CONFIG" \
     --provider-id "$provider_id" --kind "$provider_kind" \
-    --key-variable "$key_variable" --model-name "$model_name" \
+    --key-variable "$key_variable" \
+    --model "$DEFAULT_ID" "$model" "$title" \
+    --model "$id_2" "$model_2" "$title_2" \
+    --model "$id_3" "$model_3" "$title_3" \
     --base-url "$base_url" ||
     fail "$CONFIG could not be written." 1
 export ROBINAUTS_CONFIG="$CONFIG"
@@ -304,6 +352,7 @@ say ""
 say "The demo is up: $url"
 say "  sign-in is off (the local development mode), loopback only, one user"
 say "  two agents in the picker, one per engine: start a chat with each"
+say "  three models beside it: $model, $model_2, $model_3"
 say "  log:  $LOG_FILE"
 say "  stop: demo/stop.sh   ('demo/stop.sh --reset' also deletes $state)"
 
