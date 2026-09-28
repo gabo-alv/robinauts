@@ -57,6 +57,7 @@ from robinauts.api.access import (
 from robinauts.api.agent_routes import agent_router, list_agents, list_models
 from robinauts.api.agui import (
     ENDED_BADLY,
+    ERROR_FLAG,
     GONE_CODE,
     INTERNAL_CODE,
     QUIET_CODE,
@@ -260,6 +261,7 @@ __all__ = [
     "DECIDING_HEADERS",
     "DELETING",
     "ENDED_BADLY",
+    "ERROR_FLAG",
     "FOUND",
     "FRAMEWORK_PATHS",
     "FRAME_OPTIONS",

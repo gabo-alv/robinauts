@@ -26,10 +26,24 @@ problem is reported at once**, so that a deployment is fixed in one pass.
     model = "sonnet"
     engine = "langgraph"
     system_prompt = "Play fair."
+    tools = ["github"]
+
+    [mcp_servers.github]
+    url = "https://api.githubcopilot.com/mcp/"
+    secret_env = "ROBINAUTS_GITHUB_TOKEN"
 
 ``model_providers`` and not ``providers``: the latter is already the identity
 providers people sign in with, and the two live in one file
 (``docs/specs/agents.md``).
+
+**A tool server is a table beside the providers** (``docs/specs/agents.md``,
+"Tools"): its ``url``, checked as every configured endpoint is; ``secret_env``,
+the name of the variable its secret is read from; ``auth``, ``bearer`` unless
+said otherwise, or ``basic`` with the ``user`` part written down; ``prefix``,
+what its tools are shown to the model under, the server's id when left out;
+and ``timeout_seconds`` per tool call. An agent names the servers it may use
+in ``tools``, each one configured; two servers under one prefix are refused,
+since a call is routed to its server from the name alone.
 
 A ``title``, an agent's or a model's, is what a person picks it by, and is
 optional: left out, it is the entry's id.
@@ -69,6 +83,7 @@ from robinauts.domain import (
     KINDS_WITH_BASE_URL,
     MAX_AGENT_TITLE_CHARS,
     MAX_BASE_URL_CHARS,
+    MAX_BASIC_USER_CHARS,
     MAX_CONFIG_ID_CHARS,
     MAX_ENV_NAME_CHARS,
     MAX_MODEL_NAME_CHARS,
@@ -76,6 +91,8 @@ from robinauts.domain import (
     MAX_MODEL_TITLE_CHARS,
     MAX_OUTPUT_TOKENS,
     MAX_SYSTEM_PROMPT_CHARS,
+    MAX_TOOL_PREFIX_CHARS,
+    MAX_TOOL_TIMEOUT_SECONDS,
     AgentDefinition,
     ConfigError,
     Engine,
@@ -84,17 +101,23 @@ from robinauts.domain import (
     ModelProviderConfig,
     ModelsConfig,
     ProviderKind,
+    ToolServerAuth,
+    ToolServerConfig,
     is_config_id,
     is_endpoint_url,
     is_env_name,
+    is_tool_prefix,
+    sends_alone,
 )
 
 MODEL_PROVIDER_KEYS = frozenset({"kind", "api_key_env", "base_url"})
 MODEL_ENTRY_KEYS = frozenset({"provider", "name", "title", "timeout_seconds", "max_output_tokens"})
-AGENT_KEYS = frozenset({"title", "model", "engine", "system_prompt"})
+AGENT_KEYS = frozenset({"title", "model", "engine", "system_prompt", "tools"})
+TOOL_SERVER_KEYS = frozenset({"url", "auth", "user", "secret_env", "prefix", "timeout_seconds"})
 
 _KINDS = {kind.value: kind for kind in ProviderKind}
 _ENGINES = {engine.value: engine for engine in Engine}
+_AUTHS = {auth.value: auth for auth in ToolServerAuth}
 
 ALL_ENGINES: frozenset[Engine] = frozenset(Engine)
 """Every engine there is, which is what a test of these rules alone assumes."""
@@ -131,6 +154,7 @@ def parse_models_config(
     # ``[[allow]]``, for the same reason.
     declared_providers = _table(data, "model_providers", problems)
     declared_models = _table(data, "models", problems)
+    declared_servers = _table(data, "mcp_servers", problems)
 
     providers: dict[str, ModelProviderConfig] = {}
     for provider_id, table in declared_providers.items():
@@ -146,13 +170,34 @@ def parse_models_config(
 
     agents: dict[str, AgentDefinition] = {}
     for agent_id, table in _table(data, "agents", problems).items():
-        agent = _agent(agent_id, table, declared_models, engines, problems)
+        agent = _agent(agent_id, table, declared_models, declared_servers, engines, problems)
         if agent is not None:
             agents[agent.id] = agent
 
+    servers: dict[str, ToolServerConfig] = {}
+    for server_id, table in declared_servers.items():
+        server = _tool_server(server_id, table, problems)
+        if server is not None:
+            servers[server.id] = server
+    # Two servers under one prefix would be two servers a call could name:
+    # said here, by both ids, with the rest of the file's problems -- over
+    # the **declared** tables, so that a server with another mistake in it
+    # is still one the clash is reported against, in the same pass.
+    under: dict[str, str] = {}
+    for server_id, table in declared_servers.items():
+        prefix = _declared_prefix(server_id, table)
+        if prefix is None:
+            continue
+        first = under.setdefault(prefix, str(server_id))
+        if first != server_id:
+            problems.append(
+                f"mcp_servers.{server_id}: its tools would be named under {prefix!r},"
+                f" as mcp_servers.{first}'s are; give one of them a prefix of its own"
+            )
+
     if problems:
         raise ConfigError(problems)
-    return ModelsConfig(providers=providers, models=models, agents=agents)
+    return ModelsConfig(providers=providers, models=models, agents=agents, tool_servers=servers)
 
 
 def _table(data: Mapping[str, Any], key: str, problems: list[str]) -> Mapping[str, Any]:
@@ -298,6 +343,7 @@ def _agent(
     agent_id: object,
     table: object,
     declared: Mapping[str, Any],
+    declared_servers: Mapping[str, Any],
     engines: frozenset[Engine],
     problems: list[str],
 ) -> AgentDefinition | None:
@@ -344,6 +390,21 @@ def _agent(
         else:
             system_prompt = raw
 
+    tools: tuple[str, ...] = ()
+    if "tools" in table:
+        raw_tools = table["tools"]
+        if not isinstance(raw_tools, list) or not all(
+            isinstance(server_id, str) for server_id in raw_tools
+        ):
+            problems.append(f"{where}.tools: a list of tool server ids, or no tools at all")
+        else:
+            for server_id in dict.fromkeys(raw_tools):
+                if server_id not in declared_servers:
+                    problems.append(f"{where}.tools: {server_id!r} is not one of [mcp_servers]")
+            if len(set(raw_tools)) != len(raw_tools):
+                problems.append(f"{where}.tools: each tool server once")
+            tools = tuple(raw_tools)
+
     if len(problems) > before or engine is None:
         return None
     return _built(
@@ -355,10 +416,117 @@ def _agent(
         system_prompt=system_prompt,
         model=model_id,
         engine=engine,
+        tools=tools,
     )
 
 
-def _seconds(table: Mapping[str, Any], where: str, problems: list[str]) -> float | None:
+def _declared_prefix(server_id: object, table: object) -> str | None:
+    """The prefix a declared server would name its tools under, if it is known yet."""
+    if not isinstance(table, Mapping):
+        return None
+    written = table.get("prefix")
+    if isinstance(written, str) and is_tool_prefix(written):
+        return written
+    if written is None and is_tool_prefix(server_id):
+        return str(server_id)
+    return None
+
+
+def _tool_server(server_id: object, table: object, problems: list[str]) -> ToolServerConfig | None:
+    where = f"mcp_servers.{server_id}"
+    if not is_config_id(server_id):
+        problems.append(
+            f"{where}: an id is up to {MAX_CONFIG_ID_CHARS} lower-case letters, digits," f" _ and -"
+        )
+        return None
+    if not isinstance(table, Mapping):
+        problems.append(f"{where}: a table")
+        return None
+    before = len(problems)
+    _unknown(table, TOOL_SERVER_KEYS, where, problems)
+
+    url = _string(table, "url", where, problems, limit=MAX_BASE_URL_CHARS)
+    if url and not is_endpoint_url(url):
+        problems.append(
+            f"{where}.url: an https:// endpoint (http:// on the loopback interface only),"
+            f" with no query, no fragment and no user:password in it -- the server's"
+            f" credential is the variable secret_env names and is never in this file"
+        )
+    auth: ToolServerAuth | None = ToolServerAuth.BEARER
+    if "auth" in table:
+        raw_auth = _string(table, "auth", where, problems)
+        auth = _AUTHS.get(raw_auth) if raw_auth else None
+        if raw_auth and auth is None:
+            problems.append(f"{where}.auth: one of {_named(_AUTHS)}, not {raw_auth!r}")
+
+    # A server sent no credential names no variable; every other names one.
+    # Under a misspelt auth a missing secret_env is not a second mistake --
+    # it may be right for the auth that was meant -- so it is read only when
+    # it is there, as the user part is.
+    secret_env = ""
+    if auth is ToolServerAuth.NONE:
+        if "secret_env" in table:
+            problems.append(
+                f'{where}.secret_env: auth = "none" sends no credential, so there is no'
+                f" variable to name; leave secret_env out"
+            )
+    elif auth is not None or "secret_env" in table:
+        secret_env = _string(table, "secret_env", where, problems, limit=MAX_ENV_NAME_CHARS)
+        if secret_env and not is_env_name(secret_env):
+            problems.append(
+                f"{where}.secret_env: the NAME of an environment variable holding the secret,"
+                f" not the secret itself"
+            )
+
+    given: dict[str, Any] = {}
+    if "user" in table:
+        user = _string(table, "user", where, problems, limit=MAX_BASIC_USER_CHARS)
+        given["user"] = user
+        if user and ":" in user:
+            problems.append(f"{where}.user: the user part of a basic credential holds no ':'")
+        # Said only when the auth is known: under a misspelt auth it would be
+        # the same mistake reported twice.
+        if user and auth is not None and auth is not ToolServerAuth.BASIC:
+            problems.append(f"{where}.user: only basic auth has a user part; {sends_alone(auth)}")
+    elif auth is ToolServerAuth.BASIC:
+        problems.append(f"{where}.user: basic auth names the user part; there is nothing to guess")
+    if "prefix" in table:
+        prefix = _string(table, "prefix", where, problems, limit=MAX_TOOL_PREFIX_CHARS)
+        if prefix and not is_tool_prefix(prefix):
+            problems.append(
+                f"{where}.prefix: letters, digits, _ and -, at most {MAX_TOOL_PREFIX_CHARS} of"
+                f" them, holding no '__' and not ending in '_'"
+            )
+        given["prefix"] = prefix
+    elif not is_tool_prefix(server_id):
+        problems.append(
+            f"{where}: this id is not one its tools can be named under (at most"
+            f" {MAX_TOOL_PREFIX_CHARS} characters, no '__', not ending in '_'); write a prefix"
+        )
+    seconds = _seconds(table, where, problems, MAX_TOOL_TIMEOUT_SECONDS)
+    if seconds is not None:
+        given["timeout_seconds"] = seconds
+
+    if len(problems) > before or auth is None:
+        return None
+    return _built(
+        where,
+        problems,
+        ToolServerConfig,
+        id=server_id,
+        url=url,
+        secret_env=secret_env,
+        auth=auth,
+        **given,
+    )
+
+
+def _seconds(
+    table: Mapping[str, Any],
+    where: str,
+    problems: list[str],
+    most: float = MAX_MODEL_TIMEOUT_SECONDS,
+) -> float | None:
     """``timeout_seconds``, or ``None`` to leave the record's own default."""
     if "timeout_seconds" not in table:
         return None
@@ -367,11 +535,11 @@ def _seconds(table: Mapping[str, Any], where: str, problems: list[str]) -> float
         isinstance(seconds, bool)
         or not isinstance(seconds, int | float)
         or not math.isfinite(seconds)
-        or not 0 < seconds <= MAX_MODEL_TIMEOUT_SECONDS
+        or not 0 < seconds <= most
     ):
         problems.append(
             f"{where}.timeout_seconds: a number of seconds over 0 and at most"
-            f" {MAX_MODEL_TIMEOUT_SECONDS:g}, not {seconds!r}"
+            f" {most:g}, not {seconds!r}"
         )
         return None
     return float(seconds)

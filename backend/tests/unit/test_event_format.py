@@ -21,16 +21,25 @@ from robinauts.core import conversation_format as format_module
 from robinauts.domain import (
     FIRST_POSITION,
     FORMAT_VERSION,
+    ArgumentsDelta,
+    CallCompleted,
+    CallStarted,
     InvalidValueError,
+    Message,
     MessageCompleted,
     MessageStarted,
     ReasoningDelta,
+    ResultLanded,
+    Role,
     RunEnded,
     RunEvent,
     RunStarted,
     RunState,
     StoredDataError,
     TextDelta,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
     TurnEvent,
     UnsupportedFormatError,
     clean_text,
@@ -41,14 +50,35 @@ PARENT = uuid.UUID("1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e")
 
 
 def every_event() -> list[TurnEvent]:
-    """One of each, as a run produces them."""
+    """One of each, as a run produces them -- a turn with tools included."""
     said = answer(question(), "Some one")
+    calling = answer(
+        question(),
+        parts=(TextPart("Let me look."), ToolCallPart("toolu_01", "github__search", {"q": "x"})),
+        extras={"anthropic": {"thinking": [{"signature": "sig"}]}},
+    )
+    results = Message(
+        id=uuid.uuid4(),
+        conversation_id=CONVERSATION,
+        parent_id=calling.id,
+        role=Role.TOOL,
+        parts=(ToolResultPart("toolu_01", "found", is_error=True),),
+        created_at=calling.created_at,
+    )
     return [
         RunStarted(run_id=RUN, conversation_id=CONVERSATION),
         MessageStarted(run_id=RUN, message_id=MESSAGE, parent_id=PARENT),
+        MessageStarted(run_id=RUN, message_id=MESSAGE, parent_id=PARENT, role=Role.TOOL),
         TextDelta(run_id=RUN, message_id=MESSAGE, text="Some "),
         ReasoningDelta(run_id=RUN, message_id=MESSAGE, text="thinking"),
+        CallStarted(run_id=RUN, message_id=MESSAGE, call_id="toolu_01", name="github__search"),
+        ArgumentsDelta(run_id=RUN, message_id=MESSAGE, call_id="toolu_01", text='{"q": '),
+        CallCompleted(run_id=RUN, message_id=MESSAGE, call_id="toolu_01"),
+        ResultLanded(run_id=RUN, message_id=MESSAGE, call_id="toolu_01", text="found"),
+        ResultLanded(run_id=RUN, message_id=MESSAGE, call_id="toolu_02", text="", is_error=True),
         MessageCompleted(run_id=RUN, message=said),
+        MessageCompleted(run_id=RUN, message=calling),
+        MessageCompleted(run_id=RUN, message=results),
         RunEnded(run_id=RUN, state=RunState.FINISHED),
         RunEnded(run_id=RUN, state=RunState.FAILED, error="the provider said no"),
         RunEnded(run_id=RUN, state=RunState.CANCELLED),
@@ -263,3 +293,16 @@ def test_only_the_formats_own_events_are_encoded() -> None:
             event_to_data(value)
         with pytest.raises(InvalidValueError):
             run_event_to_data(value)
+
+
+def test_a_result_is_written_with_its_flag_and_a_flag_that_is_not_yes_or_no_is_refused() -> None:
+    written = event_to_data(
+        ResultLanded(run_id=RUN, message_id=MESSAGE, call_id="toolu_01", text="found")
+    )
+    assert written["is_error"] is False
+    with pytest.raises(InvalidValueError, match="yes or no"):
+        event_from_data({**written, "is_error": "no"})
+    # Present, not merely allowed, as every key of a document is.
+    del written["is_error"]
+    with pytest.raises(InvalidValueError, match="is written with is_error"):
+        event_from_data(written)

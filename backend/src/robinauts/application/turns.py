@@ -30,11 +30,14 @@ costs a bounded wait and never an event.
 
 **What ``execute`` writes, in order** (``docs/specs/runs.md``, "In the
 layout"): the run started, once, first; for each answer, its announcement,
-then its text and its thinking as they arrive, then the message itself,
-**stored with the event that announces it**; the run ended, once, last. Every
-event is numbered from 1 with no gaps by this layer -- an engine knows nothing
-of positions -- so one run is numbered one way whichever engine produced it,
-and everything stored satisfies ``core.check_event_order``.
+then its text, its thinking and its tool calls as they arrive, then the
+message itself, **stored with the event that announces it**; for an answer
+that asked for tools, the one tool message of the batch after it -- its
+announcement, each result as it lands, the message itself -- and then the
+next answer; the run ended, once, last. Every event is numbered from 1 with
+no gaps by this layer -- an engine knows nothing of positions -- so one run
+is numbered one way whichever engine produced it, and everything stored
+satisfies ``core.check_event_order``.
 
 **What was published is what was stored.** The engine's fragments go through
 ``domain.publishable`` / ``flush``, so nothing published ends on half a
@@ -52,10 +55,12 @@ failures (a ``finished`` run has at least one message and nothing
 half-written). The engine raises: ``failed``, with a description of what was
 raised -- its type and what it said, made storable and bounded by
 ``core.run_error``, never a traceback -- and the answer in flight is left
-uncompleted. The turn takes too long: ``failed``, saying so. The task is
-cancelled: ``cancelled``, written under a shield so the ending reaches the
-store, and the ``CancelledError`` is **re-raised**, because a coroutine that
-swallowed one would leave whoever cancelled it waiting.
+uncompleted. The turn takes too long: ``failed``, saying so. The turn goes
+back to the model with tool results more times than the bound allows, or a
+round after tool results produces no answer: ``failed``, saying which. The
+task is cancelled: ``cancelled``, written under a shield so the ending
+reaches the store, and the ``CancelledError`` is **re-raised**, because a
+coroutine that swallowed one would leave whoever cancelled it waiting.
 
 **A run that has ended is done with**, and the store says so. If a write is
 refused because the run ended under us -- somebody cancelled it, another
@@ -138,6 +143,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import itertools
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
@@ -150,15 +156,18 @@ from robinauts.core import (
     RUN_ENDED,
     RUN_STARTED,
     ConversationTree,
+    check_answers_calls,
+    check_call_arguments,
     derive_title,
     may_transition,
     message_from_stored,
     message_to_data,
     run_event_to_data,
+    split_tool_name,
+    tools_for_run,
     transition,
     tree_of,
     tree_of_stored,
-    trim_history,
 )
 from robinauts.domain import (
     ACTIVE_RUN_STATES,
@@ -168,6 +177,9 @@ from robinauts.domain import (
     AnswerReasoningDelta,
     AnswerStarted,
     AnswerTextDelta,
+    ArgumentsDelta,
+    CallCompleted,
+    CallStarted,
     Channel,
     Conversation,
     ConversationNotFoundError,
@@ -183,6 +195,7 @@ from robinauts.domain import (
     ModelNotOfferedError,
     PositionTakenError,
     ReasoningDelta,
+    ResultLanded,
     Role,
     Run,
     RunAlreadyActiveError,
@@ -192,10 +205,18 @@ from robinauts.domain import (
     RunStarted,
     RunState,
     TextDelta,
+    ToolCallArgumentsDelta,
+    ToolCallCompleted,
+    ToolCallPart,
+    ToolCallStarted,
+    ToolDefinition,
+    ToolResultPart,
+    ToolServerConfig,
     TurnEvent,
     UnknownAgentError,
     UnknownModelError,
     User,
+    WaitingOnTools,
     chain,
     checked_config_id,
     checked_uuid,
@@ -215,19 +236,10 @@ from robinauts.ports import (
     IdSource,
     RunExecutor,
     RunSignals,
+    ToolServers,
 )
 
 _log = logging.getLogger(__name__)
-
-DEFAULT_HISTORY_CHARS = 200_000
-"""How much of a conversation a turn sends, until a real context policy exists.
-
-Characters, not tokens (``core.trim_history``): counting tokens needs to know
-about models and their tokenisers, which is the step that configures them. A
-placeholder, and a generous one -- it is about a fiftieth of what a large
-context window holds -- so that nothing is dropped from a conversation anybody
-is likely to hold in this version.
-"""
 
 DEFAULT_TURN_SECONDS = 600.0
 """How long one turn may take before the run is failed.
@@ -247,6 +259,47 @@ NO_ANSWER = "the agent produced no answer"
 
 UNFINISHED_ANSWER = "the agent began an answer and never completed it"
 """What a turn that stopped in the middle of an answer without saying so records."""
+
+DEFAULT_MAX_TOOL_ROUNDS = 25
+"""How many times one turn may go back to the model with tool results.
+
+Decision 9 of the plan (``docs/working-notes/mcp-plan.md``): a bound on the
+loop, so that a model that keeps calling tools cannot run a turn for ever on
+the operator's account. A run that reaches it fails saying so
+(``TOO_MANY_ROUNDS``). Twenty-five rounds is far past what a turn that is
+getting somewhere needs and far short of what a turn that is not would spend.
+"""
+
+TOO_MANY_ROUNDS = (
+    "the turn went back to the model with tool results as many times as this deployment"
+    " allows, and the model asked for more"
+)
+"""Why a turn that reaches ``max_tool_rounds`` fails."""
+
+NO_ANSWER_AFTER_TOOLS = "the agent produced no answer after the tool results"
+"""What a turn whose round after a batch of results yielded nothing records.
+
+A failure, as a turn that yields nothing at all is (``NO_ANSWER``): a run that
+finished on a tool message would be one nothing can continue from -- a
+question does not follow a tool message, and a tool message is not
+regenerated (``docs/specs/conversations.md``).
+"""
+
+NO_SUCH_TOOL = "no tool {name!r} is offered to this agent"
+"""What a call for a tool the run was not handed is answered with: an error result.
+
+The model's mistake and not the platform's failure (``docs/specs/runs.md``,
+"Tools"): the model is told and may correct itself in the next round.
+"""
+
+NO_CONTENT = "[the tool returned no content]"
+"""What a result with no text at all is stored as.
+
+A result is a part of a message and a block a vendor is sent; both want
+something in it (Anthropic refuses an empty text block), and "the tool said
+nothing" is worth recording in words, as a part of another kind becomes a
+note (``docs/specs/agents.md``, "Tools").
+"""
 
 MAX_WRITE_ATTEMPTS = 3
 """How often one event is offered before the run is failed for it.
@@ -361,9 +414,26 @@ class Turns:
         engines: Mapping[Engine, Agent],
         executor: RunExecutor,
         signals: RunSignals,
-        history_chars: int = DEFAULT_HISTORY_CHARS,
         turn_seconds: float = DEFAULT_TURN_SECONDS,
+        tool_servers: ToolServers | None = None,
+        servers: Mapping[str, ToolServerConfig] | None = None,
+        max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
     ) -> None:
+        servers = dict(servers or {})
+        by_prefix: dict[str, str] = {}
+        for server_id, server in servers.items():
+            if not isinstance(server, ToolServerConfig) or server.id != server_id:
+                raise InvalidValueError(f"the tool server under {server_id!r} is not that server")
+            # A call is routed to its server by the prefix alone, so two
+            # servers under one prefix would be one that never gets a call:
+            # what the parser refuses for the file is refused for servers
+            # handed in as well.
+            other = by_prefix.setdefault(server.prefix, server_id)
+            if other != server_id:
+                raise InvalidValueError(
+                    f"tool servers {other!r} and {server_id!r} share the prefix"
+                    f" {server.prefix!r}; a call is routed by the prefix alone"
+                )
         for model_id, model in models.items():
             if not isinstance(model, ModelConfig) or model.id != model_id:
                 raise InvalidValueError(f"the model under {model_id!r} is not that model")
@@ -384,12 +454,23 @@ class Turns:
                     f" {definition.model!r}, which this deployment does not offer:"
                     " configure the model, or point the agent at one that is"
                 )
-        if isinstance(history_chars, bool) or not isinstance(history_chars, int):
+            for server_id in definition.tools:
+                if server_id not in servers:
+                    raise InvalidValueError(
+                        f"agent {agent_id!r} uses tool server {server_id!r}, which this"
+                        " deployment has not configured"
+                    )
+            if definition.tools and tool_servers is None:
+                raise InvalidValueError(
+                    f"agent {agent_id!r} uses tool servers, and this deployment has nothing"
+                    " that reaches one: hand in the tool servers port"
+                )
+        if isinstance(max_tool_rounds, bool) or not isinstance(max_tool_rounds, int):
             raise InvalidValueError(
-                f"a history is bounded in characters, not {describe(history_chars)}"
+                f"the bound on tool rounds is a whole number, not {describe(max_tool_rounds)}"
             )
-        if history_chars < 1:
-            raise InvalidValueError("a history holds at least one character")
+        if max_tool_rounds < 0:
+            raise InvalidValueError("a turn may go back to the model no fewer than zero times")
         if isinstance(turn_seconds, bool) or not isinstance(turn_seconds, int | float):
             raise InvalidValueError(f"a turn's timeout is seconds, not {describe(turn_seconds)}")
         if turn_seconds <= 0:
@@ -406,7 +487,11 @@ class Turns:
         """The models a conversation may run on: what ``set_model`` accepts and
         what a turn is refused without. Its agents' defaults are among them."""
         self._engines = dict(engines)
-        self._history_chars = history_chars
+        self._turn_servers = tool_servers
+        """What reaches the tool servers; ``None`` in a deployment with none."""
+        self._servers = servers
+        """The tool servers this deployment configured, by id."""
+        self._max_tool_rounds = max_tool_rounds
         self._turn_seconds = turn_seconds
         self._executing: set[uuid.UUID] = set()
         """Runs whose ``execute`` is under way in this process.
@@ -944,6 +1029,14 @@ class Turns:
                 return _Ending(self._stopped_in())
             self._failed(run, fault)
             return _Ending(RunState.FAILED, str(fault))
+        except _TooManyRounds:
+            if _being_cancelled():
+                return _Ending(self._stopped_in())
+            return _Ending(RunState.FAILED, TOO_MANY_ROUNDS)
+        except _NoAnswerAfterTools:
+            if _being_cancelled():
+                return _Ending(self._stopped_in())
+            return _Ending(RunState.FAILED, NO_ANSWER_AFTER_TOOLS)
         except TimeoutError as failure:
             if _being_cancelled():
                 return _Ending(self._stopped_in())
@@ -968,34 +1061,87 @@ class Turns:
         return _Ending(RunState.FINISHED)
 
     async def _produce(self, stream: _Stream, pump: _Pump) -> tuple[int, bool]:
-        """Run the engine, publishing and storing what it says; how it ended.
+        """Run the turn, publishing and storing what it says; how it ended.
 
         How many answers it completed, and whether it left one announced and
         never completed -- which is a failure, and is decided by the caller so
         that every ending is written in one place.
+
+        **The loop** (``docs/specs/runs.md``, "Tools"): the tools the agent's
+        servers offer are fetched once and hold for the run; the engine runs
+        from the stored history; an answer that asked for tools is stored with
+        its calls, the calls are run in parallel through the ``ToolServers``
+        port, each result is published as it lands and the batch completes
+        one tool message when the last one is in; and the engine is run again
+        from the history read back from the store -- which is what a run
+        taken up again does too, so there is one path. ``max_tool_rounds``
+        bounds how many times that happens; the turn's timeout, held by the
+        caller, holds over the whole of it.
         """
         run = await self._taken_up(stream)
         await stream.publish(RunStarted(run_id=run.id, conversation_id=run.conversation_id))
         definition = self._definition(run.agent)
-        history = await self._history(run)
+        tools = await self._tools_for(definition)
         answers = 0
         parent_id = run.message_id
+        for rounds in itertools.count():
+            history = await self._history(run, parent_id)
+            if rounds:
+                # The engine of the round before has ended; let it go before
+                # the next begins, so that one pump holds one stream.
+                await self._released(pump)
+            outcome = await self._round(stream, pump, definition, history, tools, parent_id)
+            answers += outcome.answers
+            if rounds and not outcome.answers and not outcome.unfinished:
+                raise _NoAnswerAfterTools
+            if outcome.unfinished or outcome.calling is None:
+                return answers, outcome.unfinished
+            if rounds >= self._max_tool_rounds:
+                raise _TooManyRounds
+            parent_id = (await self._answered(stream, definition, outcome.calling, tools)).id
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _round(
+        self,
+        stream: _Stream,
+        pump: _Pump,
+        definition: AgentDefinition,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        parent_id: uuid.UUID,
+    ) -> _Round:
+        """One engine turn: its events published and its answers stored."""
+        run = stream.run
+        answers = 0
         open_id: uuid.UUID | None = None
         said = _Text()
         thought = _Text()
+        arguments = _Text()
+        open_call: str | None = None
+        announced_calls: list[tuple[str, str]] = []
+        calling: Message | None = None
+        over = False
         # Consumed by a task of its own, through a bounded queue: what the
         # lifecycle awaits is the queue, so a cancellation reaches it at once
         # however long the engine then takes to let go, and a provider faster
         # than the database is held back rather than buffered.
         # The run's model, not the conversation's as it now is: a turn taken
         # up again runs on what it was begun on.
-        pump.begin(self._engine(run.engine).run_turn(definition, history, model=run.model))
+        pump.begin(self._engine(run.engine).run_turn(definition, history, tools, model=run.model))
         while (event := await pump.next()) is not None:
+            # The order ``core.check_engine_events`` holds an engine to, held
+            # here as well for the two turns of it that would otherwise store
+            # a stream nothing can read back: nothing follows the turn ending
+            # waiting, and no answer follows one that asked for tools.
+            if over:
+                raise InvalidValueError("a turn that is waiting on tools yields nothing more")
             if isinstance(event, AnswerStarted):
                 if open_id is not None:
                     raise InvalidValueError("an engine produces one answer at a time")
+                if calling is not None:
+                    raise InvalidValueError("a turn that asked for tools ends waiting on them")
                 open_id = self._ids.new_id()
-                said, thought = _Text(), _Text()
+                said, thought, calling, announced_calls = _Text(), _Text(), None, []
                 await stream.publish(
                     MessageStarted(
                         run_id=run.id,
@@ -1016,8 +1162,62 @@ class Turns:
                     await stream.publish(
                         ReasoningDelta(run_id=run.id, message_id=open_id, text=piece)
                     )
+            elif isinstance(event, ToolCallStarted):
+                open_id = _inside(open_id)
+                if open_call is not None:
+                    raise InvalidValueError("an engine announces one tool call at a time")
+                if any(call_id == event.call_id for call_id, _ in announced_calls):
+                    raise InvalidValueError("an answer names each tool call once")
+                open_call, arguments = event.call_id, _Text()
+                announced_calls.append((event.call_id, event.name))
+                await stream.publish(
+                    CallStarted(
+                        run_id=run.id, message_id=open_id, call_id=event.call_id, name=event.name
+                    )
+                )
+            elif isinstance(event, ToolCallArgumentsDelta):
+                open_id = _inside(open_id)
+                if open_call is None or event.call_id != open_call:
+                    raise InvalidValueError("arguments belong to the tool call being made")
+                for piece in arguments.more(event.text):
+                    await stream.publish(
+                        ArgumentsDelta(
+                            run_id=run.id, message_id=open_id, call_id=open_call, text=piece
+                        )
+                    )
+            elif isinstance(event, ToolCallCompleted):
+                open_id = _inside(open_id)
+                if open_call is None or event.call.call_id != open_call:
+                    raise InvalidValueError("a tool call is completed once, after it was announced")
+                for piece in arguments.rest():
+                    await stream.publish(
+                        ArgumentsDelta(
+                            run_id=run.id, message_id=open_id, call_id=open_call, text=piece
+                        )
+                    )
+                # What was published is what is stored, for a call as for the
+                # text: the stream is read back so (``core.check_event_order``).
+                if (event.call.call_id, event.call.name) != announced_calls[-1]:
+                    raise InvalidValueError("a tool call is completed as it was announced")
+                if arguments.published.strip():
+                    check_call_arguments(arguments.published, event.call)
+                await stream.publish(
+                    CallCompleted(run_id=run.id, message_id=open_id, call_id=open_call)
+                )
+                open_call = None
             elif isinstance(event, AnswerCompleted):
                 open_id = _inside(open_id, completing=True)
+                if open_call is not None:
+                    raise InvalidValueError("a tool call is completed before its answer is")
+                made = [
+                    (part.call_id, part.name)
+                    for part in event.parts
+                    if isinstance(part, ToolCallPart)
+                ]
+                if made != announced_calls:
+                    raise InvalidValueError(
+                        "an answer completes holding exactly the calls it announced"
+                    )
                 for piece in said.rest():
                     await stream.publish(TextDelta(run_id=run.id, message_id=open_id, text=piece))
                 for piece in thought.rest():
@@ -1026,9 +1226,167 @@ class Turns:
                     )
                 message = await self._complete(stream, open_id, parent_id, event, said)
                 answers, parent_id, open_id = answers + 1, message.id, None
+                calling = message if message.tool_calls else None
+            elif isinstance(event, WaitingOnTools):
+                if calling is None:
+                    raise InvalidValueError("a turn waits on the tools an answer asked for")
+                # The port's word for how this round ended; what follows is
+                # the loop's, once the engine has let go.
+                over = True
             else:
                 raise InvalidValueError(f"an engine yields engine events, not {describe(event)}")
-        return answers, open_id is not None
+        if calling is not None and not over and open_id is None:
+            # The port's contract: a turn that asked for tools says so before
+            # it ends, and one that did not is one the loop would otherwise
+            # answer on a word the engine never said.
+            raise InvalidValueError("a turn that asked for tools ends waiting on them")
+        return _Round(answers=answers, unfinished=open_id is not None, calling=calling)
+
+    async def _tools_for(self, definition: AgentDefinition) -> tuple[ToolDefinition, ...]:
+        """The one list a run is handed: what the agent's servers offer, named and sorted.
+
+        Fetched once, in parallel, before the engine is called; a server that
+        will not list fails the run here, naming the server
+        (``ToolServerError``). A tool left out is said in the log by the
+        server's id, the tool's own name -- one bounded line, the one part of
+        a listing the log holds -- and a fixed reason (``core.tools_for_run``);
+        nothing of a description or a schema is logged.
+        """
+        if not definition.tools:
+            return ()
+        port = self._turn_servers
+        assert port is not None  # the constructor refused an agent with tools otherwise
+        servers = [self._servers[server_id] for server_id in definition.tools]
+        listings = [asyncio.create_task(port.list_tools(server)) for server in servers]
+        try:
+            listed = await asyncio.gather(*listings)
+        except BaseException:
+            # One that failed fails the run; the others are not left asking.
+            for listing in listings:
+                listing.cancel()
+                listing.add_done_callback(_forgotten)
+            raise
+        kept, left_out = tools_for_run(servers, dict(zip(definition.tools, listed, strict=True)))
+        for out in left_out:
+            _log.warning(
+                "tool server %r lists %r, which is left out of the run: %s",
+                out.server_id,
+                out.name,
+                out.reason,
+            )
+        return kept
+
+    async def _answered(
+        self,
+        stream: _Stream,
+        definition: AgentDefinition,
+        calling: Message,
+        tools: Sequence[ToolDefinition],
+    ) -> Message:
+        """Run the calls of that answer and store the one tool message that answers them.
+
+        Announced under the answer, each result published as it lands, the
+        message completed when the last one is in (``docs/specs/runs.md``,
+        "Tools"). A server that cannot be reached fails the run from here;
+        a cancellation on the way leaves the calls stored with no result,
+        which the format allows.
+
+        **The calls still running are let go of, bounded**, as the engine is
+        (``_released``): cancelled, then waited for ``CLOSING_SECONDS`` without
+        waiting on them, and abandoned with a line in the log past that. A
+        tool that will not let go must not hold a run that is over, in the
+        task the executor is waiting to reap.
+        """
+        run = stream.run
+        tool_id = self._ids.new_id()
+        await stream.publish(
+            MessageStarted(run_id=run.id, message_id=tool_id, parent_id=calling.id, role=Role.TOOL)
+        )
+        by_prefix = {
+            self._servers[server_id].prefix: self._servers[server_id]
+            for server_id in definition.tools
+        }
+        offered = frozenset(tool.name for tool in tools)
+        landed: asyncio.Queue[tuple[ToolCallPart, ToolResultPart | Exception]] = asyncio.Queue()
+
+        async def one(call: ToolCallPart) -> None:
+            try:
+                result = await self._called(by_prefix, offered, call)
+            except Exception as failure:  # noqa: BLE001 - handed to the loop below
+                await landed.put((call, failure))
+            else:
+                await landed.put((call, result))
+
+        tasks = [asyncio.create_task(one(call)) for call in calling.tool_calls]
+        parts: list[ToolResultPart] = []
+        try:
+            for _ in calling.tool_calls:
+                call, outcome = await landed.get()
+                if isinstance(outcome, Exception):
+                    raise outcome
+                await stream.publish(
+                    ResultLanded(
+                        run_id=run.id,
+                        message_id=tool_id,
+                        call_id=call.call_id,
+                        text=outcome.text,
+                        is_error=outcome.is_error,
+                    )
+                )
+                parts.append(outcome)
+        finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                try:
+                    _, pending = await asyncio.wait(tasks, timeout=CLOSING_SECONDS)
+                except asyncio.CancelledError:
+                    for task in tasks:
+                        if not task.done():
+                            _abandoned_call(task)
+                    raise
+                for task in pending:
+                    _abandoned_call(task)
+        message = Message(
+            id=tool_id,
+            conversation_id=run.conversation_id,
+            parent_id=calling.id,
+            role=Role.TOOL,
+            parts=tuple(parts),
+            created_at=self._clock.now(),
+            channel=Channel.WEB,
+        )
+        # The rule the tree holds a stored pair to, asked before the write:
+        # a conversation the tree refuses is one nobody can open.
+        check_answers_calls(message, calling)
+        await self._stored(stream, message)
+        return message
+
+    async def _called(
+        self,
+        by_prefix: Mapping[str, ToolServerConfig],
+        offered: frozenset[str],
+        call: ToolCallPart,
+    ) -> ToolResultPart:
+        """One call, through the port, as the part that answers it.
+
+        A name that is not one of the tools the run was handed (``offered``:
+        a name the model invented, or one of a tool left out of the list) is
+        the model's mistake and is answered with an error result, not a
+        failure, and no server is asked. The full name is split back into
+        the server's prefix and the tool's own name
+        (``core.split_tool_name``). A result with no text in it is stored as
+        ``NO_CONTENT``.
+        """
+        split = split_tool_name(call.name)
+        server = by_prefix.get(split[0]) if split is not None else None
+        if call.name not in offered or split is None or server is None:
+            return ToolResultPart(call.call_id, NO_SUCH_TOOL.format(name=call.name), is_error=True)
+        port = self._turn_servers
+        assert port is not None  # an agent with tools has one
+        result = await port.call_tool(server, split[1], call.arguments)
+        text = result.text if result.text.strip() else NO_CONTENT
+        return ToolResultPart(call.call_id, text, is_error=result.is_error)
 
     async def _taken_up(self, stream: _Stream) -> Run:
         """Record that a process has taken this run up, before anything else.
@@ -1068,9 +1426,12 @@ class Turns:
         """Store the answer and the event announcing it, in one call.
 
         The message is the platform's: this id, this parent, the provenance
-        the **run** recorded, the clock's time, and what this version keeps of
+        the **run** recorded, the clock's time, what this version keeps of
         what the engine produced (``domain.kept_parts`` -- reasoning dropped,
-        and one empty piece of text if that leaves nothing).
+        and one empty piece of text if that leaves nothing), and the vendor's
+        ``extras`` as the engine returned them -- stored unread, for the
+        adapter that reaches that vendor to replay
+        (``docs/specs/conversations.md``, "Reasoning").
 
         **What was published is what was stored.** An answer that streamed
         text and completed with different text would leave a stream that
@@ -1089,37 +1450,49 @@ class Turns:
             created_at=now,
             channel=Channel.WEB,
             provenance=run.provenance,
+            extras=completed.extras,
         )
         watched = said.published
         if watched and watched != message.text:
             raise InvalidValueError("an answer's text deltas are the text it completed with")
-        await stream.wrote(
-            MessageCompleted(run_id=run.id, message=message),
-            functools.partial(self._completing, message, message_to_data(message), now),
-        )
+        await self._stored(stream, message)
         return message
+
+    async def _stored(self, stream: _Stream, message: Message) -> None:
+        """Store a message and the event announcing it, in one call, at the next position."""
+        await stream.wrote(
+            MessageCompleted(run_id=stream.run.id, message=message),
+            functools.partial(
+                self._completing, message, message_to_data(message), message.created_at
+            ),
+        )
 
     def _completing(
         self, message: Message, document: Document, now: datetime, event: RunEvent
     ) -> Awaitable[None]:
-        """The store call that writes an answer and its announcement together."""
+        """The store call that writes a message and its announcement together."""
         return self._store.complete_message(
             message, document, event, run_event_to_data(event), now=now
         )
 
-    async def _history(self, run: Run) -> tuple[Message, ...]:
-        """The path down to the question this run answers, trimmed to fit.
+    async def _history(self, run: Run, message_id: uuid.UUID) -> tuple[Message, ...]:
+        """The whole path down to ``message_id``: the question this run answers, or
+        the tool message the round before it stored.
 
         Read from the store every turn, which is the whole of ADR 0002: the
         conversation record is the state, so a turn needs nothing an earlier
-        turn left in memory, and either engine can run it.
+        turn left in memory, and either engine can run it -- and a round
+        after a batch of tool results reads the history back exactly as a run
+        taken up again would. **Untrimmed**: what of it the model sees is the
+        adapter's to decide (ADR 0004), and the one thing kept above the port
+        is that the message being answered is in it.
         """
         documents = await self._store.messages_of(run.conversation_id)
         tree = tree_of_stored(
             [message_from_stored(document) for document in documents],
             conversation_id=run.conversation_id,
         )
-        return trim_history(tree.path_to(run.message_id), max_chars=self._history_chars)
+        return tree.path_to(message_id)
 
     def _engine(self, engine: Engine) -> Agent:
         """The engine of that name, as this deployment wired it."""
@@ -1515,6 +1888,34 @@ class Turns:
 
 
 @dataclass(frozen=True, slots=True)
+class _Round:
+    """How one engine turn ended: what it stored, and whether it asked for tools."""
+
+    answers: int
+    unfinished: bool
+    """Whether an answer was announced and never completed."""
+    calling: Message | None
+    """The last answer, when it asked for tools: the loop runs them next."""
+
+
+class _TooManyRounds(Exception):
+    """The turn went back to the model as many times as the bound allows."""
+
+
+class _NoAnswerAfterTools(Exception):
+    """A round after a batch of tool results produced no answer."""
+
+
+def _abandoned_call(task: asyncio.Task[None]) -> None:
+    """Give up on a tool call that has not let go, and say so once."""
+    _log.warning(
+        "a tool call did not release what it held within %ss; it was abandoned",
+        CLOSING_SECONDS,
+    )
+    task.add_done_callback(_forgotten)
+
+
+@dataclass(frozen=True, slots=True)
 class _Ending:
     """How a turn ended, before any of it is written down."""
 
@@ -1846,8 +2247,9 @@ class _StillWriting(Exception):
 def _forgotten(task: asyncio.Task[None]) -> None:
     """Read the result of a task nobody waited for, so the loop says nothing.
 
-    Only ever the engine's pump, and only when it was abandoned for taking too
-    long to let go: what it raises then is of no interest, and an unretrieved
+    The engine's pump, a tool call, or a listing, and only when it was
+    abandoned -- for taking too long to let go, or because another one failed
+    the run: what it raises then is of no interest, and an unretrieved
     exception would be printed by the loop on its way out.
     """
     if not task.cancelled():

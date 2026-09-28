@@ -4,10 +4,13 @@
 """What a running turn streams: two vocabularies, and the line between them.
 
 **What an engine yields** (``EngineEvent``): an answer is starting, more of
-its text, more of its thinking, the answer is complete and here are its parts.
-No ids, no times, no provenance, and nothing about a run -- an engine has none
-of those. It was given a history and a model; what it knows is what the model
-said (``docs/specs/agents.md``).
+its text, more of its thinking, a tool call announced with its id and name,
+more of its arguments, the call complete, the answer is complete and here are
+its parts, and -- when the answer asked for tools -- that the turn ends
+waiting on them. No ids of the platform's, no times, no provenance, and
+nothing about a run -- an engine has none of those. It was given a history, a
+model and the tools; what it knows is what the model said
+(``docs/specs/agents.md``). A tool call's id is the vendor's, carried as data.
 
 **What the application publishes** (``TurnEvent``, in a ``RunEvent`` envelope
 with its position): the same turn with the platform's own facts attached --
@@ -41,13 +44,16 @@ The order of a run's events is fixed, and
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
 
 from robinauts.domain.conversation import (
     MAX_PART_CHARS,
     Message,
     MessagePart,
     Role,
+    ToolCallPart,
     check_supported_role,
     checked_parts,
 )
@@ -58,7 +64,14 @@ from robinauts.domain.run import (
     MAX_RUN_ERROR_CHARS,
     RunState,
 )
-from robinauts.domain.values import checked_fragment, checked_text, checked_uuid, describe
+from robinauts.domain.tools import checked_call_id, checked_tool_name
+from robinauts.domain.values import (
+    checked_data,
+    checked_fragment,
+    checked_text,
+    checked_uuid,
+    describe,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,7 +204,104 @@ class RunEnded:
                 raise InvalidValueError(f"a run that ended {self.state.value} has no error")
 
 
-TurnEvent = RunStarted | MessageStarted | TextDelta | ReasoningDelta | MessageCompleted | RunEnded
+@dataclass(frozen=True, slots=True)
+class CallStarted:
+    """The answer being produced is making a tool call: its id, and the tool's full name.
+
+    Inside an assistant message, after its announcement and before its
+    completion, as the engine announced it (``ToolCallStarted``) and with the
+    platform's facts attached. The id is the vendor's, carried as data, and
+    is what the call's arguments, its completion and its result are matched
+    by -- on the wire, in the events and in the conversation
+    (``docs/specs/wire.md``).
+    """
+
+    run_id: uuid.UUID
+    message_id: uuid.UUID
+    call_id: str
+    name: str
+
+    def __post_init__(self) -> None:
+        checked_uuid(self.run_id, "a run's id")
+        checked_uuid(self.message_id, "a message's id")
+        checked_call_id(self.call_id, "a tool call's id")
+        checked_tool_name(self.name, "a tool's name")
+
+
+@dataclass(frozen=True, slots=True)
+class ArgumentsDelta:
+    """More of the arguments of the call being made, as the model writes them.
+
+    Storable text, like ``TextDelta``, and for the same reason; JSON once the
+    pieces are joined, which the completed message's part is the parsed form
+    of (``docs/specs/runs.md``, "what was published is what was stored").
+    """
+
+    run_id: uuid.UUID
+    message_id: uuid.UUID
+    call_id: str
+    text: str
+
+    def __post_init__(self) -> None:
+        checked_uuid(self.run_id, "a run's id")
+        checked_uuid(self.message_id, "a message's id")
+        checked_call_id(self.call_id, "a tool call's id")
+        checked_text(self.text, "a delta's text", MAX_PART_CHARS)
+
+
+@dataclass(frozen=True, slots=True)
+class CallCompleted:
+    """The call being made is whole; the part it became is in the message that completes."""
+
+    run_id: uuid.UUID
+    message_id: uuid.UUID
+    call_id: str
+
+    def __post_init__(self) -> None:
+        checked_uuid(self.run_id, "a run's id")
+        checked_uuid(self.message_id, "a message's id")
+        checked_call_id(self.call_id, "a tool call's id")
+
+
+@dataclass(frozen=True, slots=True)
+class ResultLanded:
+    """One result of the tool message being produced, as it landed.
+
+    Inside a **tool** message, announced under the answer that made the calls
+    and completed when the last result is in; each names the call it answers,
+    and the completed message holds exactly these, as ``ToolResultPart``s
+    (``docs/specs/runs.md``, "Tools"). Storable text, bounded as a part is.
+    """
+
+    run_id: uuid.UUID
+    message_id: uuid.UUID
+    call_id: str
+    text: str
+    is_error: bool = False
+
+    def __post_init__(self) -> None:
+        checked_uuid(self.run_id, "a run's id")
+        checked_uuid(self.message_id, "a message's id")
+        checked_call_id(self.call_id, "a tool call's id")
+        checked_text(self.text, "a result's text", MAX_PART_CHARS)
+        if not isinstance(self.is_error, bool):
+            raise InvalidValueError(
+                f"whether a result is an error is yes or no, not {describe(self.is_error)}"
+            )
+
+
+TurnEvent = (
+    RunStarted
+    | MessageStarted
+    | TextDelta
+    | ReasoningDelta
+    | CallStarted
+    | ArgumentsDelta
+    | CallCompleted
+    | ResultLanded
+    | MessageCompleted
+    | RunEnded
+)
 """Everything the application publishes for a running turn, as a closed set."""
 
 
@@ -245,16 +355,107 @@ class AnswerCompleted:
 
     A ``ReasoningPart`` here is allowed and **dropped** by the application,
     which stores no reasoning in this version: an engine translates what the
-    model said and is not asked to know what the platform keeps.
+    model said and is not asked to know what the platform keeps. A
+    ``ToolCallPart`` is kept: an answer that asks for tools is an answer
+    (``docs/specs/agents.md``, "Tools").
+
+    ``extras`` is what the vendor needs back with the history and the
+    platform never reads: the signed thinking blocks an answer that makes a
+    tool call carries, under the vendor's key
+    (``docs/specs/conversations.md``, "Reasoning"). Bounded like every
+    ``extras`` of the format, carried on to the message as it is, and empty
+    for an engine with nothing of the kind to say.
     """
 
     parts: tuple[MessagePart, ...]
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parts", checked_parts(self.parts))
+        object.__setattr__(self, "extras", checked_data(self.extras, "an answer's extras"))
+
+    @property
+    def tool_calls(self) -> tuple[ToolCallPart, ...]:
+        """The calls this answer asks for, in order; none for an answer that is done."""
+        return tuple(part for part in self.parts if isinstance(part, ToolCallPart))
 
 
-EngineEvent = AnswerStarted | AnswerTextDelta | AnswerReasoningDelta | AnswerCompleted
+@dataclass(frozen=True, slots=True)
+class ToolCallStarted:
+    """The model has begun asking for a tool: this call, this tool.
+
+    Inside an answer, as a text delta is, and one call at a time: the
+    vendors stream a call as one block, its arguments following. The id is
+    the vendor's (``robinauts.domain.tools``), and the name is the full name
+    the model was shown (``docs/specs/agents.md``, "Tools").
+    """
+
+    call_id: str
+    name: str
+
+    def __post_init__(self) -> None:
+        checked_call_id(self.call_id, "a tool call's id")
+        checked_tool_name(self.name, "a tool call's name")
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallArgumentsDelta:
+    """More of the arguments of the call being made, as the model writes them.
+
+    JSON text, in whatever pieces the provider sent -- a half of a character
+    included, as ``AnswerTextDelta`` allows -- and belonging to the one call
+    that is open. What the call completes with is checked against these
+    joined (``robinauts.core.check_engine_events``): the arguments streamed
+    are the arguments stored.
+    """
+
+    call_id: str
+    text: str
+
+    def __post_init__(self) -> None:
+        checked_call_id(self.call_id, "a tool call's id")
+        checked_fragment(self.text, "a delta's arguments", MAX_PART_CHARS)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallCompleted:
+    """The call is whole: the platform's own part for it.
+
+    The same record the completed answer will hold among its parts, so the
+    two cannot say different things about one call.
+    """
+
+    call: ToolCallPart
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.call, ToolCallPart):
+            raise InvalidValueError(
+                f"a completed call is a ToolCallPart, not {describe(self.call)}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class WaitingOnTools:
+    """The turn ends here, waiting on the calls of the answer just completed.
+
+    The other way a turn ends (``docs/specs/runs.md``, "Tools"): the engine
+    yields the calls and stops, and **never executes one**. It is the
+    application that runs them, appends their results as one tool message and
+    starts the next engine turn from the stored history. Nothing follows this
+    event in a turn.
+    """
+
+
+EngineEvent = (
+    AnswerStarted
+    | AnswerTextDelta
+    | AnswerReasoningDelta
+    | ToolCallStarted
+    | ToolCallArgumentsDelta
+    | ToolCallCompleted
+    | AnswerCompleted
+    | WaitingOnTools
+)
 """Everything an agent engine yields, as a closed set.
 
 Deliberately not the same records as the platform's: every one of those

@@ -75,6 +75,8 @@ import {
   ONE_AT_A_TIME_ANSWER,
   reduce,
   STOP_DID_NOT_ARRIVE,
+  storedParent,
+  turnStart,
   under,
   UNSENT,
   type ChatAction,
@@ -430,6 +432,7 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
         opened.ended_badly === null
           ? null
           : (ENDED_BADLY.get(opened.ended_badly.state) ?? null),
+      endedState: opened.ended_badly === null ? null : opened.ended_badly.state,
     });
     // Every complete message has just been loaded, so attaching at
     // `resume.after` replays exactly the one still being produced and none
@@ -644,14 +647,16 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // thread on the screen is cut after that parent and goes on from the new
     // one. The runtime names the parent, which in our chain is the message
     // before the edited one, or nothing for the first.
-    const parentId = message.parentId;
     // A parent the server has never been told about: the question being
     // edited is itself one this chat put on the screen a moment ago and the
     // conversation has not been read since. The backend would answer 404 for
     // it. The Thread hides the edit button while a run is going, so this is
     // reachable only by driving the runtime directly.
-    if (isUnsent(parentId)) return;
+    if (isUnsent(message.parentId)) return;
     if (busy()) return told(text, message.sourceId);
+    // The store's parent, which is the tool message under that answer when
+    // its calls were answered (`state.ts`): the runtime does not hold one.
+    const parentId = storedParent(state, message.parentId);
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
     // Refused for its model, or because the conversation is answering, the
     // edited text comes back in the edit box of the message it was of
@@ -676,10 +681,16 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
       return;
     }
     // A regeneration carries no new message: it answers the question that
-    // turn already had (`docs/specs/conversations.md`). The old answer comes
-    // off the screen with everything after it, which is what `parentId` --
-    // the question -- cuts the thread after.
-    dispatch({ kind: "again", after: parentId });
+    // turn already had, and **replaces the turn**
+    // (`docs/specs/conversations.md`). Everything the turn produced comes
+    // off the screen, so the cut is after its question -- which is not
+    // always `parentId`, the message before the regenerated one: a turn
+    // with tools in it has an answer that called before the answer after
+    // the results (`turnStart`).
+    dispatch({
+      kind: "again",
+      after: turnStart(state, regenerate) ?? parentId,
+    });
     await follow((signal) =>
       startTurn(conversationId, { regenerate }, { signal }),
     );
@@ -793,13 +804,49 @@ function stored(message: ChatMessage): ThreadMessage {
   return made;
 }
 
-/** One message of ours, as assistant-ui takes one. */
+/** One part of a message as assistant-ui takes one. */
+type PartLike = Exclude<ThreadMessageLike["content"], string>[number];
+
+/** A call as assistant-ui takes one, built up field by field. */
+type ToolCallLike = {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  argsText: string;
+  args?: NonNullable<Extract<PartLike, { type: "tool-call" }>["args"]>;
+  result?: string;
+  isError?: boolean;
+};
+
+/**
+ * One message of ours, as assistant-ui takes one.
+ *
+ * A call is the library's `tool-call` part: the id and the name as the
+ * platform stored them, the arguments as text and -- once whole -- as data,
+ * the result as the string the tool answered, and whether it failed. The
+ * vendored Thread draws it with its `ToolFallback`, which puts every one of
+ * those in a text node (`docs/specs/wire.md`: rendered as data).
+ */
 export function asThreadMessage(message: ChatMessage): ThreadMessageLike {
-  const content = message.parts.map((part) =>
-    part.kind === "reasoning"
-      ? ({ type: "reasoning", text: part.text } as const)
-      : ({ type: "text", text: part.text } as const),
-  );
+  const content = message.parts.map((part): PartLike => {
+    if (part.kind === "reasoning")
+      return { type: "reasoning", text: part.text };
+    if (part.kind === "tool-call") {
+      const call: ToolCallLike = {
+        type: "tool-call",
+        toolCallId: part.id,
+        toolName: part.name,
+        argsText: part.argsText,
+      };
+      // What the store or the model wrote, which is JSON by construction.
+      if (part.args !== undefined)
+        call.args = part.args as NonNullable<ToolCallLike["args"]>;
+      if (part.result !== undefined) call.result = part.result;
+      if (part.isError !== undefined) call.isError = part.isError;
+      return call;
+    }
+    return { type: "text", text: part.text };
+  });
   if (message.role === "user") {
     return {
       id: message.id,

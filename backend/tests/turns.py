@@ -33,11 +33,26 @@ import uuid
 from dataclasses import dataclass
 
 from conversations import AGENT, OTHER_MODEL, OWNER, agent_definition, at, offered
-from fakes import CountingIdSource, FakeClock, MemoryConversationStore, ScriptedAgent, Step
+from fakes import (
+    CountingIdSource,
+    FakeClock,
+    MemoryConversationStore,
+    MemoryToolServers,
+    ScriptedAgent,
+    Step,
+)
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
-from robinauts.application import Conversations, Turns, Watch
+from robinauts.application import DEFAULT_MAX_TOOL_ROUNDS, Conversations, Turns, Watch
 from robinauts.core import check_event_order, message_from_stored, run_event_from_stored
-from robinauts.domain import AgentDefinition, Message, ModelConfig, Run, RunEvent, User
+from robinauts.domain import (
+    AgentDefinition,
+    Message,
+    ModelConfig,
+    Run,
+    RunEvent,
+    ToolServerConfig,
+    User,
+)
 from robinauts.ports import ConversationStore
 
 NOW = at(100)
@@ -66,6 +81,7 @@ class Wiring:
     ids: CountingIdSource
     agent: ScriptedAgent
     definition: AgentDefinition
+    tools: MemoryToolServers
 
 
 def wired(
@@ -74,15 +90,19 @@ def wired(
     models: dict[str, ModelConfig] | None = None,
     store: MemoryConversationStore | None = None,
     signals: MemoryRunSignals | None = None,
-    history_chars: int = 100_000,
     turn_seconds: float = 30.0,
     wait_seconds: float = 30.0,
     quiet_seconds: float = 300.0,
+    tools: MemoryToolServers | None = None,
+    servers: dict[str, ToolServerConfig] | None = None,
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
 ) -> Wiring:
     """``Turns`` over the fakes, with an engine that runs that script.
 
     It offers ``MODEL``, which the agent starts on, and ``OTHER_MODEL`` to move
-    a conversation to, unless the test names its own ``models``.
+    a conversation to, unless the test names its own ``models``; and the tool
+    servers ``servers`` names, over the in-memory fake, which an agent whose
+    ``tools`` names them reaches.
     """
     kept = definition if definition is not None else agent_definition()
     store = store if store is not None else MemoryConversationStore()
@@ -91,6 +111,7 @@ def wired(
     agent = ScriptedAgent(*steps)
     executor = AsyncioRunExecutor()
     signals = signals if signals is not None else MemoryRunSignals()
+    tools = tools if tools is not None else MemoryToolServers()
     return Wiring(
         turns=Turns(
             store=store,
@@ -101,8 +122,10 @@ def wired(
             engines={kept.engine: agent},
             executor=executor,
             signals=signals,
-            history_chars=history_chars,
             turn_seconds=turn_seconds,
+            tool_servers=tools,
+            servers=servers if servers is not None else {},
+            max_tool_rounds=max_tool_rounds,
         ),
         conversations=Conversations(store=store, clock=clock),
         watch=Watch(
@@ -118,6 +141,7 @@ def wired(
         ids=ids,
         agent=agent,
         definition=kept,
+        tools=tools,
     )
 
 

@@ -24,6 +24,16 @@
  * edit or a regeneration cuts the list after the edit point and goes on from
  * there: what was after it is off the screen for good, kept only in the
  * store, and the next read says the same.
+ *
+ * **A tool call is part of the answer that made it, and its result is drawn
+ * on the call.** The store holds the results of one batch as a tool message
+ * under the answer (`docs/specs/conversations.md`); here that message is
+ * folded into the answer -- it is no bubble of its own -- and the answer
+ * remembers its id, because it is what the next message hangs under
+ * (`resultsId`). On the wire the call arrives as AG-UI's tool events and the
+ * result as `TOOL_CALL_RESULT` (`docs/specs/wire.md`); everything in either
+ * is text the model or a tool wrote, held here as data for the renderer to
+ * draw as text.
  */
 import type { Message } from "../../conversation/conversation";
 import type { AguiEvent } from "./agui/events";
@@ -45,7 +55,7 @@ export function isUnsent(id: string | null): boolean {
 }
 
 /** A piece of what a message says: what it said, or what it thought. */
-export interface ChatPart {
+export interface ChatTextPart {
   kind: "text" | "reasoning";
   /**
    * The id of a stretch of thinking, which is how the event that ends it
@@ -55,6 +65,32 @@ export interface ChatPart {
   id?: string;
   text: string;
 }
+
+/**
+ * A call the answer made, and what came back.
+ *
+ * Everything in it is text the model or a tool wrote -- the name the model
+ * chose, the arguments it streamed, the tool's answer -- and it is rendered
+ * as data, never as markup (`docs/specs/wire.md`).
+ */
+export interface ChatToolCall {
+  kind: "tool-call";
+  /** The call's id: the vendor's, carried as data, and what its result names. */
+  id: string;
+  /** The tool's full name, `<server>__<tool>`. */
+  name: string;
+  /** The arguments as the model wrote them, JSON text, growing as they stream. */
+  argsText: string;
+  /** The arguments as data: read from the store, or parsed once the call is whole. */
+  args?: Record<string, unknown>;
+  /** What the tool answered, once it has. */
+  result?: string;
+  /** Whether the tool said it failed. */
+  isError?: boolean;
+}
+
+/** One part of a message, of the three kinds the chat draws. */
+export type ChatPart = ChatTextPart | ChatToolCall;
 
 /** How a message stands. */
 export type ChatMessageState = "stored" | "running" | "cancelled" | "failed";
@@ -67,6 +103,16 @@ export interface ChatMessage {
   state: ChatMessageState;
   /** The sentence to show on a message whose run failed. */
   detail?: string;
+  /**
+   * The tool message that answered this answer's calls, if one has.
+   *
+   * Not a message of the thread on the screen -- its results are drawn on
+   * the calls that made them -- but one of the conversation's, and the one a
+   * message after it hangs under (`docs/specs/conversations.md`). So it is
+   * what a new question or an edit names as its parent (`under`,
+   * `storedParent`), and where a cut after this answer is made (`upTo`).
+   */
+  resultsId?: string;
 }
 
 /** The whole of it. */
@@ -229,7 +275,49 @@ export function saidFor(code: string): string {
 export function under(state: ChatState): string | null {
   const tail = state.messages.at(-1);
   if (tail === undefined) return null;
-  return tail.role === "user" ? (state.messages.at(-2)?.id ?? null) : tail.id;
+  const parent = tail.role === "user" ? state.messages.at(-2) : tail;
+  return parent === undefined ? null : storedEnd(parent);
+}
+
+/**
+ * What a new message under `parentId` hangs under in the store.
+ *
+ * The runtime names the message before it on the screen; where that is an
+ * answer whose calls a tool message answered, the store's parent is that
+ * tool message (`ChatMessage.resultsId`), and an edit or a question sent
+ * under the answer itself would leave the results off the path the model
+ * sees.
+ */
+export function storedParent(
+  state: ChatState,
+  parentId: string | null,
+): string | null {
+  if (parentId === null) return null;
+  const parent = find(state, parentId);
+  return parent === null ? parentId : storedEnd(parent);
+}
+
+/** The last message of the store's at that one: its tool message, or itself. */
+function storedEnd(message: ChatMessage): string {
+  return message.resultsId ?? message.id;
+}
+
+/**
+ * The question of the turn that message is part of, or `null` for none.
+ *
+ * **A regeneration replaces the turn** (`docs/specs/conversations.md`), and
+ * a turn with tools in it is several answers -- the one that called, the
+ * one after the results -- so the message before the regenerated one on the
+ * screen is not always the question. The cut is made at the question: the
+ * nearest one at or before the message.
+ */
+export function turnStart(state: ChatState, messageId: string): string | null {
+  const at = state.messages.findIndex((message) => message.id === messageId);
+  for (let back = at; back >= 0; back -= 1) {
+    const message = state.messages[back];
+    if (message?.role === "user") return message.id;
+  }
+  return null;
 }
 
 /** Everything that can change the chat. */
@@ -246,6 +334,11 @@ export type ChatAction =
       runId: string | null;
       /** How the last run ended, when it ended badly. */
       endedBadly: string | null;
+      /**
+       * The state it ended in, when it ended badly: what an answer whose
+       * calls were never answered is shown as (`folded`).
+       */
+      endedState?: string | null;
     }
   /** It could not be read. */
   | { kind: "unopened"; detail: string; missing: boolean }
@@ -299,9 +392,13 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
       // object on the read that ends a turn would convert a whole
       // conversation again -- and move every `createdAt` -- over one answer.
       const before = new Map(state.messages.map((each) => [each.id, each]));
-      const messages = action.messages.map((message) => {
-        const fresh = held(message);
-        const already = before.get(message.id);
+      const messages = folded(
+        action.messages,
+        action.runId,
+        action.endedState ?? null,
+        action.endedBadly,
+      ).map((fresh) => {
+        const already = before.get(fresh.id);
         return already !== undefined && unchanged(already, fresh)
           ? already
           : fresh;
@@ -398,10 +495,17 @@ export function reduce(state: ChatState, action: ChatAction): ChatState {
   }
 }
 
-/** The thread up to and including `after`; nothing when that is `null`. */
+/**
+ * The thread up to and including `after`; nothing when that is `null`.
+ *
+ * `after` may be a tool message's id, which is on the screen only as the
+ * answer that holds it (`resultsId`): the cut is after that answer.
+ */
 function upTo(state: ChatState, after: string | null): ChatMessage[] {
   if (after === null) return [];
-  const at = state.messages.findIndex((message) => message.id === after);
+  const at = state.messages.findIndex(
+    (message) => message.id === after || message.resultsId === after,
+  );
   return at === -1 ? state.messages : state.messages.slice(0, at + 1);
 }
 
@@ -469,11 +573,16 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
       // Not held: the no-op for an end a re-attach derived for a message this
       // client never had open.
       if (ending === null || ending.state !== "running") return state;
+      // **An answer that asked for tools is not over when its text is.** The
+      // backend completes it before it runs the calls, and their results
+      // land on it afterwards: it stays running until the last one has,
+      // so that the calls are drawn as in progress and a run that ends
+      // before that marks them as it marks any answer left open.
       return {
         ...state,
         messages: state.messages.map((message) =>
           message.id === event.messageId
-            ? { ...message, state: "stored" }
+            ? { ...message, state: unanswered(message) ? "running" : "stored" }
             : message,
         ),
         writing: null,
@@ -532,6 +641,88 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
         ? { ...state, thinking: null }
         : state;
 
+    case "TOOL_CALL_START": {
+      // The answer the call is part of: the one the event names, else the
+      // one being written. Opened if this client never saw its start, as
+      // content is; **already held: nothing to do**, as a message start
+      // already held is -- which is the no-op a re-attach on a call relies
+      // on (`docs/specs/wire.md`).
+      const parent = event.parentMessageId ?? state.writing;
+      if (parent === null) return state;
+      const holder = find(state, parent);
+      if (holder === null) {
+        return applied(applied(state, opening(parent)), event);
+      }
+      if (
+        holder.state !== "running" ||
+        callOf(holder, event.toolCallId) !== null
+      ) {
+        return state;
+      }
+      return withMessage(state, parent, (message) => ({
+        ...message,
+        parts: [
+          ...message.parts,
+          {
+            kind: "tool-call",
+            id: event.toolCallId,
+            name: event.toolCallName,
+            argsText: "",
+          },
+        ],
+      }));
+    }
+
+    case "TOOL_CALL_ARGS": {
+      // For a call this client holds, in an answer still being written. A
+      // delta for a call never announced is ignored -- there is no name to
+      // open one under, and a re-attach always begins at or after the
+      // call's start -- and one for an answer that is complete is a stream
+      // repeating itself.
+      const holder = holding(state, event.toolCallId);
+      if (holder === null || holder.state !== "running") return state;
+      return withCall(state, holder.id, event.toolCallId, (call) => ({
+        ...call,
+        argsText: call.argsText + event.delta,
+      }));
+    }
+
+    case "TOOL_CALL_END": {
+      // The arguments are whole: what they parse to is what the tool is
+      // called with, and what the renderer is handed as data. Nothing else
+      // changes, so an end for a call already ended changes nothing.
+      const holder = holding(state, event.toolCallId);
+      if (holder === null) return state;
+      return withCall(state, holder.id, event.toolCallId, (call) => {
+        if (call.args !== undefined) return call;
+        const args = parsedArguments(call.argsText);
+        return args === undefined ? call : { ...call, args };
+      });
+    }
+
+    case "TOOL_CALL_RESULT": {
+      // Drawn on the call that made it, wherever that is: the answer is
+      // complete by the time a result lands, so it is not the message being
+      // written. One result per call (`docs/specs/wire.md`), so a result for
+      // a call that has one is a repeat. The tool message it is part of is
+      // what the next message hangs under (`resultsId`).
+      const holder = holding(state, event.toolCallId);
+      if (holder === null) return state;
+      if (callOf(holder, event.toolCallId)?.result !== undefined) return state;
+      return withMessage(state, holder.id, (message) => {
+        const parts = message.parts.map((part) =>
+          part.kind === "tool-call" && part.id === event.toolCallId
+            ? { ...part, result: event.content, isError: event.isError }
+            : part,
+        );
+        // The last result of the batch is what ends the answer's running.
+        const answered = { ...message, resultsId: event.messageId, parts };
+        return message.state === "running" && !unanswered(answered)
+          ? { ...answered, state: "stored" }
+          : answered;
+      });
+    }
+
     case "RUN_FINISHED": {
       // **The terminal event of a run this client has already seen end.**
       // Reachable only from a re-attach at or past the last position: a
@@ -573,6 +764,100 @@ function find(state: ChatState, id: string): ChatMessage | null {
   return state.messages.find((message) => message.id === id) ?? null;
 }
 
+/** Whether that message made a call nothing has answered yet. */
+function unanswered(message: ChatMessage): boolean {
+  return message.parts.some(
+    (part) => part.kind === "tool-call" && part.result === undefined,
+  );
+}
+
+/** That call of that message, or `null`. */
+function callOf(message: ChatMessage, callId: string): ChatToolCall | null {
+  return (
+    message.parts.find(
+      (part): part is ChatToolCall =>
+        part.kind === "tool-call" && part.id === callId,
+    ) ?? null
+  );
+}
+
+/**
+ * The message that holds that call, or `null`.
+ *
+ * From the end, since a call belongs to the latest answer in every case
+ * this build has; the ids are the vendor's and unique within a run.
+ */
+function holding(state: ChatState, callId: string): ChatMessage | null {
+  for (let at = state.messages.length - 1; at >= 0; at -= 1) {
+    const message = state.messages[at];
+    if (message !== undefined && callOf(message, callId) !== null) {
+      return message;
+    }
+  }
+  return null;
+}
+
+/**
+ * That message changed, and every other as it was.
+ *
+ * **The same state when nothing changed**: a change that hands the message
+ * back as it was is a no-op, and a no-op is the same object, which is what
+ * a re-attach's repeated event must leave behind (`docs/specs/wire.md`).
+ */
+function withMessage(
+  state: ChatState,
+  messageId: string,
+  change: (message: ChatMessage) => ChatMessage,
+): ChatState {
+  let touched = false;
+  const messages = state.messages.map((message) => {
+    if (message.id !== messageId) return message;
+    const changed = change(message);
+    touched = touched || changed !== message;
+    return changed;
+  });
+  return touched ? { ...state, messages } : state;
+}
+
+/** That call of that message changed, and everything else as it was. */
+function withCall(
+  state: ChatState,
+  messageId: string,
+  callId: string,
+  change: (call: ChatToolCall) => ChatToolCall,
+): ChatState {
+  return withMessage(state, messageId, (message) => {
+    let touched = false;
+    const parts = message.parts.map((part) => {
+      if (part.kind !== "tool-call" || part.id !== callId) return part;
+      const changed = change(part);
+      touched = touched || changed !== part;
+      return changed;
+    });
+    return touched ? { ...message, parts } : message;
+  });
+}
+
+/**
+ * The arguments a call streamed, as data; `undefined` when they are not an
+ * object -- which the backend never stores, and which the renderer is then
+ * left to read from the text.
+ */
+function parsedArguments(
+  argsText: string,
+): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(argsText);
+    return typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * `piece` added to that message: onto its last part, or as a new one.
  *
@@ -584,24 +869,26 @@ function find(state: ChatState, id: string): ChatMessage | null {
 function appended(
   state: ChatState,
   messageId: string,
-  piece: ChatPart,
+  piece: ChatTextPart,
 ): ChatState {
-  return {
-    ...state,
-    messages: state.messages.map((message) => {
-      if (message.id !== messageId) return message;
-      const last = message.parts[message.parts.length - 1];
-      const same =
-        last !== undefined && last.kind === piece.kind && last.id === piece.id;
-      const parts = same
-        ? [
-            ...message.parts.slice(0, -1),
-            { ...last, text: last.text + piece.text },
-          ]
-        : [...message.parts, piece];
-      return { ...message, parts };
-    }),
-  };
+  return withMessage(state, messageId, (message) => {
+    const last = message.parts[message.parts.length - 1];
+    if (
+      last !== undefined &&
+      last.kind !== "tool-call" &&
+      last.kind === piece.kind &&
+      last.id === piece.id
+    ) {
+      return {
+        ...message,
+        parts: [
+          ...message.parts.slice(0, -1),
+          { ...last, text: last.text + piece.text },
+        ],
+      };
+    }
+    return { ...message, parts: [...message.parts, piece] };
+  });
 }
 
 /** The run is over: nothing is being written, and the answer stands as it is. */
@@ -643,11 +930,23 @@ function unchanged(already: ChatMessage, fresh: ChatMessage): boolean {
     already.role === fresh.role &&
     already.state === fresh.state &&
     already.detail === fresh.detail &&
+    already.resultsId === fresh.resultsId &&
     already.parts.length === fresh.parts.length &&
     already.parts.every((part, at) => {
       const other = fresh.parts[at];
+      if (other === undefined) return false;
+      if (part.kind === "tool-call" || other.kind === "tool-call") {
+        return (
+          part.kind === "tool-call" &&
+          other.kind === "tool-call" &&
+          part.id === other.id &&
+          part.name === other.name &&
+          sameArguments(part, other) &&
+          part.result === other.result &&
+          part.isError === other.isError
+        );
+      }
       return (
-        other !== undefined &&
         part.kind === other.kind &&
         part.id === other.id &&
         part.text === other.text
@@ -656,16 +955,139 @@ function unchanged(already: ChatMessage, fresh: ChatMessage): boolean {
   );
 }
 
-/** One message of the API's, as the chat holds one. */
+/**
+ * Whether two calls have the same arguments: as data where both sides have
+ * them, which the store's spelling of the JSON and the model's need not
+ * share, and as the text otherwise.
+ */
+function sameArguments(one: ChatToolCall, other: ChatToolCall): boolean {
+  return one.args !== undefined && other.args !== undefined
+    ? sameData(one.args, other.args)
+    : one.argsText === other.argsText;
+}
+
+/** Whether two JSON values are the same value. */
+function sameData(one: unknown, other: unknown): boolean {
+  if (one === other) return true;
+  if (Array.isArray(one) || Array.isArray(other)) {
+    return (
+      Array.isArray(one) &&
+      Array.isArray(other) &&
+      one.length === other.length &&
+      one.every((item, at) => sameData(item, other[at]))
+    );
+  }
+  if (
+    typeof one !== "object" ||
+    typeof other !== "object" ||
+    one === null ||
+    other === null
+  ) {
+    return false;
+  }
+  const left = one as Record<string, unknown>;
+  const right = other as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every(
+      (key) => Object.hasOwn(right, key) && sameData(left[key], right[key]),
+    )
+  );
+}
+
+/**
+ * The thread as the chat holds it: every tool message folded into the
+ * answer before it.
+ *
+ * A tool message is the store's (`docs/specs/conversations.md`) and no
+ * bubble on the screen: its results are drawn on the calls that made them,
+ * and the answer remembers it as what the next message hangs under
+ * (`resultsId`). One that follows anything but an answer -- which the
+ * format does not allow -- is dropped rather than drawn under it.
+ *
+ * **An answer whose calls were never answered** is the store's record of a
+ * batch that did not finish: still running when it is the last message and
+ * a run is in flight (its results are what the stream will bring), and
+ * otherwise over the way the run was -- failed, with the sentence that says
+ * so, or cancelled -- so that its calls are drawn as what they are.
+ */
+function folded(
+  messages: readonly Message[],
+  runId: string | null,
+  endedState: string | null,
+  endedBadly: string | null,
+): ChatMessage[] {
+  const thread: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== "tool") {
+      thread.push(held(message));
+      continue;
+    }
+    const answer = thread.at(-1);
+    if (answer === undefined || answer.role !== "assistant") continue;
+    thread[thread.length - 1] = answered(answer, message);
+  }
+  return thread.map((message, at) => {
+    if (message.role !== "assistant" || !unanswered(message)) return message;
+    if (at === thread.length - 1 && runId !== null) {
+      return { ...message, state: "running" };
+    }
+    const failed =
+      at === thread.length - 1 &&
+      (endedState === "failed" || endedState === "interrupted");
+    return failed
+      ? {
+          ...message,
+          state: "failed",
+          ...(endedBadly === null ? {} : { detail: endedBadly }),
+        }
+      : { ...message, state: "cancelled" };
+  });
+}
+
+/** That answer with the results of that tool message on its calls. */
+function answered(answer: ChatMessage, results: Message): ChatMessage {
+  const found = new Map(
+    results.parts.flatMap((part) =>
+      part.kind === "tool_result" ? [[part.call_id, part] as const] : [],
+    ),
+  );
+  return {
+    ...answer,
+    resultsId: results.id,
+    parts: answer.parts.map((part) => {
+      const result = part.kind === "tool-call" ? found.get(part.id) : undefined;
+      return result === undefined
+        ? part
+        : { ...part, result: result.text, isError: result.is_error };
+    }),
+  };
+}
+
+/** One message of the API's, as the chat holds one; never a tool message. */
 function held(message: Message): ChatMessage {
   return {
     id: message.id,
-    role: message.role,
+    role: message.role === "user" ? "user" : "assistant",
     // Reasoning is shown and never stored (`docs/specs/conversations.md`), so
-    // a message that came out of the store has text in it and nothing else.
-    parts: message.parts
-      .filter((part) => part.kind === "text")
-      .map((part) => ({ kind: "text" as const, text: part.text })),
+    // a message that came out of the store has text and calls in it and
+    // nothing else; a result is folded into its call (`answered`).
+    parts: message.parts.flatMap((part): ChatPart[] => {
+      if (part.kind === "text") return [{ kind: "text", text: part.text }];
+      if (part.kind === "tool_call") {
+        return [
+          {
+            kind: "tool-call",
+            id: part.call_id,
+            name: part.name,
+            argsText: JSON.stringify(part.arguments),
+            args: part.arguments,
+          },
+        ];
+      }
+      return [];
+    }),
     state: "stored",
   };
 }

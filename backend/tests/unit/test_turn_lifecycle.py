@@ -27,10 +27,28 @@ from typing import Any
 import pytest
 
 from aio import asyncio_test
+from contracts.tool_servers import ECHO, SEARCH
 from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition, at, offered
-from fakes import CountingIdSource, FakeClock, Gate, MemoryConversationStore, Raise, says
+from fakes import (
+    CountingIdSource,
+    FakeClock,
+    Gate,
+    MemoryConversationStore,
+    MemoryToolServers,
+    Raise,
+    calls,
+    says,
+)
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
-from robinauts.application import Conversations, Turns, Watch
+from robinauts.application import (
+    NO_ANSWER_AFTER_TOOLS,
+    NO_CONTENT,
+    NO_SUCH_TOOL,
+    TOO_MANY_ROUNDS,
+    Conversations,
+    Turns,
+    Watch,
+)
 from robinauts.application.turns import _Pump
 from robinauts.core import (
     check_event_order,
@@ -47,12 +65,14 @@ from robinauts.domain import (
     AnswerStarted,
     AnswerTextDelta,
     IllegalTransitionError,
+    InvalidValueError,
     Message,
     MessageCompleted,
     MessageStarted,
     PositionTakenError,
     ReasoningDelta,
     ReasoningPart,
+    ResultLanded,
     Role,
     Run,
     RunAlreadyActiveError,
@@ -62,7 +82,18 @@ from robinauts.domain import (
     RunState,
     TextDelta,
     TextPart,
+    ToolCallArgumentsDelta,
+    ToolCallCompleted,
+    ToolCallPart,
+    ToolCallStarted,
+    ToolDefinition,
+    ToolResult,
+    ToolResultPart,
+    ToolServerConfig,
+    ToolServerError,
+    WaitingOnTools,
     text_parts,
+    unanswered_calls,
 )
 from robinauts.ports import MAX_SWEPT, Agent
 from turns import (
@@ -689,8 +720,11 @@ async def test_a_run_begun_before_the_model_was_changed_runs_on_the_one_it_began
 
 
 @asyncio_test
-async def test_a_history_longer_than_the_limit_drops_whole_turns() -> None:
-    wiring = wired(*says("A" * 20), history_chars=50)
+async def test_the_engine_is_handed_the_whole_path_and_no_tools_when_the_agent_has_none() -> None:
+    """Nothing is trimmed above the port (ADR 0004): the second turn's engine
+    sees the first question, its answer and the new question, in order. And
+    an agent that names no server is handed no tools, and no server is asked."""
+    wiring = wired(*says("A" * 20))
     first = await begun(wiring, "Q" * 20)
     await wiring.turns.execute(first)
     second = await wiring.turns.start(
@@ -702,9 +736,589 @@ async def test_a_history_longer_than_the_limit_drops_whole_turns() -> None:
 
     await wiring.turns.execute(second.run)
 
-    # Whole turns from the front, never half of one: what is sent still
-    # begins with a question.
-    assert [message.text for message in wiring.agent.history] == ["R" * 20]
+    assert [message.text for message in wiring.agent.history] == ["Q" * 20, "A" * 20, "R" * 20]
+    assert [message.role for message in wiring.agent.history] == [
+        Role.USER,
+        Role.ASSISTANT,
+        Role.USER,
+    ]
+    assert wiring.agent.asked[-1].tools == ()
+    assert wiring.tools.listings == []
+
+
+# --- the tool loop -----------------------------------------------------------------
+
+
+GITHUB = ToolServerConfig(
+    id="github", url="https://github.example.test/mcp/", secret_env="ROBINAUTS_GITHUB_TOKEN"
+)
+"""The one server the tooled agent names; its prefix is its id."""
+
+SEARCH_CALL = ("toolu_01", "github__search_repositories", {"q": "robinauts"})
+"""A call the model makes, as ``calls`` wants it: the full name, the arguments."""
+
+FOUND = ToolResult("found 3")
+
+
+def tooled(*steps: Any, **changes: Any) -> Wiring:
+    """A wiring whose agent has the ``github`` server, listing ``SEARCH`` and ``ECHO``.
+
+    ``search_repositories`` answers ``FOUND`` unless the test says otherwise;
+    ``echo`` has no answer scripted, which the fake answers as the server
+    having no such tool.
+    """
+    tools = MemoryToolServers()
+    tools.serving(GITHUB.id, SEARCH, ECHO)
+    tools.answering(GITHUB.id, SEARCH.name, FOUND)
+    return wired(
+        *steps,
+        definition=agent_definition(tools=(GITHUB.id,)),
+        servers={GITHUB.id: GITHUB},
+        tools=tools,
+        **changes,
+    )
+
+
+def call_ids(events: list[RunEvent]) -> list[str]:
+    """The call ids of the results that landed, in the order they landed."""
+    return [event.event.call_id for event in events if isinstance(event.event, ResultLanded)]
+
+
+@asyncio_test
+async def test_a_tool_round_stores_the_calling_answer_the_tool_message_and_the_answer_after() -> (
+    None
+):
+    """One round, end to end (``docs/specs/runs.md``, "Tools"): the answer that
+    calls, with its call inside it; the one tool message of the batch, under
+    it; the answer after, under that. Every event published, and the stream
+    read back whole."""
+    wiring = tooled(*calls(SEARCH_CALL, text="Let me look."))
+    wiring.agent.then(*says("Found three."))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    assert kinds(events) == [
+        "RunStarted",
+        "MessageStarted",
+        "TextDelta",
+        "CallStarted",
+        "ArgumentsDelta",
+        "ArgumentsDelta",
+        "CallCompleted",
+        "MessageCompleted",
+        "MessageStarted",
+        "ResultLanded",
+        "MessageCompleted",
+        "MessageStarted",
+        "TextDelta",
+        "MessageCompleted",
+        "RunEnded",
+    ]
+    question, calling, results, done = await stored_messages(wiring.store, run.conversation_id)
+    assert (calling.role, results.role, done.role) == (Role.ASSISTANT, Role.TOOL, Role.ASSISTANT)
+    assert calling.parent_id == question.id
+    assert results.parent_id == calling.id
+    assert done.parent_id == results.id
+    assert calling.text == "Let me look."
+    assert calling.tool_calls == (ToolCallPart(*SEARCH_CALL),)
+    assert results.tool_results == (ToolResultPart("toolu_01", "found 3"),)
+    assert results.provenance is None
+    assert done.text == "Found three."
+    # What the run said of the result is what was stored of it.
+    landed = [event.event for event in events if isinstance(event.event, ResultLanded)]
+    assert landed == [
+        ResultLanded(run_id=run.id, message_id=results.id, call_id="toolu_01", text="found 3")
+    ]
+    # The announced tool message hangs under the answer, and says its role.
+    announced = [event.event for event in events if isinstance(event.event, MessageStarted)]
+    assert announced[1] == MessageStarted(
+        run_id=run.id, message_id=results.id, parent_id=calling.id, role=Role.TOOL
+    )
+    # The server was asked the tool's own name, with the arguments the model wrote.
+    assert wiring.tools.calls == [(GITHUB.id, SEARCH.name, {"q": "robinauts"})]
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FINISHED and ended.error is None
+
+
+@asyncio_test
+async def test_the_tools_are_listed_once_per_run_and_the_second_round_reads_the_history_back() -> (
+    None
+):
+    """Decision 5: one list, fetched before the engine is called and held for
+    the run. And the round after the results runs from the stored history --
+    the tool message included -- exactly as a run taken up again would."""
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.agent.then(*says("Found three."))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    assert wiring.tools.listings == [GITHUB.id]
+    first, second = wiring.agent.asked
+    assert first.tools == second.tools
+    assert [tool.name for tool in first.tools] == [
+        "github__echo",
+        "github__search_repositories",
+    ]
+    assert first.tools[1] == ToolDefinition(
+        name="github__search_repositories",
+        description=SEARCH.description,
+        input_schema=SEARCH.input_schema,
+        annotations=SEARCH.annotations,
+    )
+    assert [message.role for message in first.history] == [Role.USER]
+    assert [message.role for message in second.history] == [Role.USER, Role.ASSISTANT, Role.TOOL]
+    assert second.history[2].tool_results == (ToolResultPart("toolu_01", "found 3"),)
+
+
+@asyncio_test
+async def test_the_next_turn_is_handed_the_tool_round_in_its_path() -> None:
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.agent.then(*says("Found three."))
+    first = await begun(wiring)
+    await wiring.turns.execute(first)
+    wiring.agent.steps = says("Three, as I said.")
+    second = await wiring.turns.start(
+        AUTHOR,
+        conversation_id=first.conversation_id,
+        text="How many?",
+        parent_id=(await stored_messages(wiring.store, first.conversation_id))[-1].id,
+    )
+
+    await wiring.turns.execute(second.run)
+
+    assert [message.role for message in wiring.agent.history] == [
+        Role.USER,
+        Role.ASSISTANT,
+        Role.TOOL,
+        Role.ASSISTANT,
+        Role.USER,
+    ]
+    assert (await wiring.store.run_by_id(second.run.id)).state is RunState.FINISHED
+
+
+@asyncio_test
+async def test_a_question_may_follow_the_tool_message_a_stopped_turn_ended_on() -> None:
+    """A turn stopped after its results were in leaves the tool message as
+    the leaf; the next question hangs under it, so that the results stay on
+    the path the model sees (``docs/specs/conversations.md``) -- which is
+    where the chat sends it."""
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.agent.then(*says("Found three."))
+    first = await begun(wiring)
+    await wiring.turns.execute(first)
+    _, _, results, _ = await stored_messages(wiring.store, first.conversation_id)
+    wiring.agent.steps = says("Three, I said.")
+    second = await wiring.turns.start(
+        AUTHOR, conversation_id=first.conversation_id, text="How many?", parent_id=results.id
+    )
+
+    await wiring.turns.execute(second.run)
+
+    assert [message.role for message in wiring.agent.history] == [
+        Role.USER,
+        Role.ASSISTANT,
+        Role.TOOL,
+        Role.USER,
+    ]
+    assert (await wiring.store.run_by_id(second.run.id)).state is RunState.FINISHED
+
+
+def test_two_servers_under_one_prefix_are_refused_when_handed_in() -> None:
+    twin = ToolServerConfig(
+        id="gh", url="https://gh.example.test/mcp/", secret_env="ROBINAUTS_GH", prefix="github"
+    )
+    with pytest.raises(InvalidValueError, match="share the prefix 'github'"):
+        wired(definition=agent_definition(), servers={GITHUB.id: GITHUB, "gh": twin})
+
+
+@asyncio_test
+async def test_results_are_published_as_they_land_and_the_batch_completes_with_the_last() -> None:
+    """Decision 7: each result is published the moment it lands, and the one
+    tool message completes when the last is in -- so a watcher sees the fast
+    tool's result while the slow one is still running."""
+    slow = asyncio.Event()
+    wiring = tooled(*calls(SEARCH_CALL, ("toolu_02", "github__echo", {})))
+    wiring.tools.answering(GITHUB.id, ECHO.name, slow)
+    wiring.agent.then(*says("Both done."))
+    run = await begun(wiring)
+    submitted(wiring, run)
+    while not call_ids(await stored_events(wiring.store, run.id)):
+        await asyncio.sleep(0)
+
+    # The fast one has landed and is stored; the batch is still open.
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run, ended=False)
+    assert call_ids(events) == ["toolu_01"]
+    assert kinds(events).count("MessageCompleted") == 1
+    assert wiring.tools.open_calls == 1
+    assert (await wiring.store.run_by_id(run.id)).state is RunState.RUNNING
+
+    slow.set()
+    await settled(wiring, run)
+
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    assert call_ids(events) == ["toolu_01", "toolu_02"]
+    _, _, results, _ = await stored_messages(wiring.store, run.conversation_id)
+    assert results.tool_results == (
+        ToolResultPart("toolu_01", "found 3"),
+        ToolResultPart("toolu_02", "waited"),
+    )
+    assert (await wiring.store.run_by_id(run.id)).state is RunState.FINISHED
+
+
+@asyncio_test
+async def test_a_tool_that_fails_is_an_error_result_the_model_is_told() -> None:
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.tools.answering(GITHUB.id, SEARCH.name, ToolResult("no such repository", is_error=True))
+    wiring.agent.then(*says("There is no such repository."))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    landed = [event.event for event in events if isinstance(event.event, ResultLanded)]
+    assert landed == [
+        ResultLanded(
+            run_id=run.id,
+            message_id=landed[0].message_id,
+            call_id="toolu_01",
+            text="no such repository",
+            is_error=True,
+        )
+    ]
+    _, _, results, _ = await stored_messages(wiring.store, run.conversation_id)
+    assert results.tool_results == (
+        ToolResultPart("toolu_01", "no such repository", is_error=True),
+    )
+    assert [message.role for message in wiring.agent.asked[1].history][-1] is Role.TOOL
+    assert (await wiring.store.run_by_id(run.id)).state is RunState.FINISHED
+
+
+@asyncio_test
+async def test_a_call_for_a_tool_the_run_was_not_handed_is_an_error_result_too() -> None:
+    """The model's mistake, not the platform's failure: a name with no
+    server's prefix, or another server's, is answered in words, and no server
+    is asked anything."""
+    wiring = tooled(
+        *calls(("toolu_01", "nonsense", {}), ("toolu_02", "jira__find", {"key": "R-1"}))
+    )
+    wiring.agent.then(*says("I cannot do that."))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    readable(await stored_events(wiring.store, run.id), run)
+    _, _, results, _ = await stored_messages(wiring.store, run.conversation_id)
+    assert set(results.tool_results) == {
+        ToolResultPart("toolu_01", NO_SUCH_TOOL.format(name="nonsense"), is_error=True),
+        ToolResultPart("toolu_02", NO_SUCH_TOOL.format(name="jira__find"), is_error=True),
+    }
+    assert wiring.tools.calls == []
+    assert (await wiring.store.run_by_id(run.id)).state is RunState.FINISHED
+
+
+@asyncio_test
+async def test_a_result_with_no_text_is_stored_as_saying_so() -> None:
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.tools.answering(GITHUB.id, SEARCH.name, ToolResult(""))
+    wiring.agent.then(*says("Nothing came back."))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    _, _, results, _ = await stored_messages(wiring.store, run.conversation_id)
+    assert results.tool_results == (ToolResultPart("toolu_01", NO_CONTENT),)
+    assert [event.event.text for event in events if isinstance(event.event, ResultLanded)] == [
+        NO_CONTENT
+    ]
+
+
+@asyncio_test
+async def test_a_server_that_will_not_list_fails_the_run_before_the_engine_is_asked() -> None:
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.tools.gone.add(GITHUB.id)
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED
+    assert ended.error is not None and GITHUB.id in ended.error
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    assert kinds(events) == ["RunStarted", "RunEnded"]
+    assert wiring.agent.asked == []
+
+
+@asyncio_test
+async def test_a_server_that_cannot_be_reached_for_a_call_fails_the_run_and_releases_the_rest() -> (
+    None
+):
+    """The one failure of a tool that is the platform's (``docs/specs/runs.md``,
+    "Tools"): the run fails naming the server, the answer with its calls
+    stays stored, the tool message never completes, and the call still
+    running is let go."""
+    slow = asyncio.Event()
+    wiring = tooled(*calls(SEARCH_CALL, ("toolu_02", "github__echo", {})))
+    wiring.tools.answering(
+        GITHUB.id, SEARCH.name, ToolServerError("tool server 'github' cannot be reached")
+    )
+    wiring.tools.answering(GITHUB.id, ECHO.name, slow)
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED
+    assert ended.error is not None and "github" in ended.error
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    assert kinds(events)[-3:] == ["MessageCompleted", "MessageStarted", "RunEnded"]
+    assert [
+        message.role for message in await stored_messages(wiring.store, run.conversation_id)
+    ] == [Role.USER, Role.ASSISTANT]
+    assert wiring.tools.open_calls == 0
+    assert wiring.agent.held == 0
+
+
+@asyncio_test
+async def test_cancelling_in_the_middle_of_a_call_leaves_the_calls_stored_with_no_result() -> None:
+    """What a suspended run looks like (plan, step 7): the answer and its
+    calls are in the conversation, no tool message is, and the record says
+    which calls went unanswered."""
+    never = asyncio.Event()
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.tools.answering(GITHUB.id, SEARCH.name, never)
+    run = await begun(wiring)
+    submitted(wiring, run)
+    while wiring.tools.open_calls == 0:
+        await asyncio.sleep(0)
+
+    await wiring.turns.cancel(AUTHOR, run.id)
+    await settled(wiring, run)
+
+    assert (await wiring.store.run_by_id(run.id)).state is RunState.CANCELLED
+    assert wiring.tools.open_calls == 0
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    assert call_ids(events) == []
+    stored = await stored_messages(wiring.store, run.conversation_id)
+    assert [message.role for message in stored] == [Role.USER, Role.ASSISTANT]
+    assert unanswered_calls(stored) == {stored[1].id: (ToolCallPart(*SEARCH_CALL),)}
+
+
+@asyncio_test
+async def test_a_turn_that_keeps_asking_for_tools_is_failed_at_the_bound() -> None:
+    """Decision 9: the script asks for a tool every time it is run, and the
+    turn is stopped after ``max_tool_rounds`` batches were answered, with the
+    last calling answer stored and no tool message under it."""
+    wiring = tooled(*calls(SEARCH_CALL), max_tool_rounds=2)
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED and ended.error == TOO_MANY_ROUNDS
+    assert len(wiring.tools.calls) == 2
+    assert len(wiring.agent.asked) == 3
+    events = await stored_events(wiring.store, run.id)
+    readable(events, run)
+    assert kinds(events)[-2:] == ["MessageCompleted", "RunEnded"]
+    roles = [message.role for message in await stored_messages(wiring.store, run.conversation_id)]
+    assert roles == [Role.USER] + [Role.ASSISTANT, Role.TOOL] * 2 + [Role.ASSISTANT]
+    assert wiring.tools.listings == [GITHUB.id]
+
+
+@asyncio_test
+async def test_a_round_after_the_results_that_produces_no_answer_fails_the_run() -> None:
+    """A run that finished on a tool message would be one nothing continues
+    from: a question does not follow a tool message, and a tool message is
+    not regenerated. So it is the failure a turn that says nothing is."""
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.agent.then()
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED and ended.error == NO_ANSWER_AFTER_TOOLS
+    readable(await stored_events(wiring.store, run.id), run)
+    assert [
+        message.role for message in await stored_messages(wiring.store, run.conversation_id)
+    ] == [Role.USER, Role.ASSISTANT, Role.TOOL]
+
+
+@asyncio_test
+async def test_a_bound_of_zero_rounds_fails_the_first_answer_that_asks_for_tools() -> None:
+    wiring = tooled(*calls(SEARCH_CALL), max_tool_rounds=0)
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED and ended.error == TOO_MANY_ROUNDS
+    assert wiring.tools.calls == []
+    readable(await stored_events(wiring.store, run.id), run)
+
+
+@asyncio_test
+async def test_a_name_the_run_was_not_handed_is_never_sent_to_a_server() -> None:
+    """A tool the server did not list -- one the model made up under a known
+    prefix -- is the model's mistake: answered in words, and nothing asked."""
+    wiring = tooled(*calls(("toolu_01", "github__delete_everything", {})))
+    wiring.agent.then(*says("I cannot."))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    _, _, results, _ = await stored_messages(wiring.store, run.conversation_id)
+    assert results.tool_results == (
+        ToolResultPart(
+            "toolu_01", NO_SUCH_TOOL.format(name="github__delete_everything"), is_error=True
+        ),
+    )
+    assert wiring.tools.calls == []
+    # A result of nothing but whitespace is stored as saying so too.
+    wiring = tooled(*calls(SEARCH_CALL))
+    wiring.tools.answering(GITHUB.id, SEARCH.name, ToolResult(" \n "))
+    wiring.agent.then(*says("Nothing."))
+    run = await begun(wiring)
+    await wiring.turns.execute(run)
+    _, _, results, _ = await stored_messages(wiring.store, run.conversation_id)
+    assert results.tool_results == (ToolResultPart("toolu_01", NO_CONTENT),)
+
+
+@pytest.mark.parametrize(
+    ("steps", "refused"),
+    [
+        # A second answer after one that asked for tools, instead of waiting.
+        (
+            [*calls(SEARCH_CALL)[:-1], *says("more")],
+            "ends waiting on them",
+        ),
+        # Anything after the turn ended waiting.
+        (
+            [*calls(SEARCH_CALL), AnswerStarted()],
+            "yields nothing more",
+        ),
+        # One call id named twice in one answer.
+        (
+            [
+                AnswerStarted(),
+                ToolCallStarted(call_id="toolu_01", name="github__search_repositories"),
+                ToolCallCompleted(call=ToolCallPart("toolu_01", "github__search_repositories", {})),
+                ToolCallStarted(call_id="toolu_01", name="github__echo"),
+            ],
+            "each tool call once",
+        ),
+        # A call completed under another name than it was announced with.
+        (
+            [
+                AnswerStarted(),
+                ToolCallStarted(call_id="toolu_01", name="github__search_repositories"),
+                ToolCallCompleted(call=ToolCallPart("toolu_01", "github__echo", {})),
+            ],
+            "completed as it was announced",
+        ),
+        # Arguments streamed that do not parse to the ones completed with.
+        (
+            [
+                AnswerStarted(),
+                ToolCallStarted(call_id="toolu_01", name="github__search_repositories"),
+                ToolCallArgumentsDelta(call_id="toolu_01", text='{"q": "x"}'),
+                ToolCallCompleted(
+                    call=ToolCallPart("toolu_01", "github__search_repositories", {"q": "y"})
+                ),
+            ],
+            "are the arguments it completed with",
+        ),
+        # An answer completed with a call still open.
+        (
+            [
+                AnswerStarted(),
+                ToolCallStarted(call_id="toolu_01", name="github__search_repositories"),
+                AnswerCompleted(
+                    parts=(ToolCallPart("toolu_01", "github__search_repositories", {}),)
+                ),
+            ],
+            "completed before its answer is",
+        ),
+        # Waiting on tools after an answer that asked for none.
+        (
+            [*says("Nothing to do."), WaitingOnTools()],
+            "waits on the tools an answer asked for",
+        ),
+        # An answer that asked for tools, and a turn that ended without saying so.
+        (
+            calls(SEARCH_CALL)[:-1],
+            "ends waiting on them",
+        ),
+    ],
+)
+@asyncio_test
+async def test_an_engine_out_of_order_fails_the_run_before_the_stream_is_unreadable(
+    steps: list[Any], refused: str
+) -> None:
+    """The order ``core.check_engine_events`` holds an engine to, held here
+    too, so that nothing an engine yields out of order leaves a stream
+    ``check_event_order`` refuses -- and no server is asked on the way."""
+    wiring = tooled(*steps)
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED
+    assert ended.error is not None and refused in ended.error
+    readable(await stored_events(wiring.store, run.id), run)
+    assert wiring.tools.calls == []
+
+
+@asyncio_test
+async def test_an_answer_completed_with_calls_it_never_announced_fails_the_turn() -> None:
+    """The stream could not be read back (``core.check_event_order``: an
+    answer completes with exactly the calls it announced), so the turn fails
+    before any server is asked."""
+    made = ToolCallPart(*SEARCH_CALL)
+    wiring = tooled(AnswerStarted(), AnswerCompleted(parts=(made,)), WaitingOnTools())
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    ended = await wiring.store.run_by_id(run.id)
+    assert ended.state is RunState.FAILED
+    assert ended.error is not None and "announced" in ended.error
+    readable(await stored_events(wiring.store, run.id), run)
+    assert wiring.tools.calls == []
+    assert [
+        message.role for message in await stored_messages(wiring.store, run.conversation_id)
+    ] == [Role.USER]
+
+
+@asyncio_test
+async def test_what_the_engine_hands_back_in_extras_is_stored_on_the_answer() -> None:
+    """The vendor's signed blocks ride on the answer as data the platform
+    never reads, so that the adapter that made them finds them in the history
+    it is handed next turn (``docs/specs/conversations.md``, "extras")."""
+    signed = {"anthropic": {"thinking": [{"type": "redacted_thinking", "data": "OPAQUE"}]}}
+    wiring = wired(*says("Found it.", extras=signed))
+    run = await begun(wiring)
+
+    await wiring.turns.execute(run)
+
+    stored = await stored_messages(wiring.store, run.conversation_id)
+    assert [message.extras for message in stored] == [{}, signed]
+    events = await stored_events(wiring.store, run.id)
+    (completed,) = [event.event for event in events if isinstance(event.event, MessageCompleted)]
+    assert completed.message.extras == signed
 
 
 # --- ending a run, whatever is happening to the task ---------------------------
@@ -860,7 +1474,14 @@ async def test_a_run_that_could_not_be_ended_says_so_in_the_log(
 class BreaksWhenLetGo(Agent):
     """An engine whose release fails -- while the turn is being cancelled."""
 
-    def run_turn(self, agent: AgentDefinition, history: Sequence[Message], *, model: str) -> Any:
+    def run_turn(
+        self,
+        agent: AgentDefinition,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        *,
+        model: str,
+    ) -> Any:
         return self._events()
 
     async def _events(self) -> Any:
@@ -885,7 +1506,14 @@ class NeverLetsGo(Agent):
         self.closing = asyncio.Event()
         self.free = asyncio.Event()
 
-    def run_turn(self, agent: AgentDefinition, history: Sequence[Message], *, model: str) -> Any:
+    def run_turn(
+        self,
+        agent: AgentDefinition,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        *,
+        model: str,
+    ) -> Any:
         return self._events()
 
     async def _events(self) -> Any:
@@ -928,6 +1556,7 @@ def over(engine: Agent) -> Wiring:
         ids=CountingIdSource(),
         agent=engine,  # type: ignore[arg-type]
         definition=definition,
+        tools=MemoryToolServers(),
     )
 
 
@@ -1387,7 +2016,14 @@ class SlowToClose(Agent):
         self.closing = asyncio.Event()
         self.free = asyncio.Event()
 
-    def run_turn(self, agent: AgentDefinition, history: Sequence[Message], *, model: str) -> Any:
+    def run_turn(
+        self,
+        agent: AgentDefinition,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        *,
+        model: str,
+    ) -> Any:
         return self._events()
 
     async def _events(self) -> Any:
@@ -1411,7 +2047,7 @@ async def test_a_cancellation_while_a_stream_is_closing_is_not_swallowed(
     # exercises.
     engine = SlowToClose()
     wiring = over(engine)
-    events = engine.run_turn(wiring.definition, (), model=MODEL)
+    events = engine.run_turn(wiring.definition, (), (), model=MODEL)
     assert await anext(events) == AnswerStarted()
     pump = _Pump()
     pump.events = events

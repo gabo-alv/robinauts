@@ -31,8 +31,10 @@ like from outside.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+import json
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from robinauts.domain import (
     AgentDefinition,
@@ -42,6 +44,13 @@ from robinauts.domain import (
     AnswerTextDelta,
     EngineEvent,
     Message,
+    MessagePart,
+    ToolCallArgumentsDelta,
+    ToolCallCompleted,
+    ToolCallPart,
+    ToolCallStarted,
+    ToolDefinition,
+    WaitingOnTools,
     text_parts,
 )
 from robinauts.ports import Agent
@@ -88,6 +97,8 @@ class Asked:
     history: tuple[Message, ...]
     model: str
     """The model it was told to run on: the run's, which is not always the agent's."""
+    tools: tuple[ToolDefinition, ...] = ()
+    """The tools it was handed for the turn."""
 
 
 class ScriptedAgent(Agent):
@@ -96,6 +107,14 @@ class ScriptedAgent(Agent):
     def __init__(self, *steps: Step) -> None:
         self.steps: list[Step] = list(steps)
         """The script. A test may replace it between turns."""
+        self.next: list[list[Step]] = []
+        """Scripts for the turns to come, one each, used up in order (``then``).
+
+        A tool round is two turns of the engine inside one run: the answer
+        that calls, and the answer after the results. The first runs
+        ``steps``; the second runs the first of these, if a test wrote one,
+        and ``steps`` again if not.
+        """
         self.asked: list[Asked] = []
         """Every turn it was asked for, with the history it was given."""
         self.released = 0
@@ -103,12 +122,24 @@ class ScriptedAgent(Agent):
         self._open = 0
 
     def run_turn(
-        self, agent: AgentDefinition, history: Sequence[Message], *, model: str
+        self,
+        agent: AgentDefinition,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        *,
+        model: str,
     ) -> AsyncIterator[EngineEvent]:
         # Recorded here rather than inside the iteration: what a turn was asked
         # is true the moment it is asked, whether or not anybody iterates.
-        self.asked.append(Asked(agent=agent, history=tuple(history), model=model))
-        return self._events(tuple(self.steps))
+        self.asked.append(
+            Asked(agent=agent, history=tuple(history), model=model, tools=tuple(tools))
+        )
+        script = self.next.pop(0) if self.asked[1:] and self.next else self.steps
+        return self._events(tuple(script))
+
+    def then(self, *steps: Step) -> None:
+        """What the engine yields at the next turn it is asked for after this one."""
+        self.next.append(list(steps))
 
     async def _events(self, steps: tuple[Step, ...]) -> AsyncIterator[EngineEvent]:
         # What a real engine opens on its first step: an HTTP response, a
@@ -145,13 +176,21 @@ class ScriptedAgent(Agent):
         return self.asked[-1].history
 
 
-def says(text: str, *, streamed: bool = True, reasoning: str = "", pieces: int = 1) -> list[Step]:
+def says(
+    text: str,
+    *,
+    streamed: bool = True,
+    reasoning: str = "",
+    pieces: int = 1,
+    extras: Mapping[str, Any] | None = None,
+) -> list[Step]:
     """The ordinary steps of one answer: announced, streamed, completed.
 
     ``streamed=False`` is an engine that yields no text delta and completes
     with the whole answer, which is allowed: not every provider streams.
     ``pieces`` splits the text over that many deltas, for a test about what is
-    published as it arrives.
+    published as it arrives. ``extras`` is what the engine hands back for the
+    stored message to carry (``Message.extras``).
     """
     steps: list[Step] = [AnswerStarted()]
     if reasoning:
@@ -161,5 +200,38 @@ def says(text: str, *, streamed: bool = True, reasoning: str = "", pieces: int =
         steps.extend(
             AnswerTextDelta(text=text[start : start + size]) for start in range(0, len(text), size)
         )
-    steps.append(AnswerCompleted(parts=text_parts(text)))
+    steps.append(AnswerCompleted(parts=text_parts(text), extras=extras or {}))
+    return steps
+
+
+def calls(
+    *made: tuple[str, str, Mapping[str, Any]],
+    text: str = "",
+    streamed: bool = True,
+    extras: Mapping[str, Any] | None = None,
+) -> list[Step]:
+    """The steps of an answer that asks for tools, and the turn ending waiting.
+
+    ``made`` is one ``(call_id, name, arguments)`` per call. Announced,
+    streamed as text and then as calls -- each announced, its arguments
+    streamed as JSON when ``streamed``, and completed -- completed with the
+    text and the calls as parts, and followed by ``WaitingOnTools``, which is
+    how a turn that asked for tools ends (``docs/specs/runs.md``).
+    """
+    steps: list[Step] = [AnswerStarted()]
+    if text:
+        steps.append(AnswerTextDelta(text=text))
+    parts: list[MessagePart] = list(text_parts(text)) if text else []
+    for call_id, name, arguments in made:
+        call = ToolCallPart(call_id=call_id, name=name, arguments=arguments)
+        steps.append(ToolCallStarted(call_id=call_id, name=name))
+        if streamed:
+            written = json.dumps(dict(call.arguments))
+            half = len(written) // 2
+            steps.append(ToolCallArgumentsDelta(call_id=call_id, text=written[:half]))
+            steps.append(ToolCallArgumentsDelta(call_id=call_id, text=written[half:]))
+        steps.append(ToolCallCompleted(call=call))
+        parts.append(call)
+    steps.append(AnswerCompleted(parts=tuple(parts), extras=extras or {}))
+    steps.append(WaitingOnTools())
     return steps

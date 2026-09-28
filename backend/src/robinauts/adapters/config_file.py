@@ -32,12 +32,13 @@ a key could be written down.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from robinauts.domain import ConfigError, ModelsConfig, SignInConfig
+from robinauts.domain import ConfigError, ModelsConfig, SignInConfig, ToolServerAuth
 
 SecretLookup = Callable[[str], str | None]
 """How a secret is asked for: given a variable's name, its value or ``None``.
@@ -108,12 +109,32 @@ def check_client_secrets(config: SignInConfig, *, secret_for: SecretLookup = env
     """
     problems = [
         f"providers.{provider.id}: the client secret is read from the environment"
-        f" variable {provider.client_secret_env}, which is unset or empty"
+        f" variable {named(provider.client_secret_env)}, which is unset or empty"
         for provider in config.providers.values()
         if not secret_for(provider.client_secret_env)
     ]
     if problems:
         raise ConfigError(problems)
+
+
+_CONVENTIONAL_VARIABLE = re.compile(r"[A-Z_][A-Z0-9_]*")
+"""How a variable an operator means to name is spelt: upper case, digits, underscores."""
+
+
+def named(variable: str) -> str:
+    """The variable's name as a start-up message may carry it.
+
+    A message about an unset variable names the variable so that the operator
+    knows what to set -- and a **secret pasted where the name belongs** is a
+    valid name too, as far as the spelling rule goes: a GitHub token is
+    letters, digits and underscores. Echoing that "name" would put the secret
+    in the start-up log. So a name spelt as variables conventionally are is
+    printed, and anything else is described rather than repeated; the
+    operator finds it in the file, under the key the message names.
+    """
+    if _CONVENTIONAL_VARIABLE.fullmatch(variable):
+        return variable
+    return "named in the configuration (not repeated here: it is not spelt like one)"
 
 
 class ProviderKeys:
@@ -165,6 +186,74 @@ class ProviderKeys:
         return f"ProviderKeys({', '.join(sorted(self._keys))})"
 
 
+class ToolServerSecrets:
+    """The tool servers' secrets, as this process read them, and nothing else.
+
+    ``ProviderKeys`` for the tool servers, with the same promises and for the
+    same reasons: it **prints nothing**, it holds a **copy**, it is **not
+    iterable**, and the one question it answers is "the secret for this
+    server". It carries the values rather than the lookup they came from,
+    because the promise made at start-up is that the environment was read
+    *then* (``docs/specs/agents.md``, "Tools").
+    """
+
+    __slots__ = ("_secrets",)
+
+    def __init__(self, secrets: Mapping[str, str]) -> None:
+        self._secrets = dict(secrets)
+
+    def secret_for(self, server_id: str) -> str:
+        """The secret of that server; ``ConfigError`` if this process has none.
+
+        Unreachable in a deployment that started, because ``check_tool_secrets``
+        is what lets one start; it is here so that a mistake in the wiring is a
+        refusal naming the server rather than a ``KeyError`` in the middle of
+        somebody's turn.
+        """
+        try:
+            return self._secrets[server_id]
+        except KeyError:
+            raise ConfigError(
+                [f"mcp_servers.{server_id}: no secret was read for this tool server"]
+            ) from None
+
+    def __repr__(self) -> str:
+        """The servers, never the secrets: this is what a log line would hold."""
+        return f"ToolServerSecrets({', '.join(sorted(self._secrets))})"
+
+
+def check_tool_secrets(
+    config: ModelsConfig, *, secret_for: SecretLookup = environment
+) -> ToolServerSecrets:
+    """Read every tool server's secret, refusing if any variable is unset.
+
+    ``check_api_keys`` for the tool servers: **every** missing variable at
+    once, in one ``ConfigError``, only the variable's **name** in the message,
+    and every **declared** server looked at whether or not an agent names it
+    (``docs/specs/agents.md``, "Tools") -- except one with ``auth = "none"``,
+    which names no variable. Start-up reads the secret and does not connect:
+    whether the server takes it is found out at the first turn of an agent
+    naming it, by name.
+    """
+    problems: list[str] = []
+    secrets: dict[str, str] = {}
+    for server in config.tool_servers.values():
+        if server.auth is ToolServerAuth.NONE:
+            # A public server: nothing to read, and nothing to hold for it.
+            continue
+        secret = secret_for(server.secret_env)
+        if secret:
+            secrets[server.id] = secret
+        else:
+            problems.append(
+                f"mcp_servers.{server.id}: the secret is read from the environment variable"
+                f" {named(server.secret_env)}, which is unset or empty"
+            )
+    if problems:
+        raise ConfigError(problems)
+    return ToolServerSecrets(secrets)
+
+
 def check_api_keys(config: ModelsConfig, *, secret_for: SecretLookup = environment) -> ProviderKeys:
     """Read every model provider's key, refusing if any variable is unset.
 
@@ -192,7 +281,7 @@ def check_api_keys(config: ModelsConfig, *, secret_for: SecretLookup = environme
         else:
             problems.append(
                 f"model_providers.{provider.id}: the API key is read from the environment"
-                f" variable {provider.api_key_env}, which is unset or empty"
+                f" variable {named(provider.api_key_env)}, which is unset or empty"
             )
     if problems:
         raise ConfigError(problems)

@@ -13,17 +13,22 @@ from robinauts.domain import (
     ACTIVE_RUN_STATES,
     ENDED_RUN_STATES,
     FIRST_POSITION,
+    MAX_EXTRAS_BYTES,
     MAX_PART_CHARS,
     MAX_POSITION,
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerStarted,
     AnswerTextDelta,
+    ArgumentsDelta,
+    CallCompleted,
+    CallStarted,
     EngineEvent,
     InvalidValueError,
     MessageCompleted,
     MessageStarted,
     ReasoningDelta,
+    ResultLanded,
     Role,
     RunEnded,
     RunEvent,
@@ -69,8 +74,9 @@ def test_a_message_a_run_produces_is_never_a_root() -> None:
 
 def test_a_message_is_announced_under_a_role_this_build_carries() -> None:
     assert started().role is Role.ASSISTANT
-    with pytest.raises(InvalidValueError, match="not supported yet"):
-        started(role=Role.TOOL)
+    # A tool message is announced too: it is the platform's, produced by a
+    # run once the calls of its parent have been answered.
+    assert started(role=Role.TOOL).role is Role.TOOL
     with pytest.raises(InvalidValueError, match="is a Role"):
         started(role="assistant")
 
@@ -288,6 +294,22 @@ def test_an_engines_delta_may_carry_half_a_character() -> None:
         AnswerTextDelta(text=7)
 
 
+def test_a_completed_answer_carries_the_vendors_extras_as_a_bounded_copy() -> None:
+    """What a vendor needs back with the history, and the platform never
+    reads: kept as a copy, bounded as every ``extras`` is, and empty unless
+    the engine said otherwise."""
+    assert AnswerCompleted(parts=(TextPart("hi"),)).extras == {}
+    given: dict[str, object] = {"anthropic": {"thinking": [{"signature": "sig"}]}}
+    completed = AnswerCompleted(parts=(TextPart("hi"),), extras=given)
+    given["anthropic"] = "changed"
+    assert completed.extras == {"anthropic": {"thinking": [{"signature": "sig"}]}}
+    with pytest.raises(InvalidValueError, match="at most"):
+        AnswerCompleted(parts=(TextPart("hi"),), extras={"v": "x" * MAX_EXTRAS_BYTES})
+    for broken in ("text", ["a"], {"a": object()}):
+        with pytest.raises(InvalidValueError):
+            AnswerCompleted(parts=(TextPart("hi"),), extras=broken)  # type: ignore[arg-type]
+
+
 def test_a_completed_answer_is_the_platforms_own_content() -> None:
     assert AnswerCompleted(parts=[TextPart("one")]).parts == (TextPart("one"),)
     with pytest.raises(InvalidValueError, match="at least one part"):
@@ -302,3 +324,40 @@ def test_the_two_vocabularies_do_not_overlap() -> None:
     assert not isinstance(RunStarted(run_id=RUN, conversation_id=CONVERSATION), EngineEvent)
     assert not isinstance(started(), EngineEvent)
     assert not isinstance(AnswerStarted(), TurnEvent)
+
+
+# --- the tool events a run publishes ----------------------------------------------
+
+
+def test_a_call_is_announced_inside_a_message_with_the_vendors_id_and_the_full_name() -> None:
+    made = CallStarted(run_id=RUN, message_id=MESSAGE, call_id="toolu_01", name="github__search")
+
+    assert (made.call_id, made.name) == ("toolu_01", "github__search")
+    with pytest.raises(InvalidValueError):
+        CallStarted(run_id=RUN, message_id=MESSAGE, call_id="", name="github__search")
+    with pytest.raises(InvalidValueError):
+        CallStarted(run_id=RUN, message_id=MESSAGE, call_id="toolu_01", name="has space")
+    with pytest.raises(InvalidValueError):
+        CallStarted(run_id="run", message_id=MESSAGE, call_id="toolu_01", name="x")  # type: ignore[arg-type]
+
+
+def test_arguments_and_results_are_storable_text_bounded_as_a_part_is() -> None:
+    assert (
+        ArgumentsDelta(run_id=RUN, message_id=MESSAGE, call_id="c", text='{"q": ').text == '{"q": '
+    )
+    with pytest.raises(InvalidValueError):
+        ArgumentsDelta(run_id=RUN, message_id=MESSAGE, call_id="c", text="x" * (MAX_PART_CHARS + 1))
+    with pytest.raises(InvalidValueError):
+        ArgumentsDelta(run_id=RUN, message_id=MESSAGE, call_id="c", text="half \ud83d")
+    landed = ResultLanded(run_id=RUN, message_id=MESSAGE, call_id="c", text="found")
+    assert landed.is_error is False
+    with pytest.raises(InvalidValueError, match="yes or no"):
+        ResultLanded(run_id=RUN, message_id=MESSAGE, call_id="c", text="x", is_error="no")  # type: ignore[arg-type]
+    with pytest.raises(InvalidValueError):
+        ResultLanded(run_id=RUN, message_id=MESSAGE, call_id="c", text="x" * (MAX_PART_CHARS + 1))
+
+
+def test_a_call_completes_by_id_alone() -> None:
+    assert CallCompleted(run_id=RUN, message_id=MESSAGE, call_id="toolu_01").call_id == "toolu_01"
+    with pytest.raises(InvalidValueError):
+        CallCompleted(run_id=RUN, message_id=MESSAGE, call_id="two words")
