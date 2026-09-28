@@ -57,29 +57,29 @@ title = "Assistant (LangGraph)"
 model = "@MODEL_ID@"
 engine = "langgraph"
 system_prompt = "You are the Robinauts demo assistant. Answer briefly, and play fair."
-# tools = ["learn"]
+@TOOLS@
 
 [agents.assistant-pydantic-ai]
 title = "Assistant (Pydantic AI)"
 model = "@MODEL_ID@"
 engine = "pydantic-ai"
 system_prompt = "You are the Robinauts demo assistant. Answer briefly, and play fair."
-# tools = ["learn"]
+@TOOLS@
 
-# Tools, off until you turn them on. A server an agent may call is a table
-# like the two below, and an agent names the servers it may use in `tools`
-# (docs/specs/agents.md, "Tools"). Microsoft Learn's public server needs no
-# credential: take the `#` off its table and off an agent's `tools` line, and
-# that agent searches Microsoft's documentation when a question calls for it --
-# the demo then reaches learn.microsoft.com from this machine, and the chat
-# shows each call behind a toggle above the answer. GitHub's server needs a
-# token, which the platform reads from the variable named here and never from
-# this file; the demo cannot hand it one safely (demo/README.md, "Tools").
+# Tools. GitHub's server is on when demo/start.sh found a GitHub token, and its
+# table and each agent's `tools = ["github"]` line are then written in place of
+# the @-marked lines; with no token both lines go, and the agents have no tools.
+# The token itself is never in this file: the platform reads it from the
+# variable `secret_env` names, which demo/start.sh sets on the server's
+# invocation alone (demo/README.md, "Tools").
+#
+# Microsoft Learn's public server needs no credential: take the `#` off its
+# table, and add "learn" to an agent's `tools` (or add the line), and that
+# agent searches Microsoft's documentation when a question calls for it -- the
+# demo then reaches learn.microsoft.com from this machine, and the chat shows
+# each call behind a toggle above the answer.
+@GITHUB_SERVER@
 #
 # [mcp_servers.learn]
 # url = "https://learn.microsoft.com/api/mcp"
 # auth = "none"
-#
-# [mcp_servers.github]
-# url = "https://api.githubcopilot.com/mcp/"
-# secret_env = "ROBINAUTS_GITHUB_TOKEN"

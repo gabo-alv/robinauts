@@ -152,34 +152,39 @@ one, and the id no longer says which model wrote them.
 
 ## Tools
 
-Off until you turn them on. The configuration the demo writes holds, commented
-out, two MCP tool servers and a `tools` line under each agent
-([robinauts.toml.in](robinauts.toml.in)); an agent whose `tools` names a server
-can call what that server offers, and the chat shows each call behind a
+The configuration the demo writes can hold two MCP tool servers and a `tools`
+line under each agent ([robinauts.toml.in](robinauts.toml.in)); an agent whose
+`tools` names a server can call what that server offers, and the chat shows each call behind a
 tool-call toggle above the answer -- the tool's name, its arguments and what
 came back, as text ([../docs/specs/agents.md](../docs/specs/agents.md),
 "Tools").
 
-**Microsoft Learn's server needs no credential.** Take the `#` off the
-`[mcp_servers.learn]` table and off one agent's `tools = ["learn"]` line in
-`robinauts.toml.in`, restart (`demo/stop.sh`, then `demo/start.sh`), and ask
-that agent something about, say, Azure: the model calls
-`learn__microsoft_docs_search`, the answer arrives with the call's toggle
-above it, and the conversation records both. **The demo then reaches
-`learn.microsoft.com` from this machine** for as long as the line is on. What
-the request carries is no credential and nothing that names you, but it does
-carry what the model wrote for the tool -- the search query it composed from
-your question -- and the deployment's address, as any request does.
+**GitHub's server is on whenever a GitHub token is exported** in the shell
+that runs `start.sh`, as `ROBINAUTS_GITHUB_TOKEN`. Both agents then get `tools = ["github"]`, and a
+question about a repository has the model call, say,
+`github__get_latest_release`; the answer arrives with the call's toggle above
+it. `start.sh` says `Tools: GitHub's MCP server, for both agents.` when it is
+on.
 
-**GitHub's server needs a token**, read from the variable
-`[mcp_servers.github]` names and never from the file. The demo cannot hand it
-one safely: `start.sh` reads the model provider's key alone and strips it from
-everything but the server, and it has no such path for a tool server's token,
-so a token exported in the shell that runs `start.sh` would reach every
-process it starts — PostgreSQL, npm and what npm runs, uv. Do not: the table
-is here as the shape to copy into a deployment
-([../docs/deployment.md](../docs/deployment.md)), not as something the demo
-can run.
+The token is handled like the model key: taken **out of the script's
+environment** as soon as it is read, so PostgreSQL, npm and
+uv never see it, and put back on the server's invocation alone, as
+`ROBINAUTS_GITHUB_TOKEN`, the variable `[mcp_servers.github]` names. The
+configuration holds that name and nothing else. **The agents act as the
+token's owner** on `api.githubcopilot.com`, with whatever the token may do,
+so a token with no more than read access to public repositories is the one to
+give a demo.
+
+**Microsoft Learn's server needs no credential.** Take the `#` off the
+`[mcp_servers.learn]` table in `robinauts.toml.in`, add `"learn"` to an
+agent's `tools` (or give it the line, `tools = ["learn"]`, when GitHub is
+off), restart (`demo/stop.sh`, then `demo/start.sh`), and ask that agent
+something about, say, Azure: the model calls `learn__microsoft_docs_search`.
+**The demo then reaches `learn.microsoft.com` from this machine** for as long
+as the line is on. What the request carries is no credential and nothing that
+names you, but it does carry what the model wrote for the tool -- the search
+query it composed from your question -- and the deployment's address, as any
+request does.
 
 ## Where the state lives
 
@@ -246,6 +251,7 @@ Every failure is one line, and the server's own log is
 | what you see | why | what to do |
 |---|---|---|
 | `The demo needs one model provider key` | neither variable is set | set one of the two, or write `demo/.env` |
+| every GitHub tool call fails with `401` | the token is wrong, expired or revoked | a new token, or unset `ROBINAUTS_GITHUB_TOKEN` to go on without |
 | `demo/.env is mode 644 and may hold a key` | anybody on this machine could read it | `chmod 600 demo/.env` |
 | every answer fails, and the log says `authentication_error` / `API key is invalid` / `User not found` | the key is wrong, expired, or belongs to the other vendor | check the key; `User not found` is OpenRouter's way of saying it has never issued that one |
 | every answer on one model fails, and the log's message names the model | that vendor has retired it, or spells it differently | pick another in the picker; set `ROBINAUTS_DEMO_MODEL`, `_2` or `_3` and start again; OpenRouter lists its ids at <https://openrouter.ai/models> |
