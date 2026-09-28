@@ -31,7 +31,8 @@ starting over.
 **Safe to use, now and later.** Robinauts is Apache-2.0, with no added
 restrictions, and every dependency is checked to keep it that way. A
 company can run it as an internal platform, or build a SaaS or any other
-commercial product on it, at any time, with no licence to renegotiate.
+commercial product on it, white-labelled under its own brand, at any time,
+with no licence to renegotiate.
 
 ## What it does today
 
