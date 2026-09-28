@@ -1,7 +1,7 @@
 # Robinauts
 
 An open source AI assistant platform that a company runs on its own
-servers, with the AI vendors it chooses, under its own control.
+servers, leveraging the best capabilities from any vendor, on its own terms.
 
 ## Why Robinauts
 
@@ -10,8 +10,8 @@ of any size adopt them without handing its long-term strategy to a single
 vendor.
 
 **Switch AI vendors at no cost, at any time.** Conversations are stored in
-a vendor-agnostic format, so changing vendor can be done with a click even 
-middle-way a conversation. A company keeps its leverage in
+a vendor-agnostic format, so switching vendors takes one click, even in
+the middle of a conversation. A company keeps its leverage in
 contract talks, and can move all its work quickly for price, tax reasons
 or an outage.
 
