@@ -163,7 +163,8 @@ checks as every other write.
   models a conversation can be started with are `GET /api/agents` and
   `GET /api/models`; a conversation's model is changed with
   `PUT /api/conversations/{id}/model`, which refuses a model the deployment
-  does not offer as an invalid body (422) and is allowed while a run is going
+  does not offer with 422 `UnknownModelError` (a fixed detail, checked
+  before the conversation) and is allowed while a run is going
   — the run keeps the model it started with.
 
 ## Details likely to change

@@ -128,7 +128,7 @@ class UnknownModelError(RobinautsError):
     """
 
 
-class ModelNotOfferedError(UnknownModelError):
+class ModelNotOfferedError(RobinautsError):
     """The conversation's model is one this deployment no longer offers.
 
     What a conversation whose model the operator has since removed meets at
@@ -139,6 +139,10 @@ class ModelNotOfferedError(UnknownModelError):
     about the request was wrong: it is the conversation that stands in the
     way, and a client that could not tell this from a model it named itself
     would not know what to say.
+
+    A sibling of ``UnknownModelError`` and not a kind of it: the two answer
+    different statuses, and a handler written for the one must not catch the
+    other.
 
     Only ever raised for a conversation its caller may see, and after that
     was decided: somebody else's conversation is still the one answer for

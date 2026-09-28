@@ -802,6 +802,35 @@ test("a model moved from another tab is the one shown, and picking the old one i
   expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
 });
 
+test("answers written in the same millisecond are ordered by their microseconds", async () => {
+  // The chat's read and the panel's row fall in one millisecond; the row,
+  // on "opus", is the later by 800 microseconds, and is what the picker shows.
+  location.hash = `#/c/${id(1)}`;
+  const read = {
+    ...conversation(1, "Robins"),
+    model: "sonnet",
+    updated_at: "2026-09-03T10:00:00.000100Z",
+  };
+  const moved = {
+    ...read,
+    model: "opus",
+    updated_at: "2026-09-03T10:00:00.000900Z",
+  };
+  await shell(undefined, (call) => {
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(opened(read, []));
+    }
+    if (call.url.startsWith("/api/conversations?")) {
+      return json(page([moved]));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+});
+
 test("without the list of models, the line still says which model it is on", async () => {
   location.hash = `#/c/${id(1)}`;
   await shell(undefined, (call) => {
@@ -924,6 +953,61 @@ test("without the list, a remembered model is still the one a first message name
   expect(callsTo(fetch, "/api/turns", "POST")[1]?.body).toMatchObject({
     model_id: null,
   });
+});
+
+test("a first message refused for the agent's default asks for the models again", async () => {
+  // The agent's default, "sonnet", has been removed since the list came:
+  // the refusal asks for the list again, which no longer has it, so the
+  // next message goes to a model still offered.
+  location.hash = "#/";
+  const created = id(9);
+  let lists = 0;
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.url.startsWith("/api/models")) {
+      lists += 1;
+      return lists === 1
+        ? undefined
+        : json({ items: [{ id: "opus", title: "Opus" }] });
+    }
+    if (call.url === "/api/turns") {
+      const asked = (call.body as { model_id: string }).model_id;
+      if (asked === "sonnet") {
+        return refusal(
+          422,
+          "UnknownModelError",
+          "body.model_id: is not a model",
+        );
+      }
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return undefined;
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(
+    callsTo(fetch, "/api/turns", "POST").map(
+      (call) => (call.body as { model_id: string }).model_id,
+    ),
+  ).toEqual(["sonnet", "opus"]);
 });
 
 test("with the list in hand, a first message refused for its model forgets the pick", async () => {

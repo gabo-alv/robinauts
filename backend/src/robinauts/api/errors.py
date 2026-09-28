@@ -338,7 +338,7 @@ def error_body(exc: BaseException, status: int) -> dict[str, Any]:
         return {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
     if isinstance(exc, SignInError):
         return {"error": type(exc).__name__, "detail": SIGN_IN_DETAIL[exc.code]}
-    if isinstance(exc, UnknownModelError):
+    if isinstance(exc, UnknownModelError | ModelNotOfferedError):
         # Its message names the model, which is the request's or the
         # conversation's: the log has it, and the body a fixed sentence.
         detail = (

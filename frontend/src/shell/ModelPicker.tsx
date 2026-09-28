@@ -40,8 +40,8 @@ const askModels = (signal: AbortSignal) =>
  * remounted on every "New chat", and the open conversation's line needs the
  * list as well.
  */
-export function useModels(): Models {
-  return useOffered(askModels);
+export function useModels(round = 0): Models {
+  return useOffered(askModels, round);
 }
 
 /** What a model is called in a list that no longer has it. */
@@ -201,12 +201,15 @@ export function ConversationModel({
   conversationId,
   model,
   onMoved,
+  onNotOffered,
 }: {
   models: Models;
   conversationId: ConversationId;
   model: string;
   /** The conversation as the change left it. */
   onMoved: (moved: Conversation) => void;
+  /** A change refused because the deployment no longer offers the model. */
+  onNotOffered?: () => void;
 }) {
   // What the picker shows while a change is being saved: the latest asked for.
   const [moving, setMoving] = useState<string | null>(null);
@@ -237,6 +240,7 @@ export function ConversationModel({
           // What waits was chosen over a model that did not take; the
           // picker goes back to the one the conversation still has.
           setRefused(refusedWith(failure));
+          if (isRefusal(failure, UNKNOWN_MODEL)) onNotOffered?.();
           waiting.current = null;
           return;
         }

@@ -89,17 +89,35 @@ function openedFrom(conversation: Conversation): Opened {
  * model change was saved can land just after that change's own answer, and
  * would put the old model back on the screen. Every write dates the
  * conversation (`docs/specs/conversations.md`), so the one written later is
- * the one to keep; a tie, or a date nobody has, goes to what arrived last.
+ * the one to keep. A date nobody has -- a conversation this page has just
+ * started -- is older than any date an answer carries; a tie, or two with
+ * none, goes to what arrived last.
  */
 function later(was: Opened | null, next: Opened): Opened {
-  if (
-    was?.id !== next.id ||
-    was.updatedAt === null ||
-    next.updatedAt === null
-  ) {
-    return next;
-  }
-  return Date.parse(was.updatedAt) > Date.parse(next.updatedAt) ? was : next;
+  if (was?.id !== next.id || was.updatedAt === null) return next;
+  if (next.updatedAt === null) return was;
+  return compareInstants(was.updatedAt, next.updatedAt) > 0 ? was : next;
+}
+
+/**
+ * Two of the server's instants in order, to the digit it wrote.
+ *
+ * `Date.parse` keeps milliseconds and the server writes microseconds, so a
+ * read and a change a few microseconds apart would be taken for a tie. The
+ * fraction is compared as digits beside the milliseconds the rest parses to.
+ */
+function compareInstants(a: string, b: string): number {
+  const [aMs, aFraction] = instant(a);
+  const [bMs, bFraction] = instant(b);
+  if (aMs !== bMs) return aMs < bMs ? -1 : 1;
+  return aFraction < bFraction ? -1 : aFraction > bFraction ? 1 : 0;
+}
+
+function instant(text: string): [number, string] {
+  const found = /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$/.exec(text);
+  if (found === null) return [Date.parse(text), ""];
+  const [, whole = "", fraction = "", zone = ""] = found;
+  return [Date.parse(whole + zone), fraction.padEnd(9, "0")];
 }
 
 /**
@@ -157,14 +175,28 @@ export function Shell({
   const [agentId, chooseAgent] = useChosenAgent(agents);
   // The models likewise, and the one a first message runs on: the chosen
   // agent's default until somebody picks another (`./ModelPicker.tsx`).
-  const models = useModels();
+  // Asked for again when the backend refuses a model the list offered: the
+  // list is stale, and a picker still offering that model would have every
+  // send refused for it until a reload.
+  const [modelsRound, setModelsRound] = useState(0);
+  const models = useModels(modelsRound);
+  const modelsStale = useCallback(() => {
+    setModelsRound((round) => round + 1);
+  }, []);
   const agentDefault =
     agents.status === "ready"
       ? (agents.items.find((agent) => agent.id === agentId)?.model ?? null)
       : null;
-  const [modelId, chooseModel, forgetModel] = useChosenModel(
+  const [modelId, chooseModel, forgetChosenModel] = useChosenModel(
     models,
     agentDefault,
+  );
+  const forgetModel = useCallback(
+    (id: string) => {
+      forgetChosenModel(id);
+      modelsStale();
+    },
+    [forgetChosenModel, modelsStale],
   );
   const opener = useRef<HTMLButtonElement>(null);
   const closer = useRef<HTMLButtonElement>(null);
@@ -362,6 +394,7 @@ export function Shell({
                   conversationId={current}
                   model={conversationModel}
                   onMoved={modelMoved}
+                  onNotOffered={modelsStale}
                 />
               )}
             </div>
@@ -372,8 +405,8 @@ export function Shell({
             agentId={agentId}
             modelId={modelId}
             // A first message refused for its model: this browser forgets
-            // it, whether or not the list has come, so the next one goes to
-            // the agent's default or to another pick.
+            // it, whether or not the list has come, and asks for the list
+            // again, so the next one goes to a model still offered.
             onModelRefused={forgetModel}
             onConversationStarted={startedConversation}
             onConversationOpened={conversationOpened}

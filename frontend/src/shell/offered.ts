@@ -19,13 +19,16 @@ export type Offered<T> =
   | { status: "failed"; detail: string };
 
 /**
- * The list `ask` answers, asked for once.
+ * The list `ask` answers, asked for once -- and again whenever `round`
+ * changes, which is how a caller that has just been told the list is stale
+ * asks for it afresh. The list it had stays shown until the new one comes.
  *
  * `ask` must be the same function on every render -- a module's own, not one
  * written inline -- or every render would be another call.
  */
 export function useOffered<T>(
   ask: (signal: AbortSignal) => Promise<{ items: T[] }>,
+  round = 0,
 ): Offered<T> {
   const [offered, setOffered] = useState<Offered<T>>({ status: "loading" });
   useEffect(() => {
@@ -35,7 +38,8 @@ export function useOffered<T>(
         setOffered({ status: "ready", items: answer.items });
       },
       (failure: unknown) => {
-        // An abort is this component going away, not a failure to show.
+        // An abort is this component going away, or a newer round, not a
+        // failure to show.
         if (dropped.signal.aborted) return;
         setOffered({
           status: "failed",
@@ -46,6 +50,6 @@ export function useOffered<T>(
     return () => {
       dropped.abort();
     };
-  }, [ask]);
+  }, [ask, round]);
   return offered;
 }

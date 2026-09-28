@@ -267,12 +267,19 @@ export function useChat(props: ChatProps): Chatting {
       // An edit goes back into its own box, open on the message it was
       // editing -- which the refusal has just put back on the screen -- so
       // that sending it again is still an edit and not a new message at
-      // the end of the thread. Unless that box has been opened again since.
+      // the end of the thread. If that box has been opened again since, the
+      // text goes into it only while it is empty, and otherwise on to the
+      // main box below: `saying` has handed it over, and it is not dropped.
       const edit = runtime.thread.getMessageById(editing).composer;
-      if (edit.getState().isEditing) return;
-      edit.beginEdit();
-      edit.setText(wanted.text);
-      return;
+      if (!edit.getState().isEditing) {
+        edit.beginEdit();
+        edit.setText(wanted.text);
+        return;
+      }
+      if (edit.getState().text === "") {
+        edit.setText(wanted.text);
+        return;
+      }
     }
     const box = runtime.thread.composer;
     if (box.getState().text === "") box.setText(wanted.text);
