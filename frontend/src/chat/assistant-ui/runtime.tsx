@@ -255,12 +255,20 @@ export function useChat(props: ChatProps): Chatting {
   useEffect(() => {
     const wanted = turns.saying();
     if (wanted === null) return;
-    if (wanted.editing !== null) {
+    const editing = wanted.editing;
+    // Only while that message is still in the thread: a read landing in
+    // between may have taken it off, and asking the runtime for a message it
+    // does not hold throws -- which would put the error boundary in place of
+    // the chat. The text then goes to the main box, which is still somewhere.
+    const held = runtime.thread
+      .getState()
+      .messages.some((message) => message.id === editing);
+    if (editing !== null && held) {
       // An edit goes back into its own box, open on the message it was
       // editing -- which the refusal has just put back on the screen -- so
       // that sending it again is still an edit and not a new message at
       // the end of the thread. Unless that box has been opened again since.
-      const edit = runtime.thread.getMessageById(wanted.editing).composer;
+      const edit = runtime.thread.getMessageById(editing).composer;
       if (edit.getState().isEditing) return;
       edit.beginEdit();
       edit.setText(wanted.text);
@@ -346,11 +354,12 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
    * (`ONE_AT_A_TIME`). `told` changes nothing else: the turn that *is* on its
    * way keeps its question, its run and its stream.
    */
-  function told(text: string): void {
+  function told(text: string, editing: string | null = null): void {
     dispatch({ kind: "told", detail: ONE_AT_A_TIME });
     // The box cleared itself when it handed this over, so without this the
-    // message is gone and the notice is all there is.
-    if (text !== "") wanted = { text, editing: null };
+    // message is gone and the notice is all there is. An edit goes back into
+    // its own box, so that sending it again still replaces that message.
+    if (text !== "") wanted = { text, editing };
   }
 
   /**
@@ -502,7 +511,14 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
           detail: agentGone ? AGENT_GONE : said(failure),
         });
         const forModel = forItsModel(failure);
-        if (!forModel && !agentGone) return;
+        // An edit the conversation refused for answering already (409): the
+        // person is told to stop that answer and send again, and an edit
+        // sent again from the main box would be a new message instead.
+        const editWhileAnswering =
+          editing !== null &&
+          failure instanceof ApiError &&
+          failure.status === 409;
+        if (!forModel && !agentGone && !editWhileAnswering) return;
         // **Refused for its model or its agent, the message goes back in its
         // box**: what the person is told to do is pick another and send
         // again, and the box emptied itself when it handed the message over
@@ -628,10 +644,11 @@ function turnsOf(dispatch: (action: ChatAction) => void, first: ChatProps) {
     // it. The Thread hides the edit button while a run is going, so this is
     // reachable only by driving the runtime directly.
     if (isUnsent(parentId)) return;
-    if (busy()) return told(text);
+    if (busy()) return told(text, message.sourceId);
     dispatch({ kind: "asked", id: unsent(), after: parentId, text });
-    // Refused for its model, the edited text comes back in the edit box of
-    // the message it was of (`follow`).
+    // Refused for its model, or because the conversation is answering, the
+    // edited text comes back in the edit box of the message it was of
+    // (`follow`).
     await follow(
       (signal) => startTurn(conversationId, { text, parentId }, { signal }),
       { text, editing: message.sourceId },

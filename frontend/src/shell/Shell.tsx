@@ -18,7 +18,7 @@
  * `docs/legal/ip-clearance.md`.
  */
 import { Menu } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Chat } from "../chat";
 import { conversationIn, useHistory } from "../history/history";
@@ -100,6 +100,23 @@ function later(was: Opened | null, next: Opened): Opened {
     return next;
   }
   return Date.parse(was.updatedAt) > Date.parse(next.updatedAt) ? was : next;
+}
+
+/**
+ * What the shell holds about the conversation on the screen: the later of
+ * the panel's row and the chat's own read, by `updated_at` (`later`), the
+ * chat's on a tie.
+ *
+ * The model is changed here and not in the panel, so the chat's read -- or
+ * the change's own answer -- is usually the fresher; but not always: another
+ * tab may have moved it, and the panel's next page says so. A picker showing
+ * the older model would send nothing when the newer one's predecessor is
+ * picked, taking it to be current, and the next turn would run on the other.
+ */
+function freshest(listed: Opened | null, about: Opened | null): Opened | null {
+  if (listed === null) return about;
+  if (about === null) return listed;
+  return later(listed, about);
 }
 
 /** The rail, as this browser last left it. */
@@ -190,10 +207,15 @@ export function Shell({
   const conversationAgent = listed?.agent ?? about?.agent ?? null;
   const withAgent =
     conversationAgent === null ? null : agentTitle(agents, conversationAgent);
-  // The model is the other way round: it is changed here and not in the
-  // panel, so the chat's latest read -- or the change's own answer -- is
-  // fresher than the panel's page.
-  const conversationModel = about?.model ?? listed?.model ?? null;
+  // Held rather than made at every render: the React Compiler takes a
+  // value made from the panel's row by a call of ours for one that may be
+  // changed later, and then gives up on every callback below.
+  const listedAs = useMemo(
+    () => (listed === null ? null : openedFrom(listed)),
+    [listed],
+  );
+  const conversationModel =
+    freshest(listedAs, about)?.model ?? listed?.model ?? null;
   const conversationOpened = useCallback((conversation: Conversation) => {
     setOpened((was) => later(was, openedFrom(conversation)));
   }, []);

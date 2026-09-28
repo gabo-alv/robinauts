@@ -761,6 +761,47 @@ test("a read answered before a model change cannot put the old model back", asyn
   expect(screen.getByLabelText("Model")).toHaveValue("opus");
 });
 
+test("a model moved from another tab is the one shown, and picking the old one is sent", async () => {
+  // The chat read the conversation on "sonnet"; the panel's page, written
+  // later, has it on "opus". The later one is what the picker shows, so
+  // picking "sonnet" again is a change and is sent.
+  location.hash = `#/c/${id(1)}`;
+  const read = { ...conversation(1, "Robins"), model: "sonnet" };
+  const moved = {
+    ...read,
+    model: "opus",
+    updated_at: "2026-09-03T10:00:00Z",
+  };
+  const { fetch } = await shell(undefined, (call) => {
+    if (call.method === "PUT") {
+      return json({ ...read, updated_at: "2026-09-04T10:00:00Z" });
+    }
+    if (call.url === `/api/conversations/${id(1)}`) {
+      return json(opened(read, []));
+    }
+    if (call.url.startsWith("/api/conversations?")) {
+      return json(page([moved]));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "sonnet" },
+    });
+    await settled();
+  });
+  expect(
+    callsTo(fetch, `/api/conversations/${id(1)}/model`, "PUT").map(
+      (call) => call.body,
+    ),
+  ).toEqual([{ model_id: "sonnet" }]);
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+});
+
 test("without the list of models, the line still says which model it is on", async () => {
   location.hash = `#/c/${id(1)}`;
   await shell(undefined, (call) => {

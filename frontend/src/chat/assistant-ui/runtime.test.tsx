@@ -14,6 +14,7 @@ import {
   LOST_TOUCH,
   MODEL_GONE,
   MODEL_GONE_NEW_CHAT,
+  STILL_ANSWERING,
   useChat,
 } from "./runtime";
 import {
@@ -1413,6 +1414,101 @@ test("a regeneration refused because the model has gone says so", async () => {
     "m1",
     "m2",
   ]);
+});
+
+test("an edit refused because the conversation is answering goes back into its edit box", async () => {
+  // Another tab began a run: the server refuses the edit (409), and sending
+  // it again once that answer is done has to be an edit still.
+  stub((call) => {
+    if (call.url === `/api/conversations/${CONVERSATION}`) {
+      return json(opened(conversation(1), TREE));
+    }
+    if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
+      return refusal(409, "RunAlreadyActiveError", `run ${RUN} is running`);
+    }
+    return undefined;
+  });
+  const { result } = chatting({ conversationId: CONVERSATION });
+  await waitFor(() => {
+    expect(result.current.state.messages).toHaveLength(2);
+  });
+  await act(async () => {
+    result.current.runtime.thread.append({
+      role: "user",
+      content: [{ type: "text", text: "why, really?" }],
+      parentId: null,
+      sourceId: "m1",
+    });
+    await settle();
+  });
+  expect(result.current.state.ended).toBe(STILL_ANSWERING);
+  const edit = result.current.runtime.thread.getMessageById("m1").composer;
+  expect(edit.getState().isEditing).toBe(true);
+  expect(edit.getState().text).toBe("why, really?");
+  expect(result.current.runtime.thread.composer.getState().text).toBe("");
+});
+
+/** A conversation of `TREE` with a run going in it, as a chat sees it. */
+async function answering() {
+  const { response } = writable({
+    headers: streamHeaders(RUN, CONVERSATION),
+  });
+  stub((call) => {
+    if (call.url === `/api/conversations/${CONVERSATION}`) {
+      return json(opened(conversation(1), TREE));
+    }
+    if (call.url === `/api/conversations/${CONVERSATION}/turns`) {
+      return response;
+    }
+    return undefined;
+  });
+  const chat = chatting({ conversationId: CONVERSATION });
+  await waitFor(() => {
+    expect(chat.result.current.state.messages).toHaveLength(2);
+  });
+  await act(async () => {
+    void chat.result.current.runtime.thread.append("and then?");
+    await settle();
+  });
+  expect(chat.result.current.state.runId).toBe(RUN);
+  return chat;
+}
+
+test("an edit not sent while a run is going goes back into its edit box", async () => {
+  const { result } = await answering();
+  await act(async () => {
+    void result.current.runtime.thread.append({
+      role: "user",
+      content: [{ type: "text", text: "why, really?" }],
+      parentId: null,
+      sourceId: "m1",
+    });
+    await settle();
+  });
+  expect(result.current.state.notice).toBe(ONE_AT_A_TIME);
+  const edit = result.current.runtime.thread.getMessageById("m1").composer;
+  expect(edit.getState().isEditing).toBe(true);
+  expect(edit.getState().text).toBe("why, really?");
+  expect(result.current.runtime.thread.composer.getState().text).toBe("");
+});
+
+test("an edit whose message has left the thread is kept in the main box", async () => {
+  // Nothing to reopen: asking the runtime for it would throw, and the chat
+  // would be replaced by the error boundary. The text is kept all the same.
+  const { result } = await answering();
+  await act(async () => {
+    void result.current.runtime.thread.append({
+      role: "user",
+      content: [{ type: "text", text: "why, really?" }],
+      parentId: null,
+      sourceId: "gone",
+    });
+    await settle();
+  });
+  expect(result.current.state.notice).toBe(ONE_AT_A_TIME);
+  expect(result.current.runtime.thread.composer.getState().text).toBe(
+    "why, really?",
+  );
 });
 
 test("a first message refused for its model says so, and hands the model back", async () => {
