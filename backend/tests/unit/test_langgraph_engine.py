@@ -895,19 +895,11 @@ async def test_a_thinking_block_with_no_signature_is_streamed_and_not_kept() -> 
     # the model signs nothing for, then its encrypted reasoning, opaque.
     model = ScriptedChatModel(
         chunks=[
-            AIMessageChunk(
-                content=[{"type": "thinking", "thinking": "a summary", "index": 0}],
-                response_metadata=dict(ANTHROPIC),
-            ),
-            AIMessageChunk(
-                content=[{"type": "redacted_thinking", "data": "OPAQUE", "index": 1}],
-                response_metadata=dict(ANTHROPIC),
-            ),
-            AIMessageChunk(
-                content=[{"type": "text", "text": "Hi.", "index": 2}],
-                response_metadata=dict(ANTHROPIC),
-            ),
-        ]
+            [{"type": "thinking", "thinking": "a summary", "index": 0}],
+            [{"type": "redacted_thinking", "data": "OPAQUE", "index": 1}],
+            [{"type": "text", "text": "Hi.", "index": 2}],
+        ],
+        provider_metadata=dict(ANTHROPIC),
     )
 
     seen = await turn_of(engine(model), (question(),))
