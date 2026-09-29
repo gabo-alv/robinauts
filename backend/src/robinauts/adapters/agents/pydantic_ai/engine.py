@@ -13,9 +13,10 @@ sub-package and deleting it and its dependencies breaks those and nothing
 else: its import in ``robinauts.app`` and its one entry in ``ENGINES``; the
 contract exceptions in ``backend/pyproject.toml`` that name the sub-package;
 this sub-package's own tests; and the **shared swap fixtures** under
-``tests/`` (``tests/engines.py``, ``tests/unit/test_engine_swap.py`` and the
-configuration swap in ``tests/integration/test_create_app.py``), which exist
-to name both engines at once and cannot be written without both. The
+``tests/`` (``tests/engines.py``, ``tests/unit/test_engine_swap.py``,
+``tests/unit/test_engines_over_chat_completions.py`` and the configuration swap
+in ``tests/integration/test_create_app.py``), which exist to name both engines
+at once and cannot be written without both. The
 composition tests (``tests/unit/test_app_composition.py``) fail too and name
 no adapter: they say that *both* engines are wired, which is a claim about the
 table and not about either sub-package (``docs/layout.md``).

@@ -515,14 +515,13 @@ tools = ["github", "jira", "learn"]
   reaches for it only to count tokens (`get_num_tokens` and its relatives),
   which neither the engine nor the platform calls, and Pydantic AI only in
   its embeddings, which are not used; so no tokenizer file is fetched and
-  the asset question does not arise. A turn is held to that by the
-  engines' tests: in each, the OpenAI turn test
+  the asset question does not arise. A turn is held to that under each
+  engine by one test run under both
   (`test_an_openai_turn_streams_its_text_and_sends_the_configuration_s_request`,
-  in `tests/unit/test_langgraph_engine.py` and
-  `tests/unit/test_pydantic_ai_engine.py`) replaces `tiktoken`'s
-  `get_encoding` and `encoding_for_model` with functions that fail the test,
-  so a warm tokenizer cache, which closed sockets would not notice, cannot
-  hide a call.
+  in `tests/unit/test_engines_over_chat_completions.py`), which replaces
+  `tiktoken`'s `get_encoding` and `encoding_for_model` with functions that
+  fail the test, so a warm tokenizer cache, which closed sockets would not
+  notice, cannot hide a call.
 - So **both engines reach all four kinds**: `anthropic` and
   `anthropic-compatible` through the Anthropic client, `openai` and
   `openai-compatible` through the OpenAI one (`langchain-openai` under

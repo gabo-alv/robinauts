@@ -48,22 +48,22 @@ import pytest
 import chat_completions
 from aio import asyncio_test
 from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition, answer, question
-from engines import MODELS, Scripts, both_engines, scripts
+from engines import (
+    MODELS,
+    Scripts,
+    both_engines,
+    chat_completions_turn,
+    over_chat_completions,
+    scripts,
+)
 from fakes import CountingIdSource, FakeClock, MemoryConversationStore
-from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals, ProviderKeys
-from robinauts.adapters.agents.langgraph import LangGraphAgent
-from robinauts.adapters.agents.langgraph import chat_model as langgraph_chat_model
-from robinauts.adapters.agents.pydantic_ai import PydanticAIAgent
-from robinauts.adapters.agents.pydantic_ai import chat_model as pydantic_ai_chat_model
+from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
 from robinauts.application import Turns
 from robinauts.core import message_to_data
 from robinauts.domain import (
     FORMAT_VERSION,
     Engine,
     Message,
-    ModelConfig,
-    ModelProviderConfig,
-    ModelsConfig,
     ProviderKind,
     Role,
     Run,
@@ -292,8 +292,6 @@ async def test_a_conversation_moved_to_another_model_runs_on_it_under_either_eng
 # --- the same request over Chat Completions ----------------------------------
 
 
-GPT = "gpt"
-
 SEARCH = ToolDefinition(
     name="github__search",
     description="",
@@ -360,49 +358,20 @@ def _history() -> tuple[Message, ...]:
     return (first, looked, failed, again, found, told, second, silent, last)
 
 
-def _openai_models(engine: Engine, kind: ProviderKind) -> ModelsConfig:
-    base_url = "https://gateway.example.test/v1" if kind is ProviderKind.OPENAI_COMPATIBLE else None
-    return ModelsConfig(
-        providers={
-            "openai": ModelProviderConfig(
-                id="openai", kind=kind, api_key_env="K", base_url=base_url
-            )
-        },
-        models={
-            GPT: ModelConfig(
-                id=GPT, provider="openai", name=chat_completions.MODEL_NAME, max_output_tokens=1234
-            )
-        },
-        agents={
-            AGENT: agent_definition(id=AGENT, model=GPT, engine=engine, system_prompt=SYSTEM_PROMPT)
-        },
-    )
-
-
 async def _sent_by(engine: Engine, kind: ProviderKind) -> dict[str, Any]:
     """The request the engine sends for the history, as the JSON it is."""
     vendor = chat_completions.Vendor(
         chat_completions.streamed(*chat_completions.said("Fine."), *chat_completions.finished())
     )
-    models = _openai_models(engine, kind)
-    keys = ProviderKeys({"openai": "not-a-real-key"})
-
-    def plugged(model: ModelConfig, provider: ModelProviderConfig, key: str) -> Any:
-        if engine is Engine.LANGGRAPH:
-            built: Any = langgraph_chat_model(model, provider, key)
-            vendor.plugged_into(built.root_async_client)
-        else:
-            built = pydantic_ai_chat_model(model, provider, key)
-            vendor.plugged_into(built.client)
-        return built
-
-    agent: Any = (
-        LangGraphAgent(models, keys, chat_model_for=plugged)
-        if engine is Engine.LANGGRAPH
-        else PydanticAIAgent(models, keys, model_for=plugged)
+    provider = (
+        chat_completions.GATEWAY_PROVIDER
+        if kind is ProviderKind.OPENAI_COMPATIBLE
+        else chat_completions.OPENAI_PROVIDER
     )
-    async for _ in agent.run_turn(models.agents[AGENT], _history(), (SEARCH, READ), model=GPT):
-        pass
+    agent = over_chat_completions(engine, vendor, provider, max_output_tokens=1234)
+
+    await chat_completions_turn(agent, engine, _history(), (SEARCH, READ))
+
     body = json.loads(vendor.request.content)
     assert isinstance(body, dict)
     return body

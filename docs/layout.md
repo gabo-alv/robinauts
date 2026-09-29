@@ -275,7 +275,8 @@ sub-package and its dependencies must break those and nothing else: the
 import in `app.py` and its one entry in that module's `ENGINES` table; the
 contract exceptions in `backend/pyproject.toml` that name the sub-package;
 the sub-package's own tests; and the **shared swap fixtures** under
-`backend/tests/` — `engines.py`, `unit/test_engine_swap.py` and the
+`backend/tests/` — `engines.py`, `unit/test_engine_swap.py`,
+`unit/test_engines_over_chat_completions.py` and the
 configuration swap in `integration/test_create_app.py` — which exist to name
 both engines at once and cannot be written without both.
 
