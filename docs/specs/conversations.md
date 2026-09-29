@@ -169,7 +169,14 @@ from it on every turn ([agents.md](agents.md)).
   it, no Markdown export writes it, and no other vendor is sent it. A JSON
   export writes the document whole, `extras` included. The blocks are bound
   to the model that made them, so a conversation moved to another model
-  loses them and nothing else. Blocks that do not fit the bound are left
+  loses them and nothing else. Only a block the vendor takes back is kept
+  and replayed: a `thinking` block with its signature, or a
+  `redacted_thinking` block with its data. A model that signs nothing —
+  GPT through OpenRouter's Messages API sends its reasoning summary as an
+  unsigned `thinking` block — has that block streamed as reasoning and then
+  neither stored nor sent back, since the vendor refuses the whole request
+  over one; both engines hold to this, and the LangGraph adapter checks it
+  on the way back too. Blocks that do not fit the bound are left
   out and the answer is stored without them, with a line in the log saying
   what that may cost (the vendor may refuse the next round of a tool turn
   replayed without its thinking). Where the blocks are also bound to the

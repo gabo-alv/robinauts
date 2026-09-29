@@ -28,6 +28,7 @@ Four subjects:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -886,6 +887,62 @@ async def test_the_vendors_signed_blocks_come_out_in_extras_and_the_thinking_is_
             }
         },
     )
+
+
+@asyncio_test
+async def test_a_thinking_block_with_no_signature_is_streamed_and_not_kept() -> None:
+    # What OpenRouter sends for GPT over the Messages API: a readable summary
+    # the model signs nothing for, then its encrypted reasoning, opaque.
+    model = ScriptedChatModel(
+        chunks=[
+            [{"type": "thinking", "thinking": "a summary", "index": 0}],
+            [{"type": "redacted_thinking", "data": "OPAQUE", "index": 1}],
+            [{"type": "text", "text": "Hi.", "index": 2}],
+        ],
+        provider_metadata=dict(ANTHROPIC),
+    )
+
+    seen = await turn_of(engine(model), (question(),))
+
+    check_engine_events(seen)
+    assert [event.text for event in seen if isinstance(event, AnswerReasoningDelta)] == [
+        "a summary"
+    ]
+    assert seen[-1] == AnswerCompleted(
+        parts=(TextPart("Hi."),),
+        extras={VENDOR: {"thinking": [{"type": "redacted_thinking", "data": "OPAQUE"}]}},
+    )
+
+
+@asyncio_test
+async def test_a_stored_block_the_vendor_would_refuse_is_not_replayed() -> None:
+    # An answer stored before the blocks were checked may hold unsigned ones,
+    # and the vendor refuses the whole request over one of them.
+    asked, calling_, results = turn_with_tools()
+    stored = dataclasses.replace(
+        calling_,
+        extras={
+            VENDOR: {
+                "thinking": [
+                    {"type": "thinking", "thinking": "unsigned"},
+                    {"type": "thinking", "thinking": "empty", "signature": ""},
+                    {"type": "redacted_thinking", "data": ""},
+                    {"type": "thinking", "thinking": "hm", "signature": "SIG"},
+                    {"type": "redacted_thinking", "data": "OPAQUE"},
+                ]
+            }
+        },
+    )
+    model = ScriptedChatModel(chunks=["Found three."])
+
+    await turn_of(engine(model), (asked, stored, results))
+
+    (sent,) = model.seen
+    assert sent[2].content[:2] == [
+        {"type": "thinking", "thinking": "hm", "signature": "SIG"},
+        {"type": "redacted_thinking", "data": "OPAQUE"},
+    ]
+    assert sent[2].content[2:] == [{"type": "text", "text": "Let me look."}]
 
 
 @asyncio_test
