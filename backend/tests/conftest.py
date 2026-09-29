@@ -41,7 +41,14 @@ import pytest
 
 sys.dont_write_bytecode = True
 
-VENDOR_LOGGERS = ("anthropic", "anthropic._base_client", "httpx2", "httpcore2")
+VENDOR_LOGGERS = (
+    "anthropic",
+    "anthropic._base_client",
+    "openai",
+    "openai._base_client",
+    "httpx2",
+    "httpcore2",
+)
 """The loggers an agent engine pins when it is built, whichever engine it is.
 
 Named here rather than imported from either adapter: this file is loaded for

@@ -25,8 +25,9 @@ api_key_env = "@KEY_VARIABLE@"
 # something to switch to. Which three depends on the provider's kind, and
 # demo/start.sh chooses them: through OpenRouter, Claude, GPT and Gemini, since
 # OpenRouter serves every vendor's models behind the one Messages API; through
-# Anthropic itself, three Claude models, since that is all it serves. Each id
-# names its default model, so that a conversation on one the other kind does
+# Anthropic itself, three Claude models, and through OpenAI itself, three GPT
+# models, since that is all each serves. Each id names its default model,
+# whichever key reaches it, so that a conversation on one another key does
 # not offer is refused as not offered rather than answered by another. A model
 # an operator chose instead keeps the default's id, which then no longer names
 # it (demo/README.md, "What you can change"). A title is what the picker shows,

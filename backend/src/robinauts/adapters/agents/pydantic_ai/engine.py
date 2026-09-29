@@ -13,9 +13,10 @@ sub-package and deleting it and its dependencies breaks those and nothing
 else: its import in ``robinauts.app`` and its one entry in ``ENGINES``; the
 contract exceptions in ``backend/pyproject.toml`` that name the sub-package;
 this sub-package's own tests; and the **shared swap fixtures** under
-``tests/`` (``tests/engines.py``, ``tests/unit/test_engine_swap.py`` and the
-configuration swap in ``tests/integration/test_create_app.py``), which exist
-to name both engines at once and cannot be written without both. The
+``tests/`` (``tests/engines.py``, ``tests/unit/test_engine_swap.py``,
+``tests/unit/test_engines_over_chat_completions.py`` and the configuration swap
+in ``tests/integration/test_create_app.py``), which exist to name both engines
+at once and cannot be written without both. The
 composition tests (``tests/unit/test_app_composition.py``) fail too and name
 no adapter: they say that *both* engines are wired, which is a claim about the
 table and not about either sub-package (``docs/layout.md``).
@@ -78,18 +79,28 @@ before the framework would look for one anyway.
   built from the text deltas alone -- and the signed blocks are never read
   as reasoning either: they are carried and replayed, as the vendor's data.
 
+**Two protocols, four kinds** (``PydanticAIAgent.kinds``). ``AnthropicModel``
+speaks Anthropic's Messages API, to Anthropic or to an ``anthropic-compatible``
+endpoint; ``OpenAIChatModel`` speaks OpenAI's **Chat Completions** -- never the
+Responses API, which is ``OpenAIResponsesModel`` and is not built here -- to
+OpenAI or to an ``openai-compatible`` endpoint (``chat_model``). Everything
+past the model is one path for both: the framework hands either protocol's
+stream over as the same part events, and the mapping below reads those.
+
 **Nothing phones home** (``docs/specs/core.md``). Pydantic AI's instrumentation
 is turned off explicitly on every agent it builds (``force_tracing_off``,
 ``_runner``), so no tracer, no exporter and no Logfire client is ever made
 whatever the environment says; and a vendor's client is built from the
 configuration rather than from the environment -- the endpoint, the key and
-the key's header (``ANTHROPIC_ENDPOINT``, ``clear_client_overrides``).
+the key's header (``ANTHROPIC_ENDPOINT``, ``OPENAI_ENDPOINT``,
+``clear_client_overrides``).
 
 **And nothing is written down either.** The platform's logs never carry
-conversation content: the vendor SDK's loggers that write request bodies --
-which on ``ANTHROPIC_LOG``, and on any root logger turned up afterwards, put
-every request's messages and system prompt on standard error -- are pinned at
-``WARNING`` when the engine is built (``quiet_client_logging``).
+conversation content: the vendor SDKs' loggers -- which on ``ANTHROPIC_LOG``
+or ``OPENAI_LOG``, and on any root logger turned up afterwards, are switched on
+for the whole process, and the first of them puts every request's messages
+and system prompt on standard error -- are pinned at ``WARNING`` when the
+engine is built (``quiet_client_logging``).
 
 **Failure and cancellation** are the port's. Whatever the provider raises
 travels out of the generator as it is; ``CancelledError`` is never swallowed;
@@ -112,11 +123,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
-from typing import Any
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 import pydantic_ai
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+from openai.types.chat import chat_completion_chunk
 from pydantic_ai import Agent as FrameworkAgent
 from pydantic_ai import ModelRequest, ModelResponse, ModelSettings
 from pydantic_ai.messages import (
@@ -138,8 +152,10 @@ from pydantic_ai.messages import TextPart as FrameworkTextPart
 from pydantic_ai.messages import ToolCallPart as FrameworkToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIStreamedResponse
 from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.tools import ToolDefinition as FrameworkToolDefinition
 from pydantic_ai.toolsets import ExternalToolset
 
@@ -198,6 +214,46 @@ adapters do not import each other (``docs/layout.md``), and deleting either
 must leave the other whole.
 """
 
+OPENAI_ENDPOINT = "https://api.openai.com/v1"
+"""Where OpenAI is, said here rather than left to the client to decide.
+
+The same rule as ``ANTHROPIC_ENDPOINT``, for the other vendor: the OpenAI SDK
+falls back to ``OPENAI_BASE_URL`` when no base URL is passed, and a variable
+inherited from a shell or an image would send every turn and the operator's
+key to the host it named. So the ``openai`` kind is reached here and nowhere
+else, and it has no ``base_url`` to offer (``domain.KINDS_WITH_BASE_URL``).
+
+Spelt, unlike Anthropic's, **with** the ``/v1``: what OpenAI's client appends
+to a base URL is ``/chat/completions`` alone, so the version is part of the
+prefix -- which is also what an ``openai-compatible`` provider's ``base_url``
+is (``endpoint_of``).
+"""
+
+ANTHROPIC_KINDS: frozenset[ProviderKind] = frozenset(
+    {ProviderKind.ANTHROPIC, ProviderKind.ANTHROPIC_COMPATIBLE}
+)
+"""The kinds that speak Anthropic's Messages API, reached through ``AnthropicModel``."""
+
+OPENAI_KINDS: frozenset[ProviderKind] = frozenset(
+    {ProviderKind.OPENAI, ProviderKind.OPENAI_COMPATIBLE}
+)
+"""The kinds that speak OpenAI's Chat Completions, reached through ``OpenAIChatModel``.
+
+Which model a turn is given is decided by these two sets and nothing else
+(``chat_model``), and a kind in neither is refused rather than handed to
+whichever client is nearer.
+"""
+
+COMPATIBLE_KINDS: frozenset[ProviderKind] = frozenset(
+    {ProviderKind.ANTHROPIC_COMPATIBLE, ProviderKind.OPENAI_COMPATIBLE}
+)
+"""The two kinds whose endpoint is the operator's ``base_url`` (``endpoint_of``).
+
+Written out here rather than read off ``domain.KINDS_WITH_BASE_URL``, which is
+the same two today: that set says which kinds the configuration gives an
+address, and this one which addresses this engine has a client to send to.
+"""
+
 TRACING_VARIABLES_REMOVED: tuple[str, ...] = ()
 """What ``force_tracing_off`` takes out of the environment: nothing.
 
@@ -217,11 +273,19 @@ adapter reaching further than it needs to (compare the LangGraph adapter,
 where a variable really is load-bearing).
 """
 
-CLIENT_VARIABLES_REMOVED = ("ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_LOG")
+CLIENT_VARIABLES_REMOVED = (
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_LOG",
+    "OPENAI_CUSTOM_HEADERS",
+    "OPENAI_LOG",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT_ID",
+    "OPENAI_ADMIN_KEY",
+)
 """The variables ``clear_client_overrides`` takes out of the environment.
 
-The two the client reads that **no argument can override**; the endpoint and
-the key are arguments, and an argument wins.
+The ones the two clients read that **no argument can override**; the endpoint
+and the key are arguments, and an argument wins.
 
 ``ANTHROPIC_CUSTOM_HEADERS`` because the SDK *merges* what it holds into
 whatever the caller passed, so one line of it replaces the ``x-api-key``
@@ -239,12 +303,45 @@ variable is only half the answer, since by construction time the import has
 already happened: ``quiet_client_logging`` is the other half, and it is the
 half that works.
 
+The OpenAI SDK, which this engine builds its OpenAI client from, has the same
+two and three more. ``OPENAI_CUSTOM_HEADERS`` is merged exactly as Anthropic's
+is -- the key travels in ``Authorization`` there, and an ``Authorization`` line
+in the variable is dropped only when the caller passed one, which
+``chat_model`` always does (``OPENAI_KEY_HEADER``); anything else in it would
+be sent on every turn. ``OPENAI_LOG`` is read at import, as ``ANTHROPIC_LOG``
+is, and on ``debug`` puts the ``openai`` logger at ``DEBUG`` and calls
+``logging.basicConfig()``; this version of the SDK writes no request body
+there, but the promise is not left to rest on what one version happens to log.
+``OPENAI_ORG_ID`` and ``OPENAI_PROJECT_ID`` are read when the client is built
+and not given, and ``None`` -- the only way to say "none" -- *is* not given,
+so no argument can keep an ``OpenAI-Organization`` or ``OpenAI-Project``
+header nobody configured off a turn. And ``OPENAI_ADMIN_KEY`` is a second
+credential the client picks up whenever it is not passed one, and holds for
+the life of the client: not what a chat request is signed with, and still a
+key the operator did not configure for this provider.
+
 Removed once, at construction, and never per turn: a process-wide edit made
 while turns are running would be one turn changing another's environment.
+
+What is **not** here, because an argument does say it or because nothing on a
+turn's path reads it: ``OPENAI_API_KEY`` and ``OPENAI_BASE_URL`` (the key and
+the endpoint are passed; ``OpenAIProvider`` looks at both only when it builds a
+client, and it is handed one), ``OPENAI_WEBHOOK_SECRET`` (read into the client
+and used only to verify a webhook, which the platform never receives), and the
+Azure and Bedrock variables (``AZURE_OPENAI_*``, ``OPENAI_API_TYPE``,
+``OPENAI_API_VERSION``, ``AWS_*``), which only the SDK's module-level client
+and its Azure and Bedrock clients read, none of them ever built.
 """
 
-QUIET_CLIENT_LOGGERS = ("anthropic", "anthropic._base_client", "httpx2", "httpcore2")
-"""The loggers ``quiet_client_logging`` pins, and why these four.
+QUIET_CLIENT_LOGGERS = (
+    "anthropic",
+    "anthropic._base_client",
+    "openai",
+    "openai._base_client",
+    "httpx2",
+    "httpcore2",
+)
+"""The loggers ``quiet_client_logging`` pins, and why these six.
 
 ``anthropic`` is the SDK's own, and ``anthropic._base_client`` is the module
 that **emits** the record carrying a request's ``json_data`` -- the system
@@ -255,6 +352,11 @@ entry in somebody's ``dictConfig`` would walk straight past a pin on
 its own, so this is **not** the ``httpx`` the sign-in adapter uses and pinning
 it silences nothing of ours -- and ``httpcore2`` is the connection layer under
 that, which logs request lines and headers.
+
+``openai`` and ``openai._base_client`` are the same pair in the other vendor's
+SDK, which is built on the same ``httpx2``. This version of it writes no request
+body at ``DEBUG``, but ``OPENAI_LOG`` still turns the pair on for the whole
+process, and a pin is cheaper than a promise that holds until an upgrade.
 
 What this list is, and is not: the vendor loggers that write request bodies.
 A logger an operator names at ``DEBUG`` in their own logging configuration
@@ -280,6 +382,15 @@ Belt as well as braces, and per client rather than process-wide: a header the
 caller passes wins over anything merged in from the environment, so the key
 that is sent is the configured one whether or not the variable above was there
 to be removed.
+"""
+
+OPENAI_KEY_HEADER = "Authorization"
+"""The header OpenAI's key travels in, as ``Bearer <key>``, pinned by ``chat_model``.
+
+The same belt as ``ANTHROPIC_KEY_HEADER``, and a little more than a belt: the
+OpenAI SDK drops an ``Authorization`` line of ``OPENAI_CUSTOM_HEADERS`` only
+when the caller passed an ``Authorization`` header of its own, so passing one is
+what makes the configured key the only one that can be sent.
 """
 
 MAX_RETRIES = 0
@@ -309,6 +420,18 @@ Its API requires a ceiling on every request, so an engine that sent none would
 not work at all; the number is the client's business rather than the
 platform's, which is why ``ModelConfig.max_output_tokens`` defaults to "leave
 it to the engine" and this is where "the engine" answers.
+"""
+
+DEFAULT_OPENAI_OUTPUT_TOKENS: int | None = None
+"""What an OpenAI-protocol provider is asked for when the configuration says nothing: no ceiling.
+
+Chat Completions requires none, and the model's own limit is then the ceiling.
+On OpenAI's reasoning models the ceiling covers the reasoning tokens as well
+as the answer, so a number picked to bound an answer can be spent entirely on
+thinking and leave an empty one. An operator who wants a bound writes
+``max_output_tokens``, and it is sent in the field the kind takes
+(``_as_chat_completions``) -- which is what the other engine sends too
+(``docs/specs/agents.md``).
 """
 
 
@@ -358,17 +481,20 @@ def clear_client_overrides() -> None:
     """Take out of the environment what no argument can override.
 
     The other half of "a vendor's client is built from the configuration and
-    not from the environment" (``ANTHROPIC_ENDPOINT``). An endpoint and a key
-    are arguments, and an argument wins; **headers are merged**, so the only
-    way to say "and nothing else" is for the variable not to be there
-    (``CLIENT_VARIABLES_REMOVED``).
+    not from the environment" (``ANTHROPIC_ENDPOINT``, ``OPENAI_ENDPOINT``). An
+    endpoint and a key are arguments, and an argument wins; **headers are
+    merged**, and an organisation, a project and an admin key are read
+    whenever the argument is ``None`` -- which is the only way to pass
+    "none" -- so the only way to say "and nothing else" is for the variable not
+    to be there (``CLIENT_VARIABLES_REMOVED``).
 
     An adapter may touch the environment -- it is the layer that may -- and
     this does it once, when the engine is built at start-up, so that no turn
-    ever edits the environment another turn is reading. ``ANTHROPIC_LOG``
-    goes with them so that a subprocess this deployment starts does not import
-    the SDK and turn its own logging on again; what protects **this** process,
-    where the import has already happened, is ``quiet_client_logging``.
+    ever edits the environment another turn is reading. ``ANTHROPIC_LOG`` and
+    ``OPENAI_LOG`` go with them so that a subprocess this deployment starts
+    does not import an SDK and turn its own logging on again; what protects
+    **this** process, where the imports have already happened, is
+    ``quiet_client_logging``.
     """
     for name in CLIENT_VARIABLES_REMOVED:
         os.environ.pop(name, None)
@@ -379,7 +505,8 @@ def quiet_client_logging() -> None:
 
     **The platform's logs never carry conversation content, and never a key.**
     The Anthropic SDK reads ``ANTHROPIC_LOG`` at *import* -- before anything
-    here exists -- and on ``debug`` puts its own logger and its HTTP client's
+    here exists, as the OpenAI SDK reads ``OPENAI_LOG``, whose loggers are
+    pinned the same way -- and on ``debug`` puts its own logger and its HTTP client's
     at ``DEBUG`` and calls ``logging.basicConfig()``, which attaches a handler
     to the root logger if nothing else has. What the SDK's logger then writes
     for every call is "Request options: ..." with the request's ``json_data``
@@ -418,28 +545,36 @@ def quiet_client_logging() -> None:
 
 
 def endpoint_of(provider: ModelProviderConfig) -> str:
-    """Where that provider is: the address the operator gave, or Anthropic's own.
+    """Where that provider is: the address the operator gave, or the vendor's own.
 
-    The two kinds this engine reaches are a **vendor** and a **protocol**
-    (``PydanticAIAgent.kinds``). ``anthropic`` is Anthropic, at
-    ``ANTHROPIC_ENDPOINT`` and nowhere else, and it has no ``base_url`` to
-    offer. ``anthropic-compatible`` is an endpoint the operator names that
-    speaks the same Messages API -- OpenRouter's is one -- so the address is
+    The four kinds this engine reaches are two **vendors** and two
+    **protocols** (``PydanticAIAgent.kinds``). ``anthropic`` is Anthropic, at
+    ``ANTHROPIC_ENDPOINT`` and nowhere else, and ``openai`` is OpenAI, at
+    ``OPENAI_ENDPOINT``; neither has a ``base_url`` to offer.
+    ``anthropic-compatible`` and ``openai-compatible`` are endpoints the
+    operator names that speak the same protocol as the vendor -- OpenRouter
+    serves both, a vLLM server or a gateway the second -- so the address is
     theirs, checked where every configured endpoint is
     (``domain.is_endpoint_url``: https, or http on the loopback interface, no
     query, no fragment and no credential written into it).
 
     **A base URL is a prefix the client appends the protocol's own path to**,
-    so an operator reaching OpenRouter writes ``https://openrouter.ai/api``
-    and the request goes to ``https://openrouter.ai/api/v1/messages``
+    and the two protocols' paths differ. Anthropic's client appends
+    ``/v1/messages``, so an operator reaching OpenRouter that way writes
+    ``https://openrouter.ai/api`` and the request goes to
+    ``https://openrouter.ai/api/v1/messages``; OpenAI's appends
+    ``/chat/completions``, so the version is the operator's to write, and the
+    same OpenRouter over OpenAI's protocol is ``https://openrouter.ai/api/v1``,
+    reached at ``https://openrouter.ai/api/v1/chat/completions``
     (``docs/specs/agents.md``).
 
     A provider of any other kind should not arrive here: the configuration was
-    held to ``PydanticAIAgent.kinds`` at start-up. One that does -- a kind added to
-    that set without a branch here, a caller that built a definition by hand --
-    gets a refusal naming it, and never a turn sent to whichever endpoint
-    happened to be nearest. The tests ask it of every kind the engine does not
-    offer, so this is a branch that is exercised rather than merely written.
+    held to ``PydanticAIAgent.kinds`` at start-up. One that does -- a kind added
+    to the platform's vocabulary without a branch here, a caller that built a
+    definition by hand -- gets a refusal naming it, and never a turn sent to
+    whichever endpoint happened to be nearest. Every kind there is today has a
+    branch, so the tests reach this one with a kind of their own, which is what
+    keeps it a branch that is exercised rather than merely written.
 
     Spelt out again here rather than imported from the LangGraph adapter: the
     two adapters do not import each other (``docs/layout.md``), and deleting
@@ -447,9 +582,16 @@ def endpoint_of(provider: ModelProviderConfig) -> str:
     """
     if provider.kind is ProviderKind.ANTHROPIC:
         return ANTHROPIC_ENDPOINT
-    if provider.kind is ProviderKind.ANTHROPIC_COMPATIBLE and provider.base_url:
+    if provider.kind is ProviderKind.OPENAI:
+        return OPENAI_ENDPOINT
+    if provider.kind in COMPATIBLE_KINDS and provider.base_url:
         return provider.base_url
-    raise ConfigError(
+    raise _unreachable(provider)
+
+
+def _unreachable(provider: ModelProviderConfig) -> ConfigError:
+    """The refusal for a provider this engine has no client for, naming it."""
+    return ConfigError(
         [
             f"model_providers.{provider.id}: this build of the Pydantic AI engine cannot"
             f" reach a {provider.kind.value} provider"
@@ -463,6 +605,11 @@ def chat_model(model: ModelConfig, provider: ModelProviderConfig, key: str) -> M
     The key is passed in and not read here: what may touch the environment is
     ``robinauts.adapters.config_file``, and what reaches this is one key for
     one call (``docs/specs/agents.md``).
+
+    **The provider's kind chooses the model, and nothing else does**: the two
+    Anthropic kinds get ``AnthropicModel``, described below, and the two
+    OpenAI kinds ``OpenAIChatModel`` (``_openai_model``). A kind in neither set
+    is refused, naming the provider.
 
     **The vendor's client is built here rather than by the provider**, because
     two of the things that must be pinned are the client's and not the
@@ -491,9 +638,13 @@ def chat_model(model: ModelConfig, provider: ModelProviderConfig, key: str) -> M
     (``clear_client_overrides``).
 
     The timeout and the output ceiling are **not** here: they travel with the
-    request, as ``ModelSettings`` (``_runner``), which is where the model's
+    request, as ``ModelSettings`` (``_settings``), which is where the model's
     configuration reaches a turn.
     """
+    if provider.kind in OPENAI_KINDS:
+        return _openai_model(model, provider, key)
+    if provider.kind not in ANTHROPIC_KINDS:
+        raise _unreachable(provider)
     client = AsyncAnthropic(
         api_key=key,
         base_url=endpoint_of(provider),
@@ -505,16 +656,195 @@ def chat_model(model: ModelConfig, provider: ModelProviderConfig, key: str) -> M
     )
 
 
+def _openai_model(model: ModelConfig, provider: ModelProviderConfig, key: str) -> Model:
+    """``OpenAIChatModel`` over a client this adapter built itself.
+
+    **The protocol is Chat Completions, for both kinds**: the framework's
+    ``OpenAIChatModel``, and never its ``OpenAIResponsesModel``. An
+    ``openai-compatible`` endpoint -- a gateway, vLLM, OpenRouter -- speaks
+    Chat Completions, one protocol for both kinds keeps the two kinds and the
+    two engines symmetric, and the LangGraph engine sends the same request
+    through ``ChatOpenAI`` (``docs/specs/agents.md``). The Responses API is a
+    decision of its own.
+
+    **The client is built here and handed to the provider**, for the reason
+    Anthropic's is: what must be pinned is the client's. The key, so that
+    ``OPENAI_API_KEY`` is never consulted -- ``OpenAIProvider`` looks at it,
+    and at ``OPENAI_BASE_URL``, only when it builds a client of its own, which
+    it is not asked to; the endpoint (``endpoint_of``); no retries
+    (``MAX_RETRIES``); and the key pinned as its header
+    (``OPENAI_KEY_HEADER``). What the SDK reads when an argument is ``None`` --
+    the organisation, the project, the admin key, the headers -- is out of the
+    environment by the time a turn runs (``clear_client_overrides``). There is
+    no vendor-specific proxy variable in this SDK either.
+
+    The timeout and the ceiling travel with the request (``_settings``), and
+    the tool schemas are sent as the servers gave them, the ceiling in the
+    field the kind takes and the answer's text as text
+    (``_as_chat_completions``).
+    """
+    client = AsyncOpenAI(
+        api_key=key,
+        base_url=endpoint_of(provider),
+        max_retries=MAX_RETRIES,
+        default_headers={OPENAI_KEY_HEADER: f"Bearer {key}"},
+    )
+    compatible = provider.kind is ProviderKind.OPENAI_COMPATIBLE
+
+    def profile(given: ModelProfile) -> ModelProfile:
+        return _as_chat_completions(given, compatible=compatible)
+
+    return _ChatCompletionsModel(
+        model.name, provider=OpenAIProvider(openai_client=client), profile=profile
+    )
+
+
+@dataclass
+class _ChatCompletionsStream(OpenAIStreamedResponse):
+    """The framework's Chat Completions stream, holding a streamed call to what it is.
+
+    Two things, both through the hook the framework documents for it
+    (``_map_tool_call_delta``) and its public lookup of a part by the vendor's
+    index (``get_part_by_vendor_id``):
+
+    - **a name sent again is not more of the name.** The framework appends
+      every ``name`` a call's deltas carry, so a server that repeats the id
+      and the name on every delta -- some compatible ones do -- would have
+      the call stored as ``github__searchgithub__search``. A name equal to
+      the one the call already has is dropped before the framework sees it;
+      a name that *differs* is left to arrive, and ``_Answer.complete``
+      refuses the call as one whose name changed after it was announced;
+    - **a call the stream began and never named is refused.** The framework
+      holds such a call as a delta, announces nothing for it and leaves it
+      out of the response it assembles, so the turn would be stored as an
+      answer that asked for nothing. At the end of the stream every call a
+      delta began is looked for among the whole calls, and one that is not
+      there fails the turn, as it does under the other engine.
+
+    **A delta may carry no ``index``**: OpenAI's always do, and a compatible
+    server's need not, in which case the framework keeps the call under no
+    vendor id at all -- a delta with a name begins a new call, and one
+    without continues the latest. So a call is tracked by its index when it
+    has one, and by its id when it has none: an index-less delta's call is
+    "the latest call" for the name check, and is looked for among the whole
+    calls by the id it gave.
+    """
+
+    _streamed_calls: set[int] = field(default_factory=set, init=False)
+    """The indexes the stream's calls came under."""
+    _unindexed_calls: set[str] = field(default_factory=set, init=False)
+    """The ids of the calls whose deltas came with no index."""
+
+    def _map_tool_call_delta(
+        self, choice: chat_completion_chunk.Choice
+    ) -> Iterable[ModelResponseStreamEvent]:
+        for delta in choice.delta.tool_calls or []:
+            index: int | None = delta.index
+            if index is not None:
+                self._streamed_calls.add(index)
+                known: object = self._parts_manager.get_part_by_vendor_id(index)
+            else:
+                if delta.id:
+                    self._unindexed_calls.add(delta.id)
+                whole = self._parts_manager.get_parts()
+                known = whole[-1] if whole else None
+                if (
+                    isinstance(known, FrameworkToolCallPart)
+                    and delta.id
+                    and delta.id != known.tool_call_id
+                ):
+                    known = None
+            if delta.function is not None and delta.function.name:
+                if isinstance(known, FrameworkToolCallPart) and (
+                    known.tool_name == delta.function.name
+                ):
+                    delta.function.name = None
+        yield from super()._map_tool_call_delta(choice)
+
+    async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
+        async for event in super()._get_event_iterator():
+            yield event
+        named = {
+            part.tool_call_id
+            for part in self._parts_manager.get_parts()
+            if isinstance(part, FrameworkToolCallPart)
+        }
+        found = self._parts_manager.get_part_by_vendor_id
+        unnamed = [
+            index
+            for index in self._streamed_calls
+            if not isinstance(found(index), FrameworkToolCallPart)
+        ]
+        if unnamed or not self._unindexed_calls <= named:
+            raise UnsupportedContentError("the model streamed a tool call and never gave its name")
+
+
+class _ChatCompletionsModel(OpenAIChatModel):
+    """The framework's Chat Completions model, streaming through ``_ChatCompletionsStream``.
+
+    ``_streamed_response_cls`` is the framework's documented seam for a
+    stream of one's own; nothing else about the model is changed.
+    """
+
+    @property
+    def _streamed_response_cls(self) -> type[OpenAIStreamedResponse]:
+        return _ChatCompletionsStream
+
+
+def _as_chat_completions(profile: ModelProfile, *, compatible: bool) -> ModelProfile:
+    """The framework's OpenAI profile, less what would make this engine's request its own.
+
+    Three things, each to send what the other engine sends
+    (``docs/specs/agents.md``):
+
+    - the tool schemas as the servers gave them (``_schemas_as_given``);
+    - **no thinking tags**: the framework otherwise lifts a streamed
+      ``<think>`` delta, and what follows it up to ``</think>``, out of the
+      answer's text and into thinking. ``langchain-openai`` does no such
+      thing, and the platform stores what the vendor wrote as the answer, so
+      the answer's text is text under both engines. (What the framework also
+      reads, and the other does not, are the ``reasoning`` and
+      ``reasoning_content`` fields some compatible servers stream beside the
+      text; that is a field and not a guess about the text, it is shown as
+      reasoning and never kept, and it is recorded as a difference in
+      "Known findings".) With no tags there is nothing for a thinking part
+      in the history to be written back as either, and none is: the thinking
+      a turn streamed is not replayed (``_replayed``);
+    - the ceiling in the field the kind takes: ``max_completion_tokens`` for
+      OpenAI itself, ``max_tokens`` for an ``openai-compatible`` endpoint,
+      which is the field OpenRouter and older servers know -- the
+      framework's own OpenRouter profile makes the same choice.
+
+    **Two constraints come with no tags**, because the framework unpacks the
+    pair unguarded in two places this engine never goes: the non-streamed
+    request path, which splits tags out of a whole answer -- the engine only
+    ever streams (``PydanticAIAgent._turn``, and the tests assert that the
+    request says ``"stream": true``); and writing a thinking part of the
+    history back as text between tags -- the engine replays no thinking to a
+    model reached over this protocol (``_replayed``, and its test). A change
+    that took either path would fail on its first turn, in the tests, rather
+    than in a deployment. Pydantic AI has no switch for "no tags" other than
+    the profile's value, which is why it is ``None`` against the type.
+    """
+    written: dict[str, Any] = {**_schemas_as_given(profile), "thinking_tags": None}
+    if compatible:
+        written["openai_chat_supports_max_completion_tokens"] = False
+    return cast(ModelProfile, written)
+
+
 def _schemas_as_given(profile: ModelProfile) -> ModelProfile:
     """The framework's profile for the model, less its rewriting of a tool's schema.
 
     The framework's Anthropic profile runs every tool's input schema through
-    a transformer that strips ``title`` and ``$schema`` at every depth. The
-    platform promises the opposite: a tool's schema is the server's, handed
+    a transformer that strips ``title`` and ``$schema`` at every depth, and
+    its OpenAI profile through one that rewrites a schema towards OpenAI's
+    strict mode and, where the result qualifies, marks the tool ``strict``.
+    The platform promises the opposite: a tool's schema is the server's, handed
     to the vendor as it is, and two engines send byte-identical lists
     (``docs/specs/agents.md``, "Tools"; ``domain.ToolDefinition``) -- the
-    other engine passes it through untouched, and this one now does too.
-    Everything else the profile says about the model is kept.
+    other engine passes it through untouched, and this one now does too, over
+    either protocol. With no transformer a tool's ``strict`` stays unset, so
+    none is sent. Everything else the profile says about the model is kept.
     """
     return {**profile, "json_schema_transformer": None}
 
@@ -522,25 +852,23 @@ def _schemas_as_given(profile: ModelProfile) -> ModelProfile:
 class PydanticAIAgent(Agent):
     """The Pydantic AI engine: one turn, one agent, built and thrown away."""
 
-    kinds: frozenset[ProviderKind] = frozenset(
-        {ProviderKind.ANTHROPIC, ProviderKind.ANTHROPIC_COMPATIBLE}
-    )
-    """The provider kinds this build of the engine has a client for.
+    kinds: frozenset[ProviderKind] = ANTHROPIC_KINDS | OPENAI_KINDS
+    """The provider kinds this build of the engine has a client for: all four.
 
-    One client, two kinds: ``AsyncAnthropic`` reaches Anthropic itself and any
-    endpoint that speaks Anthropic's Messages API at an address the operator
-    gives (``endpoint_of``). **That is how OpenRouter is reached in this
-    build**: it serves the Messages API and takes the key in the same
-    ``x-api-key`` header, so nothing about the client changes but where it
-    sends the request.
+    Two clients, two kinds each. ``AsyncAnthropic`` reaches Anthropic itself
+    and any endpoint that speaks Anthropic's Messages API at an address the
+    operator gives; ``AsyncOpenAI`` reaches OpenAI itself and any endpoint that
+    speaks OpenAI's Chat Completions (``endpoint_of``, ``chat_model``).
+    OpenRouter speaks both, so it may be configured as either kind -- the
+    Messages API with ``https://openrouter.ai/api``, or Chat Completions with
+    ``https://openrouter.ai/api/v1`` -- and they are two providers, not two
+    spellings of one.
 
-    What is still not here is ``openai`` and ``openai-compatible``, which are
-    reached through ``pydantic-ai-slim[openai]``. The extra is installed now,
-    but nothing here builds its model yet: wiring it is a change of its own. A
-    kind this engine does not build is not offered (``docs/specs/agents.md``),
-    so the configuration refuses the kind at start-up rather than the engine
-    failing at the first turn. Adding it back is this set, a branch in ``chat_model``
-    and the dependency -- nothing else.
+    A kind this engine does not build is not offered (``docs/specs/agents.md``),
+    so the configuration would refuse it at start-up rather than the engine
+    failing at the first turn; today there is no such kind. A new one is this
+    set, a branch in ``endpoint_of`` and ``chat_model``, and its client's
+    dependency -- nothing else.
 
     It is declared by the port (``robinauts.ports.Agent.kinds``) and answered
     here, so that the composition root asks the engine what it can reach
@@ -617,10 +945,14 @@ class PydanticAIAgent(Agent):
         provider = self._models.provider_for(model)
         client = self._model_for(model, provider, self._keys.key_for(provider.id))
         runner = _runner(agent, client, tools, history)
-        settings = _settings(model)
+        settings = _settings(model, provider)
         # The vendor's own name for itself is the key its blocks are kept
-        # under (``VENDOR`` for the two kinds this engine reaches).
-        messages = _messages(history, model_id, client.system)
+        # under (``VENDOR`` for the two Anthropic kinds, ``openai`` for the
+        # other two, which have no signed blocks to keep).
+        # Over Chat Completions nothing is replayed, whatever is stored
+        # (``_replayed``): ``None`` says so.
+        replay_as = None if isinstance(client, OpenAIChatModel) else client.system
+        messages = _messages(history, model_id, replay_as)
         answer = _Answer()
         response: ModelResponse | None = None
         self._open += 1
@@ -719,19 +1051,27 @@ def _declared(tool: ToolDefinition) -> FrameworkToolDefinition:
     )
 
 
-def _settings(model: ModelConfig) -> ModelSettings:
+def _settings(model: ModelConfig, provider: ModelProviderConfig) -> ModelSettings:
     """What the model's configuration says about one request.
 
     The timeout is per model call and is the configuration's
-    (``domain.ModelConfig``); the ceiling is required by Anthropic on every
-    request, so the engine sends one whether or not the operator set it
-    (``DEFAULT_ANTHROPIC_OUTPUT_TOKENS``). Both travel with the request rather
-    than with the client, so that two models of one provider can differ.
+    (``domain.ModelConfig``). The ceiling is required by Anthropic on every
+    request, so over Anthropic's protocol the engine sends one whether or not
+    the operator set it (``DEFAULT_ANTHROPIC_OUTPUT_TOKENS``); over OpenAI's it
+    is sent only when the operator set one (``DEFAULT_OPENAI_OUTPUT_TOKENS``),
+    in the field the kind takes (``_as_chat_completions``). Both travel with
+    the request rather than with the client, so that two models of one
+    provider can differ.
     """
-    return ModelSettings(
-        timeout=model.timeout_seconds,
-        max_tokens=model.max_output_tokens or DEFAULT_ANTHROPIC_OUTPUT_TOKENS,
+    default = (
+        DEFAULT_OPENAI_OUTPUT_TOKENS
+        if provider.kind in OPENAI_KINDS
+        else DEFAULT_ANTHROPIC_OUTPUT_TOKENS
     )
+    ceiling = model.max_output_tokens or default
+    if ceiling is None:
+        return ModelSettings(timeout=model.timeout_seconds)
+    return ModelSettings(timeout=model.timeout_seconds, max_tokens=ceiling)
 
 
 VENDOR = "anthropic"
@@ -739,12 +1079,15 @@ VENDOR = "anthropic"
 
 One vendor's key for one vendor's blocks (``docs/specs/conversations.md``,
 "Reasoning"), and the framework's own name for the vendor (``Model.system``),
-which is what the engine reads at run time: the two kinds this engine reaches
-speak Anthropic's Messages API through one client, so what it stores and
-what it replays are Anthropic's thinking blocks under this key -- the same
-key and the same blocks as the other engine's, which is what lets a
-conversation cross the swap with its thinking (``docs/specs/conversations.md``,
-"What crosses a swap"). An adapter reaching another vendor reads past it.
+which is what the engine reads at run time: the two Anthropic kinds speak the
+Messages API through one client, so what it stores and what it replays for
+them are Anthropic's thinking blocks under this key -- the same key and the
+same blocks as the other engine's, which is what lets a conversation cross the
+swap with its thinking (``docs/specs/conversations.md``, "What crosses a
+swap"). The two OpenAI kinds read ``openai`` off their model instead, and keep
+nothing under it: Chat Completions returns no signed reasoning, and the
+reasoning some compatible endpoints stream is unsigned, which is shown and not
+kept (``_extras``).
 """
 
 REDACTED = "redacted_thinking"
@@ -774,7 +1117,7 @@ BLOCK_NOT_REPLAYED = (
 """What the log says of a block in ``extras`` that is not one the vendor made."""
 
 
-def _messages(history: Sequence[Message], model_id: str, vendor: str) -> list[ModelMessage]:
+def _messages(history: Sequence[Message], model_id: str, vendor: str | None) -> list[ModelMessage]:
     """The history as the framework's messages. The system prompt is not here.
 
     It is the agent's, it is passed as ``instructions`` (``_runner``), and it
@@ -809,7 +1152,14 @@ def _messages(history: Sequence[Message], model_id: str, vendor: str) -> list[Mo
     way, which is what the swap needs. (Their rules differ in one case --
     langchain keeps a *trailing* empty assistant message and Pydantic AI does
     not -- and that case cannot arise here: a history ends in the message
-    being answered, ``robinauts.ports.agents``.)
+    being answered, ``robinauts.ports.agents``.) Over OpenAI's protocol, which
+    takes an empty assistant message, the whole history goes out as the same
+    bytes under both engines: a result that went wrong, for which Chat
+    Completions has no field, is written ``{"error": <text>}`` by the framework
+    here, and the LangGraph adapter writes it the same way, as it moves every
+    other spelling of langchain-openai's to this framework's
+    (``docs/specs/agents.md``, "Known findings"; the test that compares the two
+    is in ``tests/unit/test_engine_swap.py``).
 
     So the line this adapter draws is that the framework decides, from the
     same input, rather than this adapter deciding for it; if a mapping ever
@@ -855,7 +1205,7 @@ def _messages(history: Sequence[Message], model_id: str, vendor: str) -> list[Mo
     return messages
 
 
-def _response(message: Message, model_id: str, vendor: str) -> ModelResponse:
+def _response(message: Message, model_id: str, vendor: str | None) -> ModelResponse:
     """A stored answer as the framework's response: blocks, text, calls, in that order."""
     parts: list[ModelResponsePart] = list(_replayed(message, model_id, vendor))
     parts.append(FrameworkTextPart(content=message.text))
@@ -888,7 +1238,7 @@ def _returned(part: ToolResultPart, named: Mapping[str, str]) -> ToolReturnPart:
     )
 
 
-def _replayed(message: Message, model_id: str, vendor: str) -> list[ThinkingPart]:
+def _replayed(message: Message, model_id: str, vendor: str | None) -> list[ThinkingPart]:
     """The vendor's blocks stored on that answer, as the framework replays them.
 
     Only for the model that made them, and only the two shapes the vendor
@@ -897,7 +1247,18 @@ def _replayed(message: Message, model_id: str, vendor: str) -> list[ThinkingPart
     framework sends a signed part back as the vendor's block and would send
     an unsigned one as *text* between thinking tags, so a block of any other
     shape is left out with a line in the log rather than handed over.
+
+    **Nothing is ever replayed to a model reached over Chat Completions**
+    (``vendor`` is ``None`` for one, ``_messages``). There is nothing to
+    replay -- Chat Completions returns no signed reasoning -- and there must
+    never be anything: the OpenAI models this engine builds have no thinking
+    tags (``_as_chat_completions``), and the framework writes a replayed
+    thinking part to Chat Completions *between* those tags, unpacking them
+    unguarded. So whatever ``extras`` an answer holds, nothing is handed over
+    for it, and a test stores such a block and runs the turn.
     """
+    if vendor is None:
+        return []
     if message.provenance is None or message.provenance.model != model_id:
         return []
     kept = message.extras.get(vendor)
@@ -1003,10 +1364,16 @@ class _Answer:
         """The events that end the answer, given the response the framework assembled.
 
         ``response`` is read for the vendor's signed blocks and for the calls
-        it holds, which have to be the calls that were announced: one it holds
-        that never started -- a part the framework made in some way this
-        engine did not see -- is refused rather than dropped, because an
-        answer missing a call would be half an answer that looks whole.
+        it holds, which have to be the calls that were announced, under the
+        names they were announced with. One it holds that never started -- a
+        part the framework made in some way this engine did not see -- is
+        refused rather than dropped, because an answer missing a call would be
+        half an answer that looks whole; so is one whose name grew after it
+        was announced (a name streamed in pieces, which the framework announces
+        at its first piece). A call the stream began and never named never
+        reaches here: the framework would leave it out of the response
+        altogether, and the OpenAI stream this engine builds refuses it first
+        (``_ChatCompletionsStream``).
         """
         events: list[EngineEvent] = list(self._closed())
         if not self.started:
@@ -1014,14 +1381,16 @@ class _Answer:
             # one breath -- an engine is never required to stream.
             events.append(AnswerStarted())
             self.started = True
-        announced = {call.call_id for call in self.calls}
+        announced = {call.call_id: call.name for call in self.calls}
         held = [] if response is None else response.parts
-        if any(
-            isinstance(part, FrameworkToolCallPart) and part.tool_call_id not in announced
-            for part in held
-        ):
+        called = [part for part in held if isinstance(part, FrameworkToolCallPart)]
+        if any(part.tool_call_id not in announced for part in called):
             raise UnsupportedContentError(
                 "the model asked for a tool in a form this engine did not translate"
+            )
+        if any(part.tool_name != announced[part.tool_call_id] for part in called):
+            raise UnsupportedContentError(
+                "the model's name for a tool call changed after the call was announced"
             )
         parts: list[MessagePart] = []
         text = clean_text("".join(self.streamed))

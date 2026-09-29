@@ -10,9 +10,9 @@
 # user, the loopback interface only -- and it is not a way to deploy anything
 # (docs/deployment.md).
 #
-# It needs one model provider key, and the only two variables it will look at
-# are OPENROUTER_API_KEY and ANTHROPIC_API_KEY, from the environment or from
-# demo/.env. A GitHub token exported as ROBINAUTS_GITHUB_TOKEN is optional,
+# It needs one model provider key, and the only three variables it will look
+# at are OPENROUTER_API_KEY, ANTHROPIC_API_KEY and OPENAI_API_KEY, from the
+# environment or from demo/.env. A GitHub token exported as ROBINAUTS_GITHUB_TOKEN is optional,
 # and turns on GitHub's MCP server for both agents.
 # **No key or token is ever printed or written to a file**: the configuration
 # names the *variable*, and the secret travels in the environment of the
@@ -21,6 +21,22 @@
 # Every failure is one line and a non-zero exit: 2 for something to put right
 # before running it again, 1 for something that went wrong while starting.
 set -eu
+
+# The keys and the token, taken **out of the environment before anything else
+# runs**. Everything this script starts before the server -- nvm and the node
+# it may run, uv, pgserver, npm and everything npm runs -- is a program with no
+# business holding the operator's key, and an exported variable is inherited
+# by every one of them. So they are copied into shell variables, which no child
+# process sees, and unset here, as the first thing the script does; whether one
+# is there at all, and demo/.env, are looked at later, where they always were
+# (below). The server is handed the one key it needs on its own invocation and
+# nowhere else, which is what makes the promise at the top of this file true
+# rather than nearly true.
+openrouter_env=${OPENROUTER_API_KEY:-}
+anthropic_env=${ANTHROPIC_API_KEY:-}
+openai_env=${OPENAI_API_KEY:-}
+github_token=${ROBINAUTS_GITHUB_TOKEN:-}
+unset OPENROUTER_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY ROBINAUTS_GITHUB_TOKEN
 
 demo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=demo/common.sh
@@ -36,6 +52,7 @@ GITHUB_VARIABLE=ROBINAUTS_GITHUB_TOKEN
 
 OPENROUTER_VARIABLE=OPENROUTER_API_KEY
 ANTHROPIC_VARIABLE=ANTHROPIC_API_KEY
+OPENAI_VARIABLE=OPENAI_API_KEY
 
 OPENROUTER_BASE_URL="https://openrouter.ai/api"
 # The prefix the Anthropic client appends /v1/messages to, which is why it stops
@@ -47,12 +64,16 @@ OPENROUTER_BASE_URL="https://openrouter.ai/api"
 # ROBINAUTS_DEMO_MODEL_3 override, and the title the picker shows. OpenRouter's
 # names are `<vendor>/<model>` and reach every vendor, so it offers three;
 # Anthropic's are its own, and it serves Claude alone, so its three are all
-# Claude. The first is the agents' default and the same model both ways, so it
-# has the same id both ways; the others have ids of their own, so that a
-# conversation on a model the other key does not offer is refused as not
-# offered rather than answered by another (docs/specs/agents.md). An override
-# keeps the id. A model that has been retired is a turn on it that fails saying
-# `not found`, and README.md says which variable to set then.
+# Claude; OpenAI's likewise, and its three are all GPT. **An id names one model,
+# whichever key reaches it**: Claude Sonnet 5 is `claude-sonnet-5` through
+# OpenRouter and through Anthropic, and GPT-5.5 is `gpt-5-5` through
+# OpenRouter and through OpenAI, so that a conversation carries on across a
+# restart on another key when that key offers its model too; every other
+# model has an id of its own, so that a conversation on a model the other key
+# does not offer is refused as not offered rather than answered by another
+# (docs/specs/agents.md). An override keeps the id. A model that has been
+# retired is a turn on it that fails saying `not found`, and README.md says
+# which variable to set then.
 DEFAULT_ID=claude-sonnet-5
 DEFAULT_TITLE="Claude Sonnet 5"
 DEFAULT_OPENROUTER_MODEL="anthropic/claude-sonnet-5"
@@ -69,6 +90,24 @@ ANTHROPIC_TITLE_2="Claude Opus 5.5"
 ANTHROPIC_ID_3=claude-haiku-4-5
 ANTHROPIC_MODEL_3="claude-haiku-4-5"
 ANTHROPIC_TITLE_3="Claude Haiku 4.5"
+# OpenAI's own names, over Chat Completions: its flagship first, which is
+# also OpenRouter's second model and so has that id, then the smaller and the
+# smallest of the GPT-5.4 family, which do not reason unless asked. Not GPT-6
+# and not GPT-5.6: OpenAI documents function calling over Chat Completions on
+# GPT-6 Sol and Luna only with reasoning turned off, OpenAI Support reported
+# GPT-5.6 Sol refusing function tools with reasoning on (2026-09-07), and
+# GPT-5.6 Luna and Terra reason by default and are untried. The engines do not
+# turn reasoning off, so the GitHub tools could fail on any of them
+# (docs/specs/agents.md, "Known findings").
+OPENAI_ID=$OPENROUTER_ID_2
+OPENAI_MODEL="gpt-5.5"
+OPENAI_TITLE=$OPENROUTER_TITLE_2
+OPENAI_ID_2=gpt-5-4-mini
+OPENAI_MODEL_2="gpt-5.4-mini"
+OPENAI_TITLE_2="GPT-5.4 Mini"
+OPENAI_ID_3=gpt-5-4-nano
+OPENAI_MODEL_3="gpt-5.4-nano"
+OPENAI_TITLE_3="GPT-5.4 Nano"
 
 HEALTH_SECONDS=120
 # Generous on purpose: a first start has just built an interface, and the server
@@ -133,36 +172,32 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 case "${ROBINAUTS_DEMO_PROVIDER:-}" in
-"" | openrouter | anthropic) ;;
+"" | openrouter | anthropic | openai) ;;
 *)
-    fail "ROBINAUTS_DEMO_PROVIDER is 'openrouter', 'anthropic', or not set at all." 2
+    fail "ROBINAUTS_DEMO_PROVIDER is 'openrouter', 'anthropic', 'openai', or not set at all." 2
     ;;
 esac
 
-openrouter_key=${OPENROUTER_API_KEY:-$(from_env_file "$OPENROUTER_VARIABLE")}
-anthropic_key=${ANTHROPIC_API_KEY:-$(from_env_file "$ANTHROPIC_VARIABLE")}
-github_token=${ROBINAUTS_GITHUB_TOKEN:-}
+# The environment's value first, as it was read at the top of the script
+# (where the variables were also unset), and demo/.env's when it has none.
+openrouter_key=${openrouter_env:-$(from_env_file "$OPENROUTER_VARIABLE")}
+anthropic_key=${anthropic_env:-$(from_env_file "$ANTHROPIC_VARIABLE")}
+openai_key=${openai_env:-$(from_env_file "$OPENAI_VARIABLE")}
+unset openrouter_env anthropic_env openai_env
 
-# And **out of the environment the moment they have been read**. Everything
-# this script runs before the server -- pgserver, npm and everything npm runs,
-# uv -- is a program with no business holding the operator's key, and an
-# exported variable is inherited by every one of them. The server is handed the
-# one key it needs on its own invocation and nowhere else (below), which is
-# what makes the promise at the top of this file true rather than nearly true.
-unset OPENROUTER_API_KEY ANTHROPIC_API_KEY ROBINAUTS_GITHUB_TOKEN
-
-if [ -z "$openrouter_key" ] && [ -z "$anthropic_key" ]; then
+if [ -z "$openrouter_key" ] && [ -z "$anthropic_key" ] && [ -z "$openai_key" ]; then
     # The one message this script prints over several lines, because what to do
-    # about it is two commands and a choice.
+    # about it is a command and a choice.
     cat >&2 <<MISSING
 The demo needs one model provider key. Set one of these and run it again:
 
     export $OPENROUTER_VARIABLE=...      # https://openrouter.ai/keys
     export $ANTHROPIC_VARIABLE=...       # https://console.anthropic.com/
+    export $OPENAI_VARIABLE=...          # https://platform.openai.com/api-keys
 
 or put the line in $ENV_FILE (chmod $ENV_MODE; it is never committed).
-With both set the demo uses OpenRouter; ROBINAUTS_DEMO_PROVIDER=anthropic
-chooses the other.
+With more than one set the demo uses OpenRouter, then Anthropic, then
+OpenAI; ROBINAUTS_DEMO_PROVIDER=anthropic or =openai chooses another.
 MISSING
     exit 2
 fi
@@ -172,6 +207,9 @@ if [ "${ROBINAUTS_DEMO_PROVIDER:-}" = anthropic ] && [ -z "$anthropic_key" ]; th
 fi
 if [ "${ROBINAUTS_DEMO_PROVIDER:-}" = openrouter ] && [ -z "$openrouter_key" ]; then
     fail "ROBINAUTS_DEMO_PROVIDER=openrouter, but $OPENROUTER_VARIABLE is not set." 2
+fi
+if [ "${ROBINAUTS_DEMO_PROVIDER:-}" = openai ] && [ -z "$openai_key" ]; then
+    fail "ROBINAUTS_DEMO_PROVIDER=openai, but $OPENAI_VARIABLE is not set." 2
 fi
 
 title_of() {
@@ -184,14 +222,29 @@ title_of() {
     fi
 }
 
-# OpenRouter wins when both are set, unless it is asked not to: it is the one
-# key a reader of README.md is most likely to have, and it reaches Anthropic's
-# models as well.
-if [ -n "$openrouter_key" ] && [ "${ROBINAUTS_DEMO_PROVIDER:-}" != anthropic ]; then
+# Which key, when more than one is set and none is chosen: OpenRouter first,
+# because it is the one key a reader of README.md is most likely to have and
+# it reaches every vendor's models; then Anthropic, then OpenAI, each of which
+# reaches its own vendor alone. The order is the order the demo grew in and
+# ranks nothing else. ROBINAUTS_DEMO_PROVIDER chooses outright, and was
+# checked above to name a key that is set.
+chosen=${ROBINAUTS_DEMO_PROVIDER:-}
+if [ -z "$chosen" ]; then
+    if [ -n "$openrouter_key" ]; then
+        chosen=openrouter
+    elif [ -n "$anthropic_key" ]; then
+        chosen=anthropic
+    else
+        chosen=openai
+    fi
+fi
+
+if [ "$chosen" = openrouter ]; then
     provider_id=openrouter
     provider_kind=anthropic-compatible
     key_variable=$OPENROUTER_VARIABLE
     base_url=$OPENROUTER_BASE_URL
+    id=$DEFAULT_ID
     model=${ROBINAUTS_DEMO_MODEL:-$DEFAULT_OPENROUTER_MODEL}
     title=$(title_of "$model" "$DEFAULT_OPENROUTER_MODEL" "$DEFAULT_TITLE")
     id_2=$OPENROUTER_ID_2
@@ -201,13 +254,14 @@ if [ -n "$openrouter_key" ] && [ "${ROBINAUTS_DEMO_PROVIDER:-}" != anthropic ]; 
     model_3=${ROBINAUTS_DEMO_MODEL_3:-$OPENROUTER_MODEL_3}
     title_3=$(title_of "$model_3" "$OPENROUTER_MODEL_3" "$OPENROUTER_TITLE_3")
     key_value=$openrouter_key
-else
+elif [ "$chosen" = anthropic ]; then
     provider_id=anthropic
     provider_kind=anthropic
     key_variable=$ANTHROPIC_VARIABLE
     # `anthropic` has one endpoint and both engines pin it; a base_url there is
     # a start-up refusal, so there is none to write.
     base_url=
+    id=$DEFAULT_ID
     model=${ROBINAUTS_DEMO_MODEL:-$DEFAULT_ANTHROPIC_MODEL}
     title=$(title_of "$model" "$DEFAULT_ANTHROPIC_MODEL" "$DEFAULT_TITLE")
     id_2=$ANTHROPIC_ID_2
@@ -217,6 +271,23 @@ else
     model_3=${ROBINAUTS_DEMO_MODEL_3:-$ANTHROPIC_MODEL_3}
     title_3=$(title_of "$model_3" "$ANTHROPIC_MODEL_3" "$ANTHROPIC_TITLE_3")
     key_value=$anthropic_key
+else
+    provider_id=openai
+    provider_kind=openai
+    key_variable=$OPENAI_VARIABLE
+    # `openai` has one endpoint too, https://api.openai.com/v1, pinned by both
+    # engines, so there is no base_url to write either.
+    base_url=
+    id=$OPENAI_ID
+    model=${ROBINAUTS_DEMO_MODEL:-$OPENAI_MODEL}
+    title=$(title_of "$model" "$OPENAI_MODEL" "$OPENAI_TITLE")
+    id_2=$OPENAI_ID_2
+    model_2=${ROBINAUTS_DEMO_MODEL_2:-$OPENAI_MODEL_2}
+    title_2=$(title_of "$model_2" "$OPENAI_MODEL_2" "$OPENAI_TITLE_2")
+    id_3=$OPENAI_ID_3
+    model_3=${ROBINAUTS_DEMO_MODEL_3:-$OPENAI_MODEL_3}
+    title_3=$(title_of "$model_3" "$OPENAI_MODEL_3" "$OPENAI_TITLE_3")
+    key_value=$openai_key
 fi
 say "Provider: $provider_kind ($provider_id); models $model, $model_2, $model_3; key from $key_variable."
 if [ -n "$github_token" ]; then
@@ -248,7 +319,7 @@ uv run --no-project --python "$PYTHON" python "$demo/config.py" \
     --template "$demo/robinauts.toml.in" --out "$CONFIG" \
     --provider-id "$provider_id" --kind "$provider_kind" \
     --key-variable "$key_variable" \
-    --model "$DEFAULT_ID" "$model" "$title" \
+    --model "$id" "$model" "$title" \
     --model "$id_2" "$model_2" "$title_2" \
     --model "$id_3" "$model_3" "$title_3" \
     --base-url "$base_url" --github-secret-env "$github_env" ||
@@ -310,6 +381,10 @@ say "Starting the server on http://$HOST:$PORT/ ..."
     openrouter)
         OPENROUTER_API_KEY=$key_value
         export OPENROUTER_API_KEY
+        ;;
+    openai)
+        OPENAI_API_KEY=$key_value
+        export OPENAI_API_KEY
         ;;
     *)
         ANTHROPIC_API_KEY=$key_value

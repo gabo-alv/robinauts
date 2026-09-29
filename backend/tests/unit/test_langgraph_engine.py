@@ -33,7 +33,6 @@ import logging
 import os
 import subprocess
 import sys
-import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
@@ -41,6 +40,7 @@ import anthropic
 import langsmith
 import langsmith._internal._context
 import langsmith.run_trees
+import openai
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
@@ -49,7 +49,10 @@ from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.tracers import langchain as tracer_module
 from langchain_core.tracers.context import _tracing_v2_is_enabled
+from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
+import chat_completions
 from aio import asyncio_test
 from conftest import VENDOR_LOGGERS
 from contracts.agents import AgentContract, Ending, Script
@@ -59,9 +62,13 @@ from robinauts.adapters.agents.langgraph import (
     ANTHROPIC_ENDPOINT,
     ANTHROPIC_KEY_HEADER,
     BLOCKS_LEFT_OUT,
+    CEILING_FIELDS,
     CLIENT_VARIABLES_REMOVED,
     DEFAULT_ANTHROPIC_OUTPUT_TOKENS,
+    DEFAULT_OPENAI_OUTPUT_TOKENS,
     MAX_RETRIES,
+    OPENAI_ENDPOINT,
+    OUTPUT_VERSION,
     QUIET_CLIENT_LEVEL,
     QUIET_CLIENT_LOGGERS,
     TRACING_VARIABLES_REMOVED,
@@ -72,7 +79,6 @@ from robinauts.adapters.agents.langgraph import (
 )
 from robinauts.core import check_engine_events
 from robinauts.domain import (
-    KINDS_WITH_BASE_URL,
     MAX_EXTRAS_BYTES,
     NO_LONGER_OFFERED,
     NO_RESULT,
@@ -81,7 +87,6 @@ from robinauts.domain import (
     AnswerReasoningDelta,
     AnswerStarted,
     AnswerTextDelta,
-    ConfigError,
     Engine,
     EngineEvent,
     Message,
@@ -97,7 +102,6 @@ from robinauts.domain import (
     ToolCallPart,
     ToolCallStarted,
     ToolDefinition,
-    ToolResultPart,
     UnknownModelError,
     UnsupportedContentError,
     WaitingOnTools,
@@ -528,29 +532,7 @@ SEARCH = ToolDefinition(
 
 def turn_with_tools() -> tuple[Message, Message, Message]:
     """A question, the answer that called a tool with its signed blocks, the result."""
-    asked = question("look it up", seconds=0)
-    calling_ = answer(
-        asked,
-        seconds=1,
-        parts=(TextPart("Let me look."), ToolCallPart("toolu_01", SEARCH.name, {"q": "robinauts"})),
-        extras={
-            VENDOR: {
-                "thinking": [
-                    {"type": "thinking", "thinking": "hm", "signature": "SIG"},
-                    {"type": "redacted_thinking", "data": "OPAQUE"},
-                ]
-            }
-        },
-    )
-    results = Message(
-        id=uuid.uuid4(),
-        conversation_id=asked.conversation_id,
-        parent_id=calling_.id,
-        role=Role.TOOL,
-        parts=(ToolResultPart("toolu_01", "found 3", is_error=True),),
-        created_at=calling_.created_at,
-    )
-    return asked, calling_, results
+    return chat_completions.history_with_a_call(SEARCH.name, VENDOR)
 
 
 @asyncio_test
@@ -1105,36 +1087,228 @@ def test_the_endpoint_is_the_vendors_or_the_operators_and_there_is_no_third_answ
     assert endpoint_of(COMPATIBLE_PROVIDER) == COMPATIBLE_ENDPOINT
 
 
-def test_both_kinds_the_engine_offers_have_an_endpoint_and_nothing_else_does() -> None:
-    # A kind added to `kinds` without a branch in `endpoint_of` would be a turn
-    # sent to a guess; a branch without the kind would be unreachable.
-    assert LangGraphAgent.kinds == {ProviderKind.ANTHROPIC, ProviderKind.ANTHROPIC_COMPATIBLE}
+# --- the OpenAI kinds ----------------------------------------------------------
+#
+# What both engines promise alike over OpenAI's Chat Completions -- the kinds
+# each reaches, the client pinned to the configuration, a turn's request and
+# events, the shapes of stream both take -- is written once and run under each
+# (``tests/unit/test_engines_over_chat_completions.py``). What is here is what
+# only this engine's objects can be asked, or what it does and the other does
+# not: ``ChatOpenAI``'s own fields, the one stream shape the engines take
+# differently, a reasoning field, a call that never streamed, and LangSmith.
+
+
+def built_openai(
+    provider: ModelProviderConfig = chat_completions.OPENAI_PROVIDER, **changes: Any
+) -> ChatOpenAI:
+    built = chat_model(chat_completions.gpt(provider, **changes), provider, KEY)
+    assert isinstance(built, ChatOpenAI)
+    return built
+
+
+def over(vendor: chat_completions.Vendor, **changes: Any) -> LangGraphAgent:
+    """The engine, building its real client, with that client's transport the vendor's."""
+
+    def plugged(model: ModelConfig, provider_: ModelProviderConfig, key: str) -> BaseChatModel:
+        built = chat_model(model, provider_, key)
+        assert isinstance(built, ChatOpenAI)
+        vendor.plugged_into(built.root_async_client)
+        return built
+
+    provider = chat_completions.OPENAI_PROVIDER
+    return LangGraphAgent(
+        chat_completions.openai_models(Engine.LANGGRAPH, provider, **changes),
+        ProviderKeys({provider.id: KEY}),
+        chat_model_for=plugged,
+    )
+
+
+async def openai_turn(
+    agent: LangGraphAgent, tools: Sequence[ToolDefinition] = ()
+) -> list[EngineEvent]:
+    """Every event of one turn on the OpenAI model, asked the one question."""
+    events = agent.run_turn(
+        chat_completions.gpt_agent(Engine.LANGGRAPH),
+        (question("What is a robinaut?"),),
+        tools,
+        model=chat_completions.GPT,
+    )
+    return [event async for event in events]
+
+
+def test_openai_is_built_with_the_key_the_endpoint_the_timeout_and_no_retries() -> None:
+    built = built_openai(timeout_seconds=17.0, max_output_tokens=1234)
+
+    assert built.model_name == chat_completions.MODEL_NAME
+    assert built.openai_api_key is not None
+    assert isinstance(built.openai_api_key, SecretStr)
+    assert built.openai_api_key.get_secret_value() == KEY
+    assert built.openai_api_base == OPENAI_ENDPOINT
+    assert built.max_tokens == 1234
+    # Both clients -- the one a turn uses and the one ChatOpenAI would
+    # otherwise build for itself -- are this adapter's, pinned alike.
+    for client in (built.root_async_client, built.root_client):
+        assert isinstance(client, openai.AsyncOpenAI | openai.OpenAI)
+        assert str(client.base_url).rstrip("/") == OPENAI_ENDPOINT
+        assert client.api_key == KEY
+        assert client.max_retries == MAX_RETRIES
+        assert client.timeout == 17.0
+    assert built.async_client is built.root_async_client.chat.completions
+
+
+def test_openai_is_asked_over_chat_completions_and_never_the_responses_api() -> None:
+    # ChatOpenAI switches to the Responses API by itself for some model names
+    # and some arguments; the protocol of both OpenAI kinds is Chat Completions
+    # (docs/specs/agents.md), so the switch is an argument.
+    built = built_openai()
+
+    assert built.use_responses_api is False
+    assert built._use_responses_api({}) is False
+
+
+def test_a_model_with_no_ceiling_asks_openai_for_none() -> None:
+    # Chat Completions requires none, and on a reasoning model a ceiling picked
+    # for the answer can be spent on the thinking.
+    assert DEFAULT_OPENAI_OUTPUT_TOKENS is None
+    assert built_openai().max_tokens is None
+    assert CEILING_FIELDS == {
+        ProviderKind.OPENAI: "max_completion_tokens",
+        ProviderKind.OPENAI_COMPATIBLE: "max_tokens",
+    }
 
 
 @pytest.mark.parametrize(
-    "kind", sorted(frozenset(ProviderKind) - LangGraphAgent.kinds), ids=lambda kind: kind.value
+    ("provider", "endpoint"),
+    [
+        (chat_completions.OPENAI_PROVIDER, OPENAI_ENDPOINT),
+        (chat_completions.GATEWAY_PROVIDER, chat_completions.GATEWAY_ENDPOINT),
+    ],
+    ids=["openai", "openai-compatible"],
 )
-def test_a_kind_this_engine_does_not_reach_is_refused_rather_than_guessed_at(
-    kind: ProviderKind,
+def test_chat_openai_takes_none_of_its_defaults_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, provider: ModelProviderConfig, endpoint: str
 ) -> None:
-    # The configuration is held to `kinds` at start-up, so nothing should ever
-    # get here. If something does -- a kind added to the set without a branch,
-    # a caller that built a definition by hand -- it must be a refusal naming
-    # the provider and never a turn sent to whatever endpoint happened to be
-    # nearest.
-    # `openai-compatible` is among them and needs its base_url like any other
-    # kind that names a protocol, so the record is built the way that kind's
-    # own rules require rather than one way for all of them.
-    endpoint = COMPATIBLE_ENDPOINT if kind in KINDS_WITH_BASE_URL else None
-    provider = ModelProviderConfig(id="vendor", kind=kind, api_key_env="K", base_url=endpoint)
+    # ChatOpenAI's own fields, each a default it would take from the
+    # environment, and the synchronous client beside the one a turn uses; the
+    # client a turn uses is held to the same by both engines' shared test.
+    for name, value in chat_completions.REDIRECTING_VARIABLES.items():
+        monkeypatch.setenv(name, value)
 
-    with pytest.raises(ConfigError) as raised:
-        endpoint_of(provider)
+    built = built_openai(provider)
 
-    assert list(raised.value.problems) == [
-        f"model_providers.vendor: this build of the LangGraph engine cannot reach"
-        f" a {kind.value} provider"
-    ]
+    assert built.openai_api_base == endpoint
+    assert built.openai_api_key is not None
+    assert isinstance(built.openai_api_key, SecretStr)
+    assert built.openai_api_key.get_secret_value() == KEY
+    assert built.openai_proxy is None
+    assert built.output_version == OUTPUT_VERSION
+    assert built.stream_chunk_timeout is None
+    assert built.stream_usage is True
+    assert str(built.root_client.base_url).rstrip("/") == endpoint
+    assert built.root_client.api_key == KEY
+
+
+def test_chat_openai_reads_openai_organization_too_and_building_the_engine_removes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ChatOpenAI falls back to OPENAI_ORGANIZATION with `or`, where the SDK
+    # reads OPENAI_ORG_ID alone; it is this engine's to take out.
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-somebody-elses")
+    before = built_openai()
+
+    LangGraphAgent(models(), keys(), chat_model_for=lambda *_: ScriptedChatModel())  # noqa: ARG005
+    after = built_openai()
+
+    assert before.openai_organization == "org-somebody-elses"
+    assert "OPENAI_ORGANIZATION" in CLIENT_VARIABLES_REMOVED
+    assert "OPENAI_ORGANIZATION" not in os.environ
+    assert after.openai_organization is None
+    assert "openai-organization" not in chat_completions.headers_of(after.root_async_client)
+
+
+@asyncio_test
+async def test_an_openai_turn_attaches_no_tracer_however_loudly_the_environment_asks(
+    monkeypatch: pytest.MonkeyPatch, asking_to_trace: None
+) -> None:
+    # The same as for the other protocol: with the environment asking loudly
+    # for tracing, and anything that would build a tracer refusing to exist, a
+    # whole turn through the real client runs and traces nothing.
+    monkeypatch.setattr(tracer_module, "LangChainTracer", _NeverBuilt)
+    vendor = chat_completions.Vendor(
+        chat_completions.streamed(*chat_completions.said("Quietly."), *chat_completions.finished())
+    )
+    agent = over(vendor)
+
+    seen = await openai_turn(agent)
+
+    assert seen[-1] == AnswerCompleted(parts=(TextPart("Quietly."),))
+    assert agent.held == 0
+    assert _tracing_v2_is_enabled() is False
+
+
+@asyncio_test
+async def test_a_name_that_arrives_before_the_id_is_taken_by_this_engine() -> None:
+    # The call is announced once both are known, whichever came first. The
+    # other engine refuses this stream (docs/specs/agents.md, "Known findings").
+    vendor = chat_completions.Vendor(
+        chat_completions.streamed(
+            chat_completions.call_delta(0, name=SEARCH.name, arguments=""),
+            chat_completions.call_delta(0, id="call_1", arguments="{}"),
+            *chat_completions.finished("tool_calls"),
+        )
+    )
+
+    seen = await openai_turn(over(vendor), tools=(SEARCH,))
+
+    check_engine_events(seen)
+    assert seen[-2] == AnswerCompleted(parts=(ToolCallPart("call_1", SEARCH.name, {}),))
+
+
+@asyncio_test
+async def test_an_openai_call_the_final_message_holds_that_never_streamed_is_refused() -> None:
+    # An OpenAI-shaped raw call in the message and no tool-call chunk for it:
+    # a client that did not lift it off the stream (langchain-openai 1.6.2's
+    # streaming path writes no such raw call, and this is the shape a client
+    # that did would leave). The same guard as for Anthropic's own blocks:
+    # finishing without it would store half an answer.
+    unlifted = AIMessageChunk(
+        content="",
+        additional_kwargs={
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": SEARCH.name, "arguments": "{}"},
+                }
+            ]
+        },
+    )
+    unlifted.tool_call_chunks = []
+    model = ScriptedChatModel(chunks=["Let me look.", unlifted])
+
+    with pytest.raises(UnsupportedContentError, match="did not translate"):
+        await turn_of(engine(model), (question(),), tools=(SEARCH,))
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+@asyncio_test
+async def test_a_reasoning_field_beside_the_text_is_not_read_by_this_engine(field: str) -> None:
+    # Some compatible servers stream a model's reasoning in a field that is not
+    # OpenAI's. langchain-openai does not read it, so this engine shows none
+    # and keeps none; the other engine shows it (docs/specs/agents.md).
+    vendor = chat_completions.Vendor(
+        chat_completions.streamed(
+            chat_completions.chunk({"role": "assistant", "content": "", field: "hm"}),
+            *chat_completions.said("Hi."),
+            *chat_completions.finished(),
+        )
+    )
+
+    seen = await openai_turn(over(vendor))
+
+    assert not [event for event in seen if isinstance(event, AnswerReasoningDelta)]
+    assert seen[-1] == AnswerCompleted(parts=(TextPart("Hi."),))
 
 
 # --- nothing phones home ----------------------------------------------------

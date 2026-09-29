@@ -358,12 +358,11 @@ def test_the_keys_hold_a_copy_of_what_they_were_given() -> None:
 def models_examples() -> tuple[str, str, str]:
     """The three model TOML blocks of ``docs/specs/agents.md``, as they are written there.
 
-    The first two are configurations this build runs -- the vendor's own
-    endpoint, and an ``anthropic-compatible`` one, which is how OpenRouter is
-    reached here. The third shows the shape of an OpenAI-compatible provider,
-    which this build refuses. All three are read here, and each is held to the
-    thing it is an example of. The fourth block of the file is the tool
-    servers' (``tool_servers_example``).
+    All three are configurations this build runs: Anthropic's own endpoint;
+    an ``anthropic-compatible`` one, which is one way OpenRouter is reached;
+    and OpenAI with an ``openai-compatible`` gateway beside it. All three are
+    read here, and each is held to the thing it is an example of. The fourth
+    block of the file is the tool servers' (``tool_servers_example``).
     """
     blocks = spec_blocks()
     return blocks[0], blocks[1], blocks[2]
@@ -405,30 +404,77 @@ def test_the_model_example_in_the_specification_reads_and_parses(tmp_path: Path)
     assert config.agents["assistant"].engine is Engine.LANGGRAPH
 
 
-def test_the_second_example_is_the_shape_this_build_refuses(tmp_path: Path) -> None:
-    # It is in the spec because the configuration language is settled; it is
-    # refused because no engine of this build offers that kind yet
-    # (docs/specs/agents.md).
-    _, _, not_buildable = models_examples()
-    tables = read_toml(written(tmp_path, not_buildable))
+def test_the_openai_example_is_one_this_build_runs(tmp_path: Path) -> None:
+    # Both OpenAI kinds, as the spec writes them: the vendor with no base_url,
+    # and a gateway whose base_url is the prefix OpenAI's client appends
+    # `/chat/completions` to -- which is why it ends in the API's version.
+    _, _, openai_example = models_examples()
 
-    parsed = parse_models_config(tables)
-    with pytest.raises(ConfigError) as raised:
-        parse_models_config(tables, engines=WIRED_ENGINES, kinds=BUILDABLE_KINDS)
-
-    assert parsed.providers["gateway"].kind is ProviderKind.OPENAI_COMPATIBLE
-    assert parsed.providers["gateway"].base_url == "https://gateway.example.com/v1"
-    assert raised.value.problems[0] == (
-        "model_providers.gateway.kind: this build cannot reach 'openai-compatible'"
-        " providers; it was built with anthropic, anthropic-compatible"
+    config = parse_models_config(
+        read_toml(written(tmp_path, openai_example)),
+        engines=WIRED_ENGINES,
+        kinds=BUILDABLE_KINDS,
     )
+
+    assert config.providers["openai"].kind is ProviderKind.OPENAI
+    assert config.providers["openai"].base_url is None
+    assert config.providers["gateway"].kind is ProviderKind.OPENAI_COMPATIBLE
+    assert config.providers["gateway"].base_url == "https://gateway.example.com/v1"
+    assert config.models["gpt"].name == "gpt-5.5"
+    assert config.models["scout-on-the-gateway"].provider == "gateway"
+    assert config.agents["assistant-gpt"].engine is Engine.LANGGRAPH
+
+
+def test_this_build_reaches_every_kind_the_configuration_names() -> None:
+    # Both engines offer all four kinds, so no kind the configuration can
+    # spell is refused for want of a client; the refusal itself is still
+    # there for a build that lacks one (tests/unit/test_models_config.py).
+    assert BUILDABLE_KINDS == frozenset(ProviderKind)
+
+
+@pytest.mark.parametrize("engine", sorted(Engine), ids=lambda engine: engine.value)
+@pytest.mark.parametrize(
+    "table",
+    [
+        'kind = "openai"\napi_key_env = "K"\n',
+        'kind = "openai-compatible"\napi_key_env = "K"\nbase_url = "https://gw.example.com/v1"\n',
+    ],
+    ids=["openai", "openai-compatible"],
+)
+def test_an_openai_provider_parses_for_either_engine(
+    tmp_path: Path, table: str, engine: Engine
+) -> None:
+    text = (
+        f"[model_providers.p]\n{table}\n"
+        '[models.m]\nprovider = "p"\nname = "gpt-5.5"\n\n'
+        f'[agents.a]\ntitle = "A"\nmodel = "m"\nengine = "{engine.value}"\n'
+    )
+
+    config = parse_models_config(
+        read_toml(written(tmp_path, text)), engines=WIRED_ENGINES, kinds=BUILDABLE_KINDS
+    )
+
+    assert config.agents["a"].engine is engine
+    assert config.providers["p"].kind.value == table.split('"')[1]
+
+
+def test_an_openai_provider_with_a_base_url_is_refused(tmp_path: Path) -> None:
+    # The vendor's endpoint is the engine's constant; a second answer to
+    # "where is it" would be a way to send the key somewhere else.
+    text = '[model_providers.p]\nkind = "openai"\napi_key_env = "K"\nbase_url = "https://x.example.com/v1"\n'
+
+    with pytest.raises(ConfigError) as raised:
+        parse_models_config(
+            read_toml(written(tmp_path, text)), engines=WIRED_ENGINES, kinds=BUILDABLE_KINDS
+        )
+
+    assert raised.value.problems[0].startswith("model_providers.p.base_url: only these kinds")
 
 
 def test_the_openrouter_example_is_one_this_build_runs(tmp_path: Path) -> None:
-    # The kind the exclusion above does **not** cost: OpenRouter serves
-    # Anthropic's Messages API, so it is reached with the client both engines
-    # already have. `base_url` is the prefix the client appends `/v1/messages`
-    # to, which is why the documented value stops at `/api`.
+    # OpenRouter over Anthropic's Messages API, reached with the Anthropic
+    # client. `base_url` is the prefix that client appends `/v1/messages` to,
+    # which is why the documented value stops at `/api`.
     _, openrouter, _ = models_examples()
 
     config = parse_models_config(
@@ -445,17 +491,22 @@ def test_the_openrouter_example_is_one_this_build_runs(tmp_path: Path) -> None:
 
 
 def test_the_model_example_names_the_variables_rather_than_the_keys(tmp_path: Path) -> None:
-    # All three blocks at once, which is also how it is known that the three
-    # declare three different providers rather than two spellings of one: the
+    # All three blocks at once, which is also how it is known that they
+    # declare four different providers rather than two spellings of one: the
     # file would not parse if two `[model_providers.x]` tables collided.
-    config = parse_models_config(read_toml(written(tmp_path, "".join(models_examples()))))
+    config = parse_models_config(
+        read_toml(written(tmp_path, "".join(models_examples()))),
+        engines=WIRED_ENGINES,
+        kinds=BUILDABLE_KINDS,
+    )
 
     assert config.providers["anthropic"].api_key_env == "ROBINAUTS_ANTHROPIC_KEY"
     assert config.providers["openrouter"].api_key_env == "ROBINAUTS_OPENROUTER_KEY"
+    assert config.providers["openai"].api_key_env == "ROBINAUTS_OPENAI_KEY"
     assert config.providers["gateway"].api_key_env == "ROBINAUTS_GATEWAY_KEY"
     with pytest.raises(ConfigError) as raised:
         check_api_keys(config, secret_for=lambda name: None)
-    assert len(raised.value.problems) == 3
+    assert len(raised.value.problems) == 4
 
 
 def test_the_tool_servers_example_in_the_specification_reads_and_parses(tmp_path: Path) -> None:

@@ -57,7 +57,7 @@ GITHUB = {"url": "https://api.githubcopilot.com/mcp/", "secret_env": "ROBINAUTS_
 LANGGRAPH_ONLY = frozenset({Engine.LANGGRAPH})
 ANTHROPIC_ONLY = frozenset({ProviderKind.ANTHROPIC})
 ANTHROPIC_KINDS = frozenset({ProviderKind.ANTHROPIC, ProviderKind.ANTHROPIC_COMPATIBLE})
-"""The two kinds one Anthropic client reaches, which is what this build has."""
+"""The two kinds one Anthropic client reaches: a build that had that client alone."""
 
 
 def data(**changes: Any) -> dict[str, Any]:

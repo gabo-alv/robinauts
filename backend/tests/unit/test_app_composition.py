@@ -59,6 +59,7 @@ from robinauts.adapters import HttpIdentityProvider, SecretLookup, ToolServerSec
 from robinauts.adapters.tools.mcp import McpToolServers
 from robinauts.app import (
     AUTH_CONFIG_VARIABLE,
+    BUILDABLE_KINDS,
     CONFIG_VARIABLE,
     DATABASE_URL_VARIABLE,
     SHUTDOWN_SECONDS,
@@ -75,6 +76,7 @@ from robinauts.domain import (
     ConfigError,
     Engine,
     InvalidValueError,
+    ProviderKind,
     Run,
     RunQuietError,
     RunState,
@@ -921,17 +923,22 @@ async def test_an_agent_may_name_either_of_the_engines_this_build_runs(
     assert WIRED_ENGINES == frozenset(Engine)
 
 
-def test_a_provider_of_a_kind_this_build_cannot_reach_stops_the_start_up(
-    tmp_path: Path,
-) -> None:
-    # A client whose dependency tree fails the licence policy is a provider
-    # this build does not offer (DEPENDENCIES.md).
-    text = WITH_AGENTS.replace('kind = "anthropic"', 'kind = "openai"')
+def test_a_provider_of_either_openai_kind_starts_a_deployment(tmp_path: Path) -> None:
+    # Both engines offer every kind the configuration can spell, and the
+    # composition root asks them rather than keeping a list of its own
+    # (`BUILDABLE_KINDS`). A kind no engine of a build reaches is still a
+    # start-up refusal, which tests/unit/test_models_config.py holds the
+    # parser to; in this build there is none to write one with.
+    assert BUILDABLE_KINDS == frozenset(ProviderKind)
+    for kind, base_url in (
+        ("openai", ""),
+        ("openai-compatible", 'base_url = "https://gw.example.com/v1"\n'),
+    ):
+        text = WITH_AGENTS.replace('kind = "anthropic"\n', f'kind = "{kind}"\n{base_url}')
 
-    with pytest.raises(ConfigError) as raised:
-        with_agents(tmp_path, text)
+        deployment = with_agents(tmp_path, text)
 
-    assert "this build cannot reach" in raised.value.problems[0]
+        assert deployment is not None
 
 
 def test_both_halves_of_the_file_report_their_problems_together(tmp_path: Path) -> None:

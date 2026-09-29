@@ -27,6 +27,10 @@ Three things, which are the whole of the claim:
    format version, and differ in one value: ``provenance.engine``. That is
    what makes the swap a change of configuration rather than a migration.
 
+And over OpenAI's Chat Completions, a fourth: **the two engines send the
+same history, byte for byte** -- each through its real client and its real
+framework, to a vendor the test writes (``tests/chat_completions.py``).
+
 The other half of the swap -- doing it by editing the configuration file and
 restarting -- is an integration test over the real PostgreSQL
 (``tests/integration/test_create_app.py``).
@@ -35,16 +39,39 @@ restarting -- is an integration test over the real PostgreSQL
 from __future__ import annotations
 
 import asyncio
+import json
+import uuid
 from typing import Any
 
+import pytest
+
+import chat_completions
 from aio import asyncio_test
-from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition
-from engines import MODELS, Scripts, both_engines, scripts
+from conversations import AGENT, MODEL, OTHER_MODEL, agent_definition, answer, question
+from engines import (
+    MODELS,
+    Scripts,
+    both_engines,
+    chat_completions_turn,
+    over_chat_completions,
+    scripts,
+)
 from fakes import CountingIdSource, FakeClock, MemoryConversationStore
 from robinauts.adapters import AsyncioRunExecutor, MemoryRunSignals
 from robinauts.application import Turns
 from robinauts.core import message_to_data
-from robinauts.domain import FORMAT_VERSION, Engine, Message, Role, Run
+from robinauts.domain import (
+    FORMAT_VERSION,
+    Engine,
+    Message,
+    ProviderKind,
+    Role,
+    Run,
+    TextPart,
+    ToolCallPart,
+    ToolDefinition,
+    ToolResultPart,
+)
 from turns import AUTHOR, NOW, stored_messages
 
 SYSTEM_PROMPT = "Play fair."
@@ -260,6 +287,155 @@ async def test_a_conversation_moved_to_another_model_runs_on_it_under_either_eng
         for message in messages
         if message.provenance is not None
     ] == said.built
+
+
+# --- the same request over Chat Completions ----------------------------------
+
+
+SEARCH = ToolDefinition(
+    name="github__search",
+    description="",
+    input_schema={"type": "object", "properties": {"q": {"type": "string"}}},
+)
+"""A tool with no description, which the two frameworks would otherwise spell differently."""
+
+READ = ToolDefinition(
+    name="github__read_file",
+    description="Read a file of a repository.",
+    input_schema={
+        "type": "object",
+        "title": "Read",
+        "properties": {"path": {"type": "string", "title": "Path"}},
+        "required": ["path"],
+    },
+)
+"""A described tool whose schema carries titles, which one framework would strip."""
+
+SHARED_FIELDS = ("model", "messages", "tools", "stream", "stream_options")
+"""The fields of the request both engines send, compared byte for byte.
+
+What is left out is sent by one engine only: ``tool_choice: "auto"``, which
+Pydantic AI adds and which is the protocol's default (``docs/specs/agents.md``,
+"Known findings"). The ceiling is compared on its own, per kind.
+"""
+
+CEILING_FIELDS = ("max_completion_tokens", "max_tokens")
+
+
+def _answered_calls(parent: Message, text: str, *calls: ToolCallPart) -> Message:
+    return answer(parent, parts=(*((TextPart(text),) if text else ()), *calls))
+
+
+def _results(parent: Message, *results: ToolResultPart) -> Message:
+    return Message(
+        id=uuid.uuid4(),
+        conversation_id=parent.conversation_id,
+        parent_id=parent.id,
+        role=Role.TOOL,
+        parts=results,
+        created_at=parent.created_at,
+    )
+
+
+def _history() -> tuple[Message, ...]:
+    """A history holding every shape an answer and a result take over this protocol.
+
+    Text beside a call; a call with no text; a result that went wrong and one
+    that did not, with text that is not ASCII; an answer that said nothing;
+    and the question being answered last.
+    """
+    first = question("Find the robinauts.")
+    looked = _answered_calls(
+        first, "Let me look.", ToolCallPart("call_1", SEARCH.name, {"q": "robinauts", "n": 3})
+    )
+    failed = _results(looked, ToolResultPart("call_1", "rate limited", is_error=True))
+    again = _answered_calls(failed, "", ToolCallPart("call_2", SEARCH.name, {"q": "café"}))
+    found = _results(again, ToolResultPart("call_2", "found «3»"))
+    told = answer(found, "Three.")
+    second = question("And now?", parent=told)
+    silent = answer(second, parts=(TextPart(""),))
+    last = question("Well?", parent=silent)
+    return (first, looked, failed, again, found, told, second, silent, last)
+
+
+async def _sent_by(engine: Engine, kind: ProviderKind) -> dict[str, Any]:
+    """The request the engine sends for the history, as the JSON it is."""
+    vendor = chat_completions.Vendor(
+        chat_completions.streamed(*chat_completions.said("Fine."), *chat_completions.finished())
+    )
+    provider = (
+        chat_completions.GATEWAY_PROVIDER
+        if kind is ProviderKind.OPENAI_COMPATIBLE
+        else chat_completions.OPENAI_PROVIDER
+    )
+    agent = over_chat_completions(engine, vendor, provider, max_output_tokens=1234)
+
+    await chat_completions_turn(agent, engine, _history(), (SEARCH, READ))
+
+    body = json.loads(vendor.request.content)
+    assert isinstance(body, dict)
+    return body
+
+
+def _bytes(body: dict[str, Any], *fields: str) -> bytes:
+    """Those fields of a request, in the order they were sent, as JSON bytes."""
+    return json.dumps(
+        {key: value for key, value in body.items() if key in fields}, ensure_ascii=False
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    ("kind", "ceiling"),
+    [
+        (ProviderKind.OPENAI, "max_completion_tokens"),
+        (ProviderKind.OPENAI_COMPATIBLE, "max_tokens"),
+    ],
+    ids=["openai", "openai-compatible"],
+)
+@asyncio_test
+async def test_both_engines_send_the_same_request_over_chat_completions(
+    kind: ProviderKind, ceiling: str
+) -> None:
+    """The history, the tools, the stream options and the ceiling, byte for byte.
+
+    For the shapes written here: the arguments of a call are serialised by a
+    different library under each engine (``json`` under LangGraph,
+    ``pydantic_core`` under Pydantic AI), so what is proved is parity for
+    these values -- nested objects, integers, text that is not ASCII -- and not
+    for every value a model could write.
+    """
+    langgraph = await _sent_by(Engine.LANGGRAPH, kind)
+    pydantic_ai = await _sent_by(Engine.PYDANTIC_AI, kind)
+
+    assert _bytes(langgraph, *SHARED_FIELDS) == _bytes(pydantic_ai, *SHARED_FIELDS)
+    assert _bytes(langgraph, *CEILING_FIELDS) == _bytes(pydantic_ai, *CEILING_FIELDS)
+    assert langgraph[ceiling] == 1234
+    assert not (set(CEILING_FIELDS) - {ceiling}) & set(langgraph)
+    assert set(pydantic_ai) - set(langgraph) == {"tool_choice"}
+    # And it is the request it should be, not merely the same one twice.
+    sent = langgraph["messages"]
+    assert [message["role"] for message in sent] == [
+        "system", "user", "assistant", "tool", "assistant", "tool",
+        "assistant", "user", "assistant", "user",
+    ]  # fmt: skip
+    assert sent[2]["tool_calls"][0]["function"]["arguments"] == '{"q":"robinauts","n":3}'
+    assert sent[3]["content"] == '{"error":"rate limited"}'
+    assert sent[4]["content"] == ""
+    assert sent[4]["tool_calls"][0]["function"]["arguments"] == '{"q":"café"}'
+    assert sent[5]["content"] == "found «3»"
+    assert sent[8]["content"] == ""
+    assert langgraph["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": dict(tool.input_schema),
+            },
+        }
+        for tool in (SEARCH, READ)
+    ]
+    assert langgraph["stream_options"] == {"include_usage": True}
 
 
 def _shared(document: dict[str, Any]) -> dict[str, Any]:

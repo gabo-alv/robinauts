@@ -250,6 +250,12 @@ here. The frameworks and the SDK are confined to their own sub-package:
   `pydantic_graph`, `logfire`, `logfire_api` or `opentelemetry` — the last
   three arrive with the framework, are imported by nothing in the platform,
   and are named in the rule for the same reason `langsmith` is;
+- only the two agent adapters may import the vendors' own SDKs, `anthropic`
+  and `openai`: both frameworks are built on them, and both adapters import
+  them directly to build a client with the endpoint, the key's header and
+  the retries pinned; a model call belongs to an engine, and an SDK import
+  anywhere else would be a way to reach a vendor that no contract suite
+  covers;
 - only `adapters/tools/mcp/` may import `mcp`, the MCP Python SDK — a rule
   written before the import exists, since the SDK is not adopted today, so
   that the day its tree passes the gate it belongs there and nowhere else;
@@ -269,7 +275,8 @@ sub-package and its dependencies must break those and nothing else: the
 import in `app.py` and its one entry in that module's `ENGINES` table; the
 contract exceptions in `backend/pyproject.toml` that name the sub-package;
 the sub-package's own tests; and the **shared swap fixtures** under
-`backend/tests/` — `engines.py`, `unit/test_engine_swap.py` and the
+`backend/tests/` — `engines.py`, `unit/test_engine_swap.py`,
+`unit/test_engines_over_chat_completions.py` and the
 configuration swap in `integration/test_create_app.py` — which exist to name
 both engines at once and cannot be written without both.
 
@@ -391,6 +398,8 @@ cover:
   only under `adapters/agents/langgraph`
 - Pydantic AI, `pydantic_graph`, logfire and OpenTelemetry are imported only
   under `adapters/agents/pydantic_ai`
+- the Anthropic SDK (`anthropic`) and the OpenAI SDK (`openai`) are imported
+  only under the two agent adapters
 - the MCP SDK (`mcp`) is imported only under `adapters/tools/mcp`
 - the two agent adapters do not import each other
 

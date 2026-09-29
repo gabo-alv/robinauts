@@ -39,15 +39,18 @@ It needs no PostgreSQL, no Docker and no `sudo`. It refuses to run as root.
 
 ## The key
 
-The demo reads exactly two variables, and uses whichever it finds:
+The demo reads exactly three variables, and uses whichever it finds:
 
 | variable | what it reaches | where to get one |
 |---|---|---|
 | `OPENROUTER_API_KEY` | OpenRouter, as an `anthropic-compatible` provider | <https://openrouter.ai/keys> |
 | `ANTHROPIC_API_KEY` | Anthropic itself, as an `anthropic` provider | <https://console.anthropic.com/> |
+| `OPENAI_API_KEY` | OpenAI itself, as an `openai` provider, over Chat Completions | <https://platform.openai.com/api-keys> |
 
-With both set it uses OpenRouter, and `ROBINAUTS_DEMO_PROVIDER=anthropic`
-chooses the other. With neither it says so and stops.
+With more than one set it uses OpenRouter first, then Anthropic, then OpenAI:
+OpenRouter because it reaches every vendor's models, and the other two in
+the order the demo grew in. `ROBINAUTS_DEMO_PROVIDER=anthropic` or
+`=openai` chooses one outright. With none it says so and stops.
 
 Either from the environment:
 
@@ -65,18 +68,27 @@ the server.** `demo/.env` is read rather than sourced — a `.env` that could ru
 commands would be the demo executing whatever was pasted into it — and the
 configuration the demo generates holds the *name* of the variable and nothing
 else, which is the rule the platform keeps everywhere
-([../docs/specs/agents.md](../docs/specs/agents.md)). `start.sh` also takes both
-variables **out of its own environment** as soon as it has read them, and puts
-the one that is used back on the server's invocation alone: PostgreSQL, npm and
-everything npm runs, and uv are started without it.
+([../docs/specs/agents.md](../docs/specs/agents.md)). `start.sh` also takes all
+three variables **out of its own environment** as the first thing it does,
+before it runs anything, and puts the one that is used back on the server's
+invocation alone: nvm and the node it may run, uv, PostgreSQL, and npm and
+everything npm runs are all started without it. A key in `demo/.env` is never
+in the environment at all until that one invocation. That
+holds for `OPENAI_API_KEY` too, although the OpenAI client would read it by
+itself if it were let: the configuration names it, the platform reads it at
+start-up, and the engines hand it to the client — no client is ever left to
+find a key in the environment.
 
 **OpenRouter is reached with the Anthropic client.** OpenRouter serves
 Anthropic's Messages API at `https://openrouter.ai/api/v1/messages` and takes
-the key in the same `x-api-key` header, so this build reaches it as an
+the key in the same `x-api-key` header, so the demo reaches it as an
 `anthropic-compatible` provider whose `base_url` is `https://openrouter.ai/api`
-— the prefix the client appends `/v1/messages` to. No OpenAI client is
-involved: the engines do not offer the OpenAI kinds yet
-([../docs/specs/agents.md](../docs/specs/agents.md)).
+— the prefix the client appends `/v1/messages` to. It serves OpenAI's Chat
+Completions too, and a configuration of your own may reach it as an
+`openai-compatible` provider at `https://openrouter.ai/api/v1` instead; the
+demo does not, so the OpenRouter models below are the ones it has always had.
+**OpenAI is reached with the OpenAI client**, at `https://api.openai.com/v1`,
+which both engines pin ([../docs/specs/agents.md](../docs/specs/agents.md)).
 
 ## What you get
 
@@ -99,27 +111,54 @@ the key:
 |---|---|---|---|
 | OpenRouter | Claude Sonnet 5 (`anthropic/claude-sonnet-5`) | GPT-5.5 (`openai/gpt-5.5`) | Gemini 3.8 Flash (`google/gemini-3.8-flash`) |
 | Anthropic | Claude Sonnet 5 (`claude-sonnet-5`) | Claude Opus 5.5 (`claude-opus-5-5`) | Claude Haiku 4.5 (`claude-haiku-4-5`) |
+| OpenAI | GPT-5.5 (`gpt-5.5`) | GPT-5.4 Mini (`gpt-5.4-mini`) | GPT-5.4 Nano (`gpt-5.4-nano`) |
 
-OpenRouter routes the one Messages API this build speaks to every vendor's
-models, so through it the three are three vendors; Anthropic serves Claude
-alone. The OpenRouter names were on its list of models when they were chosen,
-and **a turn on GPT or Gemini through that API has not been tried here**:
-OpenRouter documents non-Anthropic models behind it with "compatibility
-limitations". If one of them fails every turn, the log says why, and the
-other models still answer.
+Through OpenRouter the three are three vendors' models: the demo reaches
+OpenRouter over Anthropic's Messages API, and OpenRouter passes a request on
+to whichever vendor serves the model named. Anthropic serves Claude alone and
+OpenAI serves GPT alone, so through either of those the three are one
+vendor's. All the names were on OpenRouter's and the vendors' own lists of
+models on 2026-09-28.
+
+**Through OpenRouter, a turn on GPT or Gemini has not been tried here.**
+OpenRouter documents non-Anthropic models reached over the Messages API with
+"compatibility limitations". If one of them fails every turn, the log says
+why, and the other models still answer.
+
+**Through OpenAI, the three are GPT-5.5 and the smaller two of the GPT-5.4
+family**, which do not reason unless asked — and deliberately not GPT-6 or
+GPT-5.6. The demo's agents are given GitHub's tools whenever a GitHub token is
+set ("Tools", below), every turn then offers those tools to the model, and on
+the newer models a request that offers tools may be refused over Chat
+Completions, the protocol the engines speak to OpenAI:
+
+- OpenAI documents function calling on GPT-6 Sol and GPT-6 Luna only with
+  reasoning turned off, and sends GPT-6 Astra's tools to its Responses API;
+- OpenAI Support reported GPT-5.6 Sol refusing function tools with its
+  reasoning on (OpenAI's developer forum, post 1386454, 2026-09-07);
+- GPT-5.6 Luna and Terra reason by default, and have not been tried.
+
+The engines do not turn reasoning off. So one of those models named in
+`ROBINAUTS_DEMO_MODEL` (or `_2`, `_3`) is only safe with no GitHub token set,
+when the agents have no tools; with a token, every turn on it may fail (see
+"When something goes wrong").
 
 Unlike the agent, **the model can be changed at any point** in a
 conversation: the next answer comes from the new one, and every answer records
 the model that wrote it. Either engine runs any of the three.
 
 What a conversation and an answer record is the model's **id** in the
-configuration, which names the default model: `claude-sonnet-5` either way,
-and `gpt-5-5` and `gemini-3-8-flash` through OpenRouter, `claude-opus-5-5` and
-`claude-haiku-4-5` through Anthropic. So after a restart on the other key, with
-the default models, a conversation on a model that key does not offer is
-refused, saying the model is no longer offered, and the picker shows its id
-until another is picked; nothing is answered by a different model under the
-old one's id. **That holds only while no model is overridden**: a model named
+configuration, which names the default model whichever key reaches it:
+`claude-sonnet-5` through OpenRouter and through Anthropic, `gpt-5-5` through
+OpenRouter and through OpenAI, and `gemini-3-8-flash`, `claude-opus-5-5`,
+`claude-haiku-4-5`, `gpt-5-4-mini` and `gpt-5-4-nano` through the one key each
+that has them. So after a restart on another key, with the default models, a
+conversation on a model that key also offers carries on with it, and one on a
+model that key does not offer is refused, saying the model is no longer
+offered, and the picker shows its id until another is picked; nothing is
+answered by a different model under the old one's id. (With the OpenAI key
+the agents' default is GPT-5.5, so a conversation started on Claude Sonnet 5
+is one of those refused until another model is picked.) **That holds only while no model is overridden**: a model named
 by one of the variables below keeps the default's id (see there), and then the
 id no longer names the model that answered.
 
@@ -130,16 +169,17 @@ needed:
 
 | variable | default | what it does |
 |---|---|---|
-| `ROBINAUTS_DEMO_PROVIDER` | `openrouter` when its key is set | `openrouter` or `anthropic` |
-| `ROBINAUTS_DEMO_MODEL` | `anthropic/claude-sonnet-5`, or `claude-sonnet-5` for Anthropic | the vendor's name for the first model, the agents' default |
-| `ROBINAUTS_DEMO_MODEL_2` | `openai/gpt-5.5`, or `claude-opus-5-5` for Anthropic | the vendor's name for the second |
-| `ROBINAUTS_DEMO_MODEL_3` | `google/gemini-3.8-flash`, or `claude-haiku-4-5` for Anthropic | the vendor's name for the third |
+| `ROBINAUTS_DEMO_PROVIDER` | the first key set of `openrouter`, `anthropic`, `openai` | `openrouter`, `anthropic` or `openai` |
+| `ROBINAUTS_DEMO_MODEL` | `anthropic/claude-sonnet-5`, or `claude-sonnet-5` for Anthropic, or `gpt-5.5` for OpenAI | the vendor's name for the first model, the agents' default |
+| `ROBINAUTS_DEMO_MODEL_2` | `openai/gpt-5.5`, or `claude-opus-5-5` for Anthropic, or `gpt-5.4-mini` for OpenAI | the vendor's name for the second |
+| `ROBINAUTS_DEMO_MODEL_3` | `google/gemini-3.8-flash`, or `claude-haiku-4-5` for Anthropic, or `gpt-5.4-nano` for OpenAI | the vendor's name for the third |
 | `ROBINAUTS_DEMO_PORT` | `8000` | where the server listens |
 | `ROBINAUTS_DEMO_PG_PORT` | `54390` | where the demo's PostgreSQL listens |
 | `ROBINAUTS_DEMO_OPEN` | `1` | `0` does not open a browser |
 
 The model names are the vendor's own: OpenRouter's are `<vendor>/<model>`
-(`anthropic/claude-sonnet-5`), Anthropic's are plain (`claude-sonnet-5`). A
+(`anthropic/claude-sonnet-5`), Anthropic's and OpenAI's are plain
+(`claude-sonnet-5`, `gpt-5.5`). A
 model named this way is shown in the picker by that name, since the demo has no
 title to give it. Changing one takes a restart — `demo/stop.sh` then
 `demo/start.sh` — because the configuration is read once, at start-up.
@@ -167,8 +207,8 @@ it. `start.sh` says `Tools: GitHub's MCP server, for both agents.` when it is
 on.
 
 The token is handled like the model key: taken **out of the script's
-environment** as soon as it is read, so PostgreSQL, npm and
-uv never see it, and put back on the server's invocation alone, as
+environment** as the first thing it does, so nvm, node, uv, PostgreSQL and
+npm never see it, and put back on the server's invocation alone, as
 `ROBINAUTS_GITHUB_TOKEN`, the variable `[mcp_servers.github]` names. The
 configuration holds that name and nothing else. **The agents act as the
 token's owner** on `api.githubcopilot.com`, with whatever the token may do,
@@ -250,11 +290,13 @@ Every failure is one line, and the server's own log is
 
 | what you see | why | what to do |
 |---|---|---|
-| `The demo needs one model provider key` | neither variable is set | set one of the two, or write `demo/.env` |
+| `The demo needs one model provider key` | none of the three variables is set | set one of them, or write `demo/.env` |
 | every GitHub tool call fails with `401` | the token is wrong, expired or revoked | a new token, or unset `ROBINAUTS_GITHUB_TOKEN` to go on without |
 | `demo/.env is mode 644 and may hold a key` | anybody on this machine could read it | `chmod 600 demo/.env` |
-| every answer fails, and the log says `authentication_error` / `API key is invalid` / `User not found` | the key is wrong, expired, or belongs to the other vendor | check the key; `User not found` is OpenRouter's way of saying it has never issued that one |
-| every answer on one model fails, and the log's message names the model | that vendor has retired it, or spells it differently | pick another in the picker; set `ROBINAUTS_DEMO_MODEL`, `_2` or `_3` and start again; OpenRouter lists its ids at <https://openrouter.ai/models> |
+| every answer fails, and the log says `authentication_error` / `API key is invalid` / `User not found` / `invalid_api_key` | the key is wrong, expired, or belongs to another vendor | check the key; `User not found` is OpenRouter's way of saying it has never issued that one, and `invalid_api_key` OpenAI's |
+| every answer on one model fails, and the log's message names the model (`model_not_found`, from OpenAI) | that vendor has retired it, or spells it differently, or the key's project may not use it | pick another in the picker; set `ROBINAUTS_DEMO_MODEL`, `_2` or `_3` and start again; OpenRouter lists its ids at <https://openrouter.ai/models>, OpenAI at <https://platform.openai.com/docs/models> |
+| with the OpenAI key and a GitHub token, every turn on one model fails, and the log names function tools and `reasoning_effort` | the model does not take tools over Chat Completions with its reasoning on: GPT-6 Sol and Luna by OpenAI's documentation, GPT-5.6 Sol by OpenAI Support's report, and possibly the other GPT-5.6 models, which reason by default | pick one of the demo's own three, or unset `ROBINAUTS_GITHUB_TOKEN` so that the agents have no tools |
+| `ROBINAUTS_DEMO_PROVIDER=openai, but OPENAI_API_KEY is not set.` (or another provider's name) | the provider chosen has no key | set that key, or choose another |
 | `node is not on the PATH` | the interface is built from source | install the Node.js in `frontend/.nvmrc`, or `nvm use` in `frontend/` |
 | `uv is not on the PATH` | everything Python is fetched with it | install uv |
 | `Already running on http://127.0.0.1:8000/` | it is already up | `demo/stop.sh` first, or just open the page |
