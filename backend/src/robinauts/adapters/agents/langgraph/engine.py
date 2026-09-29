@@ -447,8 +447,9 @@ THINKING_BLOCKS = frozenset({"thinking", "redacted_thinking"})
 What the vendor requires back, unchanged, when a tool call's results go back:
 a ``thinking`` block with its ``signature``, or a ``redacted_thinking`` block
 that is opaque throughout. These are what ``_extras`` keeps and ``_assistant``
-replays; the reasoning a person watched arrive is shown from the stream and
-kept in the run's events, and never read out of these.
+replays, and only when they are signed (``_signed``); the reasoning a person
+watched arrive is shown from the stream and kept in the run's events, and never
+read out of these.
 """
 
 BLOCKS_LEFT_OUT = (
@@ -1181,11 +1182,31 @@ def _replayed(message: Message, model_id: str | None) -> list[dict[str, Any]]:
     blocks = kept.get("thinking")
     if not isinstance(blocks, list):
         return []
-    return [
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and block.get("type") in THINKING_BLOCKS
-    ]
+    return [dict(block) for block in blocks if _signed(block)]
+
+
+def _signed(block: object) -> bool:
+    """Whether a block is one the vendor takes back: signed, or opaque throughout.
+
+    A ``thinking`` block with a signature, or a ``redacted_thinking`` block
+    with its data -- the same two shapes the other engine keeps and replays.
+    A ``thinking`` block with no signature is what a model that signs nothing
+    sends through an Anthropic-compatible endpoint (OpenRouter's GPT, for one),
+    and the Messages API refuses a request that carries one back, so it is
+    neither kept nor replayed: its text was streamed as reasoning already.
+    Checked on the way back too, since an answer stored before this was
+    checked may hold one.
+    """
+    if not isinstance(block, Mapping):
+        return False
+    if block.get("type") == "redacted_thinking":
+        return isinstance(block.get("data"), str) and bool(block["data"])
+    return (
+        block.get("type") == "thinking"
+        and isinstance(block.get("thinking"), str)
+        and isinstance(block.get("signature"), str)
+        and bool(block["signature"])
+    )
 
 
 class _Streaming:
@@ -1446,17 +1467,17 @@ def _text_of(whole: AIMessage | None) -> str:
 def _extras(whole: AIMessage | None) -> dict[str, Any]:
     """The vendor's signed blocks off the final message, keyed by vendor.
 
-    Kept as they came, less the stream's own ``index``, and bounded as every
-    ``extras`` is: blocks that do not fit are left out with a line in the log
-    (``BLOCKS_LEFT_OUT``) rather than failing the turn over the size of the
-    thinking.
+    Kept as they came, less the stream's own ``index``, and only those the
+    vendor takes back (``_signed``). Bounded as every ``extras`` is: blocks
+    that do not fit are left out with a line in the log (``BLOCKS_LEFT_OUT``)
+    rather than failing the turn over the size of the thinking.
     """
     if whole is None or isinstance(whole.content, str):
         return {}
     blocks = [
         {key: value for key, value in block.items() if key != "index"}
         for block in whole.content
-        if isinstance(block, Mapping) and block.get("type") in THINKING_BLOCKS
+        if _signed(block)
     ]
     if not blocks:
         return {}
