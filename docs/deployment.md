@@ -13,6 +13,10 @@ start, the reverse proxy before signing anyone in — the session cookie is
 
 ## Prerequisites
 
+- **Linux or macOS.** Windows is not a target: `backend/uv.lock` is
+  resolved for those two platforms only, and a package that Windows alone
+  would need is neither locked nor checked
+  ([DEPENDENCIES.md](../DEPENDENCIES.md)).
 - **Python 3.12 or later.** The wheel is `py3-none-any` and its lock
   resolves for 3.12; the deployment machine needs the interpreter and
   `venv`, nothing more. No Node — the interface is built into the wheel —

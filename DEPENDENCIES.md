@@ -9,12 +9,21 @@ common use. The reasoning is in
 The policy applies to every dependency **and to everything it brings with
 it**: the whole locked set is checked, not the direct dependencies alone.
 
+The locked set is resolved for the platforms the project runs on, **Linux
+and macOS**, and for no other: `[tool.uv] environments` in
+`backend/pyproject.toml` holds `backend/uv.lock` to those two, so a package
+that another platform alone would need is not locked, not checked and not
+installed anywhere. Windows is not a target
+([docs/deployment.md](docs/deployment.md)), by the project owner's decision
+(2026-09-30), taken over `pywin32` -- see
+["Known exclusions"](#known-exclusions).
+
 ## Categories
 
 ### Allowed
 
-Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Zlib, PostgreSQL,
-PSF-2.0, CNRI-Python, CC0-1.0, Unlicense.
+Apache-2.0, MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Zlib,
+PostgreSQL, PSF-2.0, CNRI-Python, CC0-1.0, Unlicense.
 
 `CNRI-Python` is the licence CNRI released Python 1.6.1 under: permissive and
 OSI-approved, with no copyleft term. The ASF's category list does not name it;
@@ -26,6 +35,19 @@ conjunction of two allowed licences, which now passes. It is locked because
 SPDX `CNRI-Python`, `PSF-2.0` and `Python-2.0` are three **different
 identifiers**, and so is `CNRI-Python-GPL-Compatible`: allowing the first
 allows neither of the others (see the `argparse` row below).
+
+`MIT-0` is the MIT No Attribution licence: the MIT text with the condition
+that the notice be reproduced taken out, so strictly more permissive than
+MIT, OSI-approved and with no copyleft term -- an MIT-style licence, which
+is Category A of the ASF model. It is on this list by the project owner's
+decision (2026-09-30), taken for `cffi`, which states it as its
+`License-Expression` from 2.1.0 (2026-07; 2.0.0 still states `MIT`).
+`cryptography` brings `cffi`, and `pyjwt[crypto]`, which the MCP Python SDK
+requires, brings `cryptography`. Two rows of
+["JavaScript build tooling"](#javascript-build-tooling) had carried the
+identifier by name until then, for `@csstools/color-helpers` and
+`@csstools/css-syntax-patches-for-csstree`; they went with the decision,
+because the npm gate fails a row that its package no longer needs.
 
 ### Restricted
 
@@ -187,11 +209,15 @@ here, and that gate checks them.
 ## Excepted development-only dependencies
 
 The licence is the one that was read, and the version is the one it was read
-in; the gate checks both.
+in; the gate checks both. The table has no row at present. `colorama` had
+one -- 0.4.6, BSD-3-Clause read in the wheel's LICENSE.txt, since its metadata
+states the classifier `License :: OSI Approved :: BSD License` and nothing
+else, brought by `pytest` on Windows alone -- until the lock was resolved for
+Linux and macOS only (2026-09-30), which took it out of the locked set; a row
+for a package the lock does not have is an error, not a memory.
 
 | package | version | licence | why it is acceptable |
 |---|---|---|---|
-| `colorama` | 0.4.6 | BSD-3-Clause | development only; brought by `pytest` on Windows. Its metadata states the classifier `License :: OSI Approved :: BSD License` and nothing else, which names no version of the BSD licence; the LICENSE.txt shipped in the 0.4.6 wheel is the three-clause text |
 
 ## Excepted licence texts
 
@@ -246,7 +272,7 @@ adopted.
 
 | package | version | licence | why it is acceptable |
 |---|---|---|---|
-| `tiktoken` | 0.14.0 | MIT | its metadata states no `License-Expression` and no `License ::` classifier, and its `License` field — as PyPI publishes it for 0.14.0 — holds the whole licence text: the line `MIT License`, then `Copyright (c) 2022 OpenAI, Shantanu Jain`, then the MIT permission notice and disclaimer, unchanged. Named ahead of its adoption, and adopted since: `langchain-openai` and `pydantic-ai-slim[openai]` need it, and both engines reach the OpenAI kinds through them. The row settles the **package's** licence only. `tiktoken` fetches its BPE tokenizer data (`cl100k_base.tiktoken` and the like) from the network the first time an encoding is asked for, and a tokenizer is an asset under ["Assets"](#assets) — but **no encoding is ever asked for**: `langchain-openai` asks only when tokens are counted (`get_num_tokens` and its relatives) and Pydantic AI only in its embeddings, and the platform does neither, so no tokenizer file is fetched, used or shipped and none needs an entry in [docs/legal/third-party.md](docs/legal/third-party.md). A turn is held to that under both engines by `test_an_openai_turn_streams_its_text_and_sends_the_configuration_s_request` in `backend/tests/unit/test_engines_over_chat_completions.py`, run once under each engine, which replaces `tiktoken`'s `get_encoding` and `encoding_for_model` with functions that fail the test — so a warm tokenizer cache cannot hide a call. The question re-opens the day something counts tokens — a context budget in an adapter (ADR 0004), usage reporting — or uses embeddings: the tokenizer files it would then fetch need their licence read and an entry there first |
+| `tiktoken` | 0.14.0 | MIT | its metadata states no `License-Expression` and no `License ::` classifier, and its `License` field — as PyPI publishes it for 0.14.0 — holds the whole licence text: the line `MIT License`, then `Copyright (c) 2022 OpenAI, Shantanu Jain`, then the MIT permission notice and disclaimer, unchanged. Named ahead of its adoption, and adopted since: `langchain-openai` and `pydantic-ai-slim[openai]` need it, and both engines reach the OpenAI kinds through them. The row settles the **package's** licence only. `tiktoken` fetches its BPE tokenizer data (`cl100k_base.tiktoken` and the like) from the network the first time an encoding is asked for, and a tokenizer is an asset under ["Assets"](#assets) — but **no encoding is ever asked for**: `langchain-openai` asks only when tokens are counted (`get_num_tokens` and its relatives) and Pydantic AI only in its embeddings, and the platform does neither, so no tokenizer file is fetched, used or shipped and none needs an entry in [docs/legal/third-party.md](docs/legal/third-party.md). A turn is held to that under both engines by `test_an_openai_turn_streams_its_text_and_sends_the_configuration_s_request` in `backend/tests/unit/test_engines_over_chat_completions.py`, run once under each engine, which replaces `tiktoken`'s `get_encoding` and `encoding_for_model` with functions that fail the test — so a warm tokenizer cache cannot hide a call. The question re-opens the day something counts tokens — a token count in an adapter's context management, which today measures approximately (ADR 0005), usage reporting — or uses embeddings: the tokenizer files it would then fetch need their licence read and an entry there first |
 
 ## JavaScript build tooling
 
@@ -293,8 +319,6 @@ the bundle, and excuses nothing there.
 | `spdx-ranges` | 2.1.1 | development | `(MIT AND CC-BY-3.0)` | the same, for the ranges of the SPDX list |
 | `lru-cache` | 11.5.3 | development | BlueOak-1.0.0 | permissive and OSI-approved, with no copyleft term and no term beyond attribution; it is not on the allowed list only because nothing had brought one before |
 | `minimatch` | 10.2.6 | development | BlueOak-1.0.0 | the same licence and the same reason |
-| `@csstools/color-helpers` | 6.1.1 | development | MIT-0 | MIT with the attribution requirement waived: strictly more permissive than MIT, which is on the list |
-| `@csstools/css-syntax-patches-for-csstree` | 1.1.14 | development | MIT-0 | the same |
 | `argparse` | 2.0.1 | development | Python-2.0 | SPDX `Python-2.0` and SPDX `PSF-2.0` are **different identifiers** — the first is the CNRI-era Python 2.0 licence, the second the PSF licence agreement — so the allowed list's PSF-2.0 does not cover this and a row is the honest way to record it. Both are permissive, non-copyleft and Apache-compatible in the ASF's own category A. The argument parser `js-yaml` uses, brought by ESLint |
 
 ### What the bundle's record does not see
@@ -361,8 +385,7 @@ then, the by-hand list is the record.
 | package | licence | consequence |
 |---|---|---|
 | `psycopg`, `psycopg-pool` | LGPL-3.0-only | not used; the PostgreSQL driver is `asyncpg` |
-| `langgraph-checkpoint-postgres` | MIT, but depends on `psycopg` | cannot be adopted as it is ([ADR 0002](docs/adr/0002-conversation-persistence.md)) |
-| `mcp` (the MCP Python SDK) | MIT, but requires `pyjwt[crypto]`, which requires `cryptography`, which requires `cffi`; and `pywin32` on Windows | not adopted (checked 2026-09-28, at 2.2.0). The rest of its tree passes -- `mcp-types`, `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `pycparser` (BSD-3-Clause), and what is in the lock already -- and the two below do not. So the MCP adapter is a **client of our own over `httpx`** for the three calls a client needs -- `initialize`, `tools/list`, `tools/call` -- over Streamable HTTP ([docs/specs/agents.md](docs/specs/agents.md), "Tools"), which is the fallback the plan named for exactly this case ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), step 2). The import rule confining the SDK to `adapters/tools/mcp/` is written all the same, before the fact, so that the day the tree passes it belongs there and nowhere else |
-| `cffi` | `MIT-0` (the MIT No Attribution licence), stated as its `License-Expression` since 2.1.0 (2026-07); 2.0.0 still states `MIT` | on no list above. It is strictly more permissive than MIT, the ASF category model this document adopts lists it under Category A, and the JavaScript table below already carries it twice for that reason -- so the edit is one identifier on the allowed list, and it is still a decision for a person, not for a build ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), "Open"). It has not been taken. Brought by `cryptography`, and through it by anything that needs `pyjwt[crypto]` |
-| `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence | the gate fails closed and cannot classify it. Windows-only (`sys_platform == "win32"`), which the gate deliberately does not read: the locked set is checked whole, whatever this machine installs |
+| `langgraph-checkpoint-postgres` | MIT, but depends on `psycopg` | cannot be adopted as it is, and is not needed: the model's memory is a column of the platform's own schema ([ADR 0002](docs/adr/0002-conversation-persistence.md), [ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)) |
+| `mcp` (the MCP Python SDK), `langchain-mcp-adapters`, `fastmcp-slim` | MIT; `mcp` requires `pywin32` on Windows, which the lock does not resolve for | **adopted** (2026-09-30; [ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)): both agent frameworks' MCP clients are built on the SDK, and the tool loop is theirs now, so the client of our own over `httpx` that stood in for it is gone. The whole tree passes -- `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `httpx-sse`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `cffi` (`MIT-0`, allowed by the decision above), `pycparser` (BSD-3-Clause), and what is in the lock already (checked 2026-09-30, at `mcp` 1.30.0). It was known to fail on two packages until then: `MIT-0` settled one, and the row below records the other |
+| `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence. The licence files the 312 wheel ships (read 2026-09-30) are the three-clause BSD text for `win32`, `com` and `pythonwin`, MIT for the MAPI stub library, an HPND-style notice for Scintilla, the Python licence stack for the IDLE-derived code -- and the **LGPL-2.1** text as `adodbapi/license.txt`, for the `adodbapi` package the wheel carries | **not locked**: `mcp` needs it on Windows alone (`sys_platform == "win32"`, for the job objects of its stdio transport, which the platform never uses -- its tool servers are reached over HTTP), and the lock is resolved for Linux and macOS only. That is the decision the wheel forced. The gate fails closed on the metadata, and the runtime exception by name that the project owner asked for first, the twin of the `colorama` row the development-only table had, could not be written: an exception never covers a forbidden licence, LGPL is forbidden in any version, transitively, development-only included, and a row signs what a person read. So the owner chose the platforms over the exception (2026-09-30), and `colorama` and `pywin32-ctypes`, Windows-only too, left the lock with it. The gate does not read platform markers, on purpose: what the lock has is checked whole, and what it does not have is not supported |
 | `pgserver` | no licence metadata published: the wheel carries the Apache-2.0 text as its `LICENSE` and states no identifier anywhere, so the gate fails closed | not a dependency, and cannot become one. The tests take the URL of a PostgreSQL they are given, and `demo/` runs this as a **tool** in a throwaway environment (`uv run --with pgserver==<version>`), as `reuse` and `pip-audit` are run: nothing imports it and it is not in `backend/uv.lock` ([demo/README.md](demo/README.md)) |

@@ -21,20 +21,18 @@ import os
 
 import pytest
 
-from conversations import agent_definition, question
+from conversations import agent_definition
 from robinauts.adapters import ProviderKeys
-from robinauts.core import check_engine_events
+from robinauts.core import check_backend_events
 from robinauts.domain import (
-    AnswerCompleted,
-    AnswerStarted,
-    AnswerTextDelta,
+    Done,
     Engine,
-    EngineEvent,
+    Event,
     ModelConfig,
     ModelProviderConfig,
     ModelsConfig,
     ProviderKind,
-    TextPart,
+    TextDelta,
 )
 from robinauts.ports import Agent
 
@@ -136,15 +134,15 @@ async def one_real_turn(agent: Agent, models: ModelsConfig) -> None:
     That the engine holds nothing afterwards is the caller's to assert: the
     count is each engine's own (``held``), and not the port's.
     """
-    seen: list[EngineEvent] = []
+    seen: list[Event] = []
 
-    async for event in agent.run_turn(models.agents[AGENT], (question(ASKED),), (), model=MODEL):
+    async for event in agent.stream(models.agents[AGENT], ASKED, model=MODEL, state=None):
         seen.append(event)
 
-    check_engine_events(seen)
-    assert isinstance(seen[0], AnswerStarted)
-    assert [event for event in seen if isinstance(event, AnswerTextDelta)]
-    completed = seen[-1]
-    assert isinstance(completed, AnswerCompleted)
-    said = "".join(part.text for part in completed.parts if isinstance(part, TextPart))
-    assert WANTED in said.lower()
+    check_backend_events(seen)
+    assert [event for event in seen if isinstance(event, TextDelta)]
+    done = seen[-1]
+    assert isinstance(done, Done)
+    assert WANTED in done.text.lower()
+    # The memory came back with it, in the framework's own format.
+    assert isinstance(done.state, bytes) and done.state

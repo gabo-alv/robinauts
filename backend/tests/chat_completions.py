@@ -4,21 +4,21 @@
 """OpenAI's Chat Completions on the wire, for both engines' tests: a vendor a test writes.
 
 The engines' own tests run a turn over a chat model they script, which proves
-the graph, the stream and the mapping and says nothing about the one thing a
-scripted model skips: **what the vendor's client really sends, and what it
-makes of what really comes back**. This is that half for the OpenAI kinds. The
-engine builds its client exactly as a deployment does (``chat_model``), and
-the test then swaps the client's HTTP transport for one that answers from a
-script and keeps every request -- so the request is the real one, byte for
-byte, the stream is parsed by the real SDK and the real framework, and nothing
-leaves the process.
+the agent, the loop, the stream and the mapping and says nothing about the one
+thing a scripted model skips: **what the vendor's client really sends, and
+what it makes of what really comes back**. This is that half for the OpenAI
+kinds. The engine builds its client exactly as a deployment does
+(``chat_model``), and the test then swaps the client's HTTP transport for one
+that answers from a script and keeps every request -- so the request is the
+real one, byte for byte, the stream is parsed by the real SDK and the real
+framework, and nothing leaves the process.
 
 Written without either framework, and named after the protocol rather than an
 engine: both engines' tests use it, and the discard test is that deleting an
 adapter breaks its own tests and nothing else (``docs/layout.md``). Beside the
 vendor are the configuration a turn over it runs on, and the shapes of stream
-and history the tests write: what the tests of both engines -- each engine's
-own, and the ones that hold both to one behaviour
+the tests write: what the tests of both engines -- each engine's own, and the
+ones that hold both to one behaviour
 (``tests/unit/test_engines_over_chat_completions.py``) -- would otherwise each
 write out again.
 """
@@ -26,26 +26,20 @@ write out again.
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx2
 import openai
 
-from conversations import AGENT, agent_definition, answer, question
+from conversations import AGENT, agent_definition
 from robinauts.domain import (
     AgentDefinition,
     Engine,
-    Message,
     ModelConfig,
     ModelProviderConfig,
     ModelsConfig,
     ProviderKind,
-    Role,
-    TextPart,
-    ToolCallPart,
-    ToolResultPart,
 )
 
 MODEL_NAME = "gpt-5.5"
@@ -128,12 +122,16 @@ def streamed(*chunks: dict[str, Any]) -> bytes:
 class Vendor:
     """An OpenAI-protocol endpoint that answers from a script and keeps what it was sent.
 
+    ``body`` answers every request; ``bodies`` answers them in turn, one each,
+    which is what a turn with a tool round makes -- the framework asks again
+    with the result -- and the last of them answers whatever follows.
     ``status`` other than 200 answers with ``error`` as the body, which is how
     the vendor refuses a key, a model or a request, and what the SDK raises its
     own exception from.
     """
 
     body: bytes = b""
+    bodies: list[bytes] = field(default_factory=list)
     status: int = 200
     error: dict[str, Any] | None = None
     headers: dict[str, str] = field(default_factory=dict)
@@ -145,9 +143,8 @@ class Vendor:
             return httpx2.Response(
                 self.status, json={"error": self.error or {}}, headers=self.headers
             )
-        return httpx2.Response(
-            200, content=self.body, headers={"content-type": "text/event-stream"}
-        )
+        body = self.bodies[min(len(self.sent), len(self.bodies)) - 1] if self.bodies else self.body
+        return httpx2.Response(200, content=body, headers={"content-type": "text/event-stream"})
 
     def plugged_into(self, client: Any) -> None:
         """Answer every request that vendor client makes from here on.
@@ -167,7 +164,12 @@ class Vendor:
     @property
     def body_sent(self) -> dict[str, Any]:
         """That request's JSON."""
-        parsed = json.loads(self.request.content)
+        return self.body_of(self.request)
+
+    @staticmethod
+    def body_of(request: httpx2.Request) -> dict[str, Any]:
+        """One request's JSON."""
+        parsed = json.loads(request.content)
         assert isinstance(parsed, dict)
         return parsed
 
@@ -291,39 +293,3 @@ def call_delta(index: int | None, **given: Any) -> dict[str, Any]:
     call.update(given)
     call["function"] = function
     return chunk({"tool_calls": [call]})
-
-
-ANTHROPIC_BLOCKS = {
-    "thinking": [
-        {"type": "thinking", "thinking": "hm", "signature": "SIG"},
-        {"type": "redacted_thinking", "data": "OPAQUE"},
-    ]
-}
-"""Anthropic's signed blocks, as an answer made over its protocol keeps them."""
-
-
-def history_with_a_call(
-    tool_name: str, vendor: str = "anthropic"
-) -> tuple[Message, Message, Message]:
-    """A question, an answer that called a tool with the vendor's blocks kept, the result.
-
-    The blocks are Anthropic's two shapes, kept under ``vendor`` -- Anthropic's
-    own key unless a test's scripted model names itself otherwise. The result
-    went wrong, which is what Chat Completions has no field for.
-    """
-    asked = question("look it up", seconds=0)
-    calling_ = answer(
-        asked,
-        seconds=1,
-        parts=(TextPart("Let me look."), ToolCallPart("toolu_01", tool_name, {"q": "robinauts"})),
-        extras={vendor: ANTHROPIC_BLOCKS},
-    )
-    results = Message(
-        id=uuid.uuid4(),
-        conversation_id=asked.conversation_id,
-        parent_id=calling_.id,
-        role=Role.TOOL,
-        parts=(ToolResultPart("toolu_01", "found 3", is_error=True),),
-        created_at=calling_.created_at,
-    )
-    return asked, calling_, results
