@@ -579,4 +579,5 @@ def test_a_refusal_of_discovery_names_both_issuers_and_no_traceback() -> None:
     detail = raised.value.detail
     assert "'not a url'" in detail
     assert OKTA.issuer in detail
-    assert "Error" not in detail and "(" not in detail
+    assert "Error" not in detail
+    assert "(" not in detail

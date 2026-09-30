@@ -407,7 +407,8 @@ async def test_a_new_chat_runs_on_the_model_its_author_picked() -> None:
     )
 
     stored = await wiring.store.conversation_by_id(begun_turn.conversation.id)
-    assert stored is not None and stored.model == OTHER_MODEL
+    assert stored is not None
+    assert stored.model == OTHER_MODEL
     assert begun_turn.run.model == OTHER_MODEL
     # The agent is the one asked for; only the model moved.
     assert stored.agent == AGENT
@@ -498,7 +499,9 @@ async def test_a_model_this_deployment_does_not_offer_is_not_set() -> None:
         await wiring.turns.set_model(AUTHOR, "not-a-uuid", OTHER_MODEL)  # type: ignore[arg-type]
 
     stored = await wiring.store.conversation_by_id(first.conversation_id)
-    assert stored is not None and stored.model == MODEL and stored.updated_at == NOW
+    assert stored is not None
+    assert stored.model == MODEL
+    assert stored.updated_at == NOW
 
 
 @asyncio_test
@@ -514,7 +517,8 @@ async def test_only_its_author_sets_a_conversation_s_model() -> None:
     # Somebody else's is answered exactly like one that is not there.
     assert type(theirs.value) is type(missing.value)
     stored = await wiring.store.conversation_by_id(first.conversation_id)
-    assert stored is not None and stored.model == MODEL
+    assert stored is not None
+    assert stored.model == MODEL
 
 
 @asyncio_test
@@ -526,7 +530,9 @@ async def test_the_model_may_be_changed_while_a_run_is_going_and_the_run_keeps_i
 
     assert changed.model == OTHER_MODEL
     still = await wiring.store.active_run_of(going.conversation_id)
-    assert still is not None and still.id == going.id and still.model == MODEL
+    assert still is not None
+    assert still.id == going.id
+    assert still.model == MODEL
 
 
 async def _on_a_model_since_removed() -> tuple[Wiring, Run, Message]:
@@ -566,7 +572,8 @@ async def test_a_model_the_deployment_no_longer_offers_refuses_every_kind_of_tur
     assert len(await stored_messages(wiring.store, conversation_id)) == 2
     assert len(await wiring.store.runs_of(conversation_id)) == 1
     stored = await wiring.store.conversation_by_id(conversation_id)
-    assert stored is not None and stored.model == OTHER_MODEL
+    assert stored is not None
+    assert stored.model == OTHER_MODEL
 
 
 @asyncio_test

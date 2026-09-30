@@ -964,7 +964,8 @@ def test_a_server_with_a_mistake_does_not_bury_it_under_the_agents_that_name_it(
         agents={"assistant": {**ASSISTANT, "tools": ["github"]}},
     )
 
-    assert len(found) == 1 and found[0].startswith("mcp_servers.github.url:")
+    assert len(found) == 1
+    assert found[0].startswith("mcp_servers.github.url:")
 
 
 # --- the tool server record's own rules ----------------------------------------

@@ -182,8 +182,10 @@ async def test_the_login_route_redirects_to_the_provider_and_keeps_the_state() -
     held, attributes = set_cookies(answered)["__Host-robinauts_login"]
     assert held == state
     assert f"max-age={LOGIN_SECONDS}" in attributes
-    assert "httponly" in attributes and "secure" in attributes
-    assert "samesite=lax" in attributes and "path=/" in attributes
+    assert "httponly" in attributes
+    assert "secure" in attributes
+    assert "samesite=lax" in attributes
+    assert "path=/" in attributes
 
 
 @asyncio_test
@@ -282,7 +284,9 @@ async def test_a_finished_sign_in_lands_in_the_interface_with_a_session() -> Non
     assert "max-age=0" in set_by["__Host-robinauts_login"][1]
     secret, session = set_by["__Host-robinauts_session"]
     assert f"max-age={SESSION_SECONDS}" in session
-    assert "httponly" in session and "secure" in session and "samesite=lax" in session
+    assert "httponly" in session
+    assert "secure" in session
+    assert "samesite=lax" in session
     assert secret not in deployment.store.everything()
     assert len(deployment.store.sessions) == 1
 
@@ -516,7 +520,8 @@ async def test_a_provider_id_that_is_not_one_is_refused_without_being_repeated(
     if named:
         # Never in an answer: that would be reflecting whatever the link said
         # back at whoever followed it.
-        assert named not in login.text and named not in callback.text
+        assert named not in login.text
+        assert named not in callback.text
     # In the log, and only escaped: no record it reached can end a line or
     # start one, whatever the id held.
     assert all("\n" not in record.getMessage() for record in caplog.records)

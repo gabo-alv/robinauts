@@ -385,7 +385,8 @@ async def test_a_title_that_is_not_one_line_of_text_is_refused() -> None:
             await wiring.service.rename(AUTHOR, CONVERSATION, title)  # type: ignore[arg-type]
 
     found = await wiring.store.conversation_by_id(CONVERSATION)
-    assert found is not None and found.title == "What is a robinaut?"
+    assert found is not None
+    assert found.title == "What is a robinaut?"
 
 
 # --- deleting ----------------------------------------------------------------

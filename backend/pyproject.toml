@@ -139,8 +139,9 @@ target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-# E/F: pyflakes + pycodestyle, I: isort, UP: pyupgrade, B: bugbear
-select = ["E", "F", "I", "UP", "B"]
+# E/F: pyflakes + pycodestyle, I: isort, UP: pyupgrade, B: bugbear,
+# PT018: one check per assert, so a failure names the check that failed
+select = ["E", "F", "I", "UP", "B", "PT018"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["robinauts"]

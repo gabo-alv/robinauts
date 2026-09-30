@@ -448,7 +448,8 @@ async def test_a_tool_round_is_the_calls_events_the_results_and_nothing_for_the_
         "role": "tool",
         "metadata": {"isError": True},
     }
-    assert landed.parent_id == calling.id and done.parent_id == landed.id
+    assert landed.parent_id == calling.id
+    assert done.parent_id == landed.id
     assert blocks[8].body["messageId"] == str(done.id)
     # The result's text is on the wire once, as content, and nowhere else.
     assert answered.text.count("no such repo") == 1
@@ -1003,8 +1004,10 @@ async def test_a_new_chat_runs_on_the_model_it_names() -> None:
         run = await it.wiring.store.run_by_id(uuid.UUID(answered.headers[RUN_ID_HEADER]))
 
     assert answered.status_code == 200
-    assert conversation is not None and conversation.model == OTHER_MODEL
-    assert run is not None and run.model == OTHER_MODEL
+    assert conversation is not None
+    assert conversation.model == OTHER_MODEL
+    assert run is not None
+    assert run.model == OTHER_MODEL
     assert [asked.model for asked in it.wiring.agent.asked] == [OTHER_MODEL]
 
 
@@ -1022,7 +1025,8 @@ async def test_a_new_chat_that_names_no_model_runs_on_the_agents_default(
         )
 
     assert answered.status_code == 200
-    assert conversation is not None and conversation.model == MODEL
+    assert conversation is not None
+    assert conversation.model == MODEL
     assert [asked.model for asked in it.wiring.agent.asked] == [MODEL]
 
 
@@ -1142,7 +1146,8 @@ async def test_a_turn_in_a_conversation_names_no_model() -> None:
 
     assert refused.status_code == 422
     assert refused.json() == {"error": "InvalidValueError", "detail": f"body: {UNKNOWN_FIELD}"}
-    assert kept is not None and kept.model == MODEL
+    assert kept is not None
+    assert kept.model == MODEL
 
 
 @asyncio_test

@@ -308,9 +308,11 @@ async def test_a_time_comes_back_as_the_instant_it_went_in() -> None:
 
         found = await store.conversation_by_id(CONVERSATION)
         going = await store.run_by_id(RUN)
-        assert found is not None and going is not None
+        assert found is not None
+        assert going is not None
         for when in (found.created_at, found.updated_at, going.created_at, going.started_at):
-            assert when is not None and when.tzinfo is not None
+            assert when is not None
+            assert when.tzinfo is not None
             assert when == created_at
             assert when == datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
 
@@ -379,7 +381,8 @@ async def test_at_most_one_active_run_is_a_partial_unique_index() -> None:
         assert definition is not None
         assert "CREATE UNIQUE INDEX" in definition
         assert "(conversation_id)" in definition
-        assert "'running'" in definition and "'waiting'" in definition
+        assert "'running'" in definition
+        assert "'waiting'" in definition
         assert "'finished'" not in definition
 
 
@@ -719,16 +722,20 @@ async def test_a_whole_turn_runs_against_this_store() -> None:
         await turns.execute(begun.run)
 
         ended = await store.run_by_id(begun.run.id)
-        assert ended is not None and ended.state is RunState.FINISHED
+        assert ended is not None
+        assert ended.state is RunState.FINISHED
         documents = await store.messages_of(begun.conversation.id)
         tree = tree_of_stored(
             [message_from_stored(document) for document in documents],
             conversation_id=begun.conversation.id,
         )
         root, replied = tree.visible_path()
-        assert root.role is Role.USER and root.text == "What is a robinaut?"
-        assert replied.role is Role.ASSISTANT and replied.text == "Someone who plays fair."
-        assert replied.provenance is not None and replied.provenance.run_id == ended.id
+        assert root.role is Role.USER
+        assert root.text == "What is a robinaut?"
+        assert replied.role is Role.ASSISTANT
+        assert replied.text == "Someone who plays fair."
+        assert replied.provenance is not None
+        assert replied.provenance.run_id == ended.id
         events = [run_event_from_stored(document) for document in await store.events_of(ended.id)]
         check_event_order(
             events,

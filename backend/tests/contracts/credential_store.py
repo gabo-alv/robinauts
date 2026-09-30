@@ -153,7 +153,8 @@ class CredentialStoreContract:
             assert secret_hash("the-cookie") in held
             assert secret_hash("the-state") in held
             # The dump is worth what it shows: a row's own fields are in it.
-            assert NONCE in held and VERIFIER in held
+            assert NONCE in held
+            assert VERIFIER in held
 
     # Users.
 
@@ -389,7 +390,8 @@ class CredentialStoreContract:
             assert again is False
             assert await store.count_pending_logins(now=NOW) == 1
             taken = await store.take_pending_login(secret_hash("state"))
-            assert taken is not None and taken.provider == "google"
+            assert taken is not None
+            assert taken.provider == "google"
 
     @asyncio_test
     async def test_a_hash_in_use_is_refused_at_the_cap_too(self) -> None:
@@ -403,7 +405,8 @@ class CredentialStoreContract:
                 is False
             )
             taken = await store.take_pending_login(secret_hash("state"))
-            assert taken is not None and taken.provider == "google"
+            assert taken is not None
+            assert taken.provider == "google"
 
     @asyncio_test
     async def test_sweeping_sign_ins_deletes_the_expired_ones_alone(self) -> None:

@@ -675,7 +675,8 @@ class Deployment:
         if problems or (config is None and local_development_host is None):
             raise ConfigError(problems)
         # Every failure above is a problem, and we raised.
-        assert keys is not None and tool_secrets is not None
+        assert keys is not None
+        assert tool_secrets is not None
         if not configured_models.agents:
             _log.info(NO_AGENTS)
         return cls(

@@ -145,4 +145,5 @@ async def one_real_turn(agent: Agent, models: ModelsConfig) -> None:
     assert isinstance(done, Done)
     assert WANTED in done.text.lower()
     # The memory came back with it, in the framework's own format.
-    assert isinstance(done.state, bytes) and done.state
+    assert isinstance(done.state, bytes)
+    assert done.state

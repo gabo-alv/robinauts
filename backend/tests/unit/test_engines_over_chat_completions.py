@@ -378,7 +378,8 @@ async def test_an_openai_turn_streams_its_text_and_sends_the_configuration_s_req
         "fair.",
     ]
     assert done(seen).text == "Someone who plays fair."
-    assert isinstance(done(seen).state, bytes) and done(seen).state
+    assert isinstance(done(seen).state, bytes)
+    assert done(seen).state
     assert agent.held == 0
     sent = vendor.request
     assert str(sent.url) == OPENAI_ENDPOINT + chat_completions.PATH
@@ -430,7 +431,8 @@ async def test_a_configured_ceiling_is_sent_in_the_field_the_kind_takes(
     await turn_of(over_chat_completions(engine, unbounded, provider), engine)
     await turn_of(over_chat_completions(engine, bounded, provider, max_output_tokens=1234), engine)
 
-    assert field not in unbounded.body_sent and not_field not in unbounded.body_sent
+    assert field not in unbounded.body_sent
+    assert not_field not in unbounded.body_sent
     assert bounded.body_sent[field] == 1234
     assert not_field not in bounded.body_sent
 

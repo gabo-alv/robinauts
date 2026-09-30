@@ -410,7 +410,8 @@ async def test_one_turn_timeout_bounds_a_turn_and_the_watching_of_one(tmp_path: 
     deployment = answering(tmp_path, held, store=store, turn_seconds=TURN_SECONDS)
     assert deployment.turn_seconds == TURN_SECONDS
     await deployment.open()
-    assert deployment.turns is not None and deployment.watch is not None
+    assert deployment.turns is not None
+    assert deployment.watch is not None
 
     # Watching: a run nothing here is answering, written after the start-up
     # sweep, stores nothing and is given up on -- which is said and not
@@ -425,7 +426,8 @@ async def test_one_turn_timeout_bounds_a_turn_and_the_watching_of_one(tmp_path: 
     while (await store.run_by_id(started.run.id)).state in ACTIVE_RUN_STATES:
         await asyncio.sleep(0.005)
     failed = await store.run_by_id(started.run.id)
-    assert failed.state is RunState.FAILED and failed.error == TIMED_OUT
+    assert failed.state is RunState.FAILED
+    assert failed.error == TIMED_OUT
     await deployment.aclose()
 
     # And a deployment that asks for no particular one has the application's,
@@ -507,7 +509,8 @@ async def test_the_start_up_sweep_ends_the_runs_a_process_that_went_away_left(
     await deployment.aclose()
 
     ended = await store.run_by_id(going.id)
-    assert ended is not None and ended.state is RunState.INTERRUPTED
+    assert ended is not None
+    assert ended.state is RunState.INTERRUPTED
     readable(await stored_events(store, going.id), ended)
     assert "1 run" in caplog.text
 
@@ -573,7 +576,8 @@ async def test_shutting_down_interrupts_the_runs_this_process_was_answering(
     await deployment.aclose()
 
     ended = await store.run_by_id(started.run.id)
-    assert ended is not None and ended.state is RunState.INTERRUPTED
+    assert ended is not None
+    assert ended.state is RunState.INTERRUPTED
     events = await stored_events(store, started.run.id)
     readable(events, ended)
     assert events[-1].event.state is RunState.INTERRUPTED
@@ -596,7 +600,8 @@ async def test_a_turn_whose_work_never_began_is_ended_while_the_stores_are_open(
     await deployment.aclose()
 
     ended = await store.run_by_id(started.run.id)
-    assert ended is not None and ended.state is RunState.INTERRUPTED
+    assert ended is not None
+    assert ended.state is RunState.INTERRUPTED
     readable(await stored_events(store, started.run.id), ended)
 
 
@@ -605,14 +610,16 @@ async def test_a_turn_begun_through_the_deployment_runs_to_its_end(tmp_path: Pat
     store = MemoryConversationStore()
     deployment = answering(tmp_path, *says("Someone who plays fair."), store=store)
     await deployment.open()
-    assert deployment.turns is not None and deployment.watch is not None
+    assert deployment.turns is not None
+    assert deployment.watch is not None
 
     started = await deployment.turns.begin(AUTHOR, agent_id=AGENT, text="What is a robinaut?")
     seen = [event async for event in deployment.watch.events(AUTHOR, started.run.id)]
 
     readable(seen, started.run)
     ended = await store.run_by_id(started.run.id)
-    assert ended is not None and ended.state is RunState.FINISHED
+    assert ended is not None
+    assert ended.state is RunState.FINISHED
     await deployment.aclose()
 
 

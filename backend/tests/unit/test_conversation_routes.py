@@ -395,7 +395,8 @@ async def test_opening_a_conversation_sends_the_thread_it_shows_and_nothing_put_
     ]
     assert len(stored) == 5
     assert "parent_id" not in body["messages"][0]
-    assert "leaf_id" not in body and "active_leaf_id" not in body["conversation"]
+    assert "leaf_id" not in body
+    assert "active_leaf_id" not in body["conversation"]
     assert body["messages"][0]["parts"] == [{"kind": "text", "text": "What is a robinaut?"}]
     assert body["messages"][0]["role"] == Role.USER.value
     assert body["messages"][0]["provenance"] is None
@@ -717,7 +718,8 @@ async def test_renaming_answers_the_conversation_the_store_wrote() -> None:
 
     assert renamed.status_code == 200
     assert renamed.json()["title"] == NEW_TITLE
-    assert stored is not None and stored.title == NEW_TITLE
+    assert stored is not None
+    assert stored.title == NEW_TITLE
     # The store dated it, and what came back is what it wrote.
     assert renamed.json()["updated_at"] == "2026-09-21T09:01:40Z"
 
@@ -739,7 +741,8 @@ async def test_a_title_no_conversation_could_hold_is_refused_naming_the_rule() -
         "detail": "body.title: a conversation's title is one line of printable text",
     }
     assert "sauce" not in refused.text
-    assert stored is not None and stored.title == "What is a robinaut?"
+    assert stored is not None
+    assert stored.title == "What is a robinaut?"
 
 
 @asyncio_test
@@ -772,9 +775,11 @@ async def test_a_body_carrying_fields_nobody_knows_is_refused_without_naming_the
     assert one.status_code == two.status_code == 422
     assert one.json()["detail"] == f"body: {UNKNOWN_FIELD}"
     assert two.json()["detail"] == "body: 2 fields nobody knows"
-    assert token not in one.text and token not in two.text
+    assert token not in one.text
+    assert token not in two.text
     assert "owner_id" not in two.text
-    assert stored is not None and stored.title == "What is a robinaut?"
+    assert stored is not None
+    assert stored.title == "What is a robinaut?"
 
 
 @asyncio_test
@@ -837,7 +842,8 @@ async def test_a_title_that_is_not_text_at_all_is_refused_as_such() -> None:
         "error": "InvalidValueError",
         "detail": f"body.title: {UNREADABLE_RULES['string_unicode']}",
     }
-    assert stored is not None and stored.title == "What is a robinaut?"
+    assert stored is not None
+    assert stored.title == "What is a robinaut?"
 
 
 @asyncio_test
@@ -868,7 +874,8 @@ async def test_a_title_of_nothing_but_spaces_is_no_title() -> None:
     # The empty one never reaches the application: the document says a title
     # has a character in it.
     assert empty.json()["detail"] == f"body.title: {UNREADABLE_RULES['string_too_short']}"
-    assert stored is not None and stored.title == "What is a robinaut?"
+    assert stored is not None
+    assert stored.title == "What is a robinaut?"
 
 
 @asyncio_test
@@ -887,7 +894,8 @@ async def test_a_write_sent_as_anything_but_json_is_refused() -> None:
 
     assert refused.status_code == 415
     assert refused.json()["error"] == "UnsupportedMediaTypeError"
-    assert stored is not None and stored.title == "What is a robinaut?"
+    assert stored is not None
+    assert stored.title == "What is a robinaut?"
 
 
 @asyncio_test
@@ -1008,7 +1016,8 @@ async def test_a_body_that_gives_a_field_twice_is_refused_at_any_depth() -> None
     assert twice.json() == {"error": "InvalidValueError", "detail": BODY_TWICE}
     assert deeper.json()["detail"] == BODY_TWICE
     assert "Evil" not in twice.text
-    assert stored is not None and stored.title == "What is a robinaut?"
+    assert stored is not None
+    assert stored.title == "What is a robinaut?"
 
 
 def test_every_route_with_a_body_reads_it_once() -> None:
@@ -1128,7 +1137,8 @@ async def test_cancelling_a_run_this_process_is_executing_stops_it() -> None:
         "started_at": "2026-09-21T09:01:40Z",
         "ended_at": None,
     }
-    assert ended is not None and ended.state is RunState.CANCELLED
+    assert ended is not None
+    assert ended.state is RunState.CANCELLED
 
 
 @asyncio_test
@@ -1148,7 +1158,8 @@ async def test_cancelling_a_run_no_process_holds_ends_it_in_the_store() -> None:
     assert stopped.status_code == 200
     assert stopped.json()["state"] == RunState.CANCELLED.value
     assert stopped.json()["ended_at"] == "2026-09-21T09:01:40Z"
-    assert ended is not None and ended.state is RunState.CANCELLED
+    assert ended is not None
+    assert ended.state is RunState.CANCELLED
 
 
 @asyncio_test
@@ -1171,7 +1182,8 @@ async def test_a_run_of_another_conversation_is_not_this_conversations_run() -> 
 
     assert refusal(crossed) == refusal(absent)
     assert crossed.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
-    assert still_going is not None and still_going.is_active
+    assert still_going is not None
+    assert still_going.is_active
 
 
 @asyncio_test
@@ -1191,7 +1203,8 @@ async def test_somebody_elses_run_is_answered_like_one_that_is_not_there() -> No
 
     assert refusal(asked) == refusal(absent)
     assert asked.json() == {"error": NOT_FOUND_ERROR, "detail": NOT_FOUND_DETAIL}
-    assert still_going is not None and still_going.is_active
+    assert still_going is not None
+    assert still_going.is_active
 
 
 # --- the agents --------------------------------------------------------------
@@ -1259,7 +1272,8 @@ async def test_moving_to_another_model_answers_the_conversation_the_store_wrote(
     assert kept.model == MODEL
     assert moved.status_code == 200
     assert moved.json()["model"] == OTHER_MODEL
-    assert stored is not None and stored.model == OTHER_MODEL
+    assert stored is not None
+    assert stored.model == OTHER_MODEL
     # The store dated it, as a rename is, and what came back is what it wrote.
     assert moved.json()["updated_at"] == "2026-09-21T09:01:40Z"
     # And every other answer that carries the conversation says so too.

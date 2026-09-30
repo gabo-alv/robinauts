@@ -231,7 +231,8 @@ class AgentContract:
         platform never reads it (``docs/specs/conversations.md``)."""
         first = await self.turn(Script(answers=(Say("Someone who plays fair."),)))
         state = _done(first).state
-        assert isinstance(state, bytes) and state
+        assert isinstance(state, bytes)
+        assert state
 
         second = await self.turn(Script(answers=(Say("And a robin sings."),)), state=state)
 

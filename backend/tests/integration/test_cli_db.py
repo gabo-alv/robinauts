@@ -154,7 +154,8 @@ async def test_a_database_made_from_an_older_file_is_refused(monkeypatch: Any, c
         assert code == cli.FAILED
         assert "Traceback" not in said
         assert "made from an older schema.sql" in said
-        assert "drop it and run" in said and DB_INIT_COMMAND in said
+        assert "drop it and run" in said
+        assert DB_INIT_COMMAND in said
 
 
 @asyncio_test
