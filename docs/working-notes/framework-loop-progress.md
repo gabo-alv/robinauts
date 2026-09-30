@@ -175,18 +175,26 @@ and the parity tests.
   passed, 224 skipped; the Postgres suite skips without a database).
   `scripts/check-reuse.sh`: green. `scripts/check-audit.sh`: green (113
   packages, no known vulnerability).
-- `scripts/check-licences.sh`: **red, as the plan said it would be**, on
-  exactly two packages, `cffi` (`MIT-0`) and `pywin32` (a family, no
-  licence), both brought by the MCP SDK's `pyjwt[crypto]`; everything else
-  the new tree brings passes, `tiktoken` and `regex` included, which `main`
-  settled. The decision is the user's, with the pull request
-  ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known exclusions").
+- `scripts/check-licences.sh`: **red on one package**, `pywin32`. It was red
+  on two, as the plan said it would be. `MIT-0`, `cffi`'s licence, joined
+  the allowed list by the owner's decision (2026-09-30). The exception the
+  owner asked for `pywin32` was not written: the 312 wheel, read for it,
+  carries `adodbapi` under LGPL-2.1, which is forbidden and which no
+  exception covers. The ways out are the owner's
+  ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known exclusions"). Everything
+  else the new tree brings passes, `tiktoken` and `regex` included, which
+  `main` settled.
 - `scripts/check-dco.sh`: red until the taker-over signs the commit, as
   with the MCP branch: the recipe is in [mcp-progress.md](mcp-progress.md)
   ("Where it stands").
-- Not run here: the frontend and wheel gates (no change on the frontend or
-  the wire), and the live tests (`tests/live/`, which need a key; they are
-  on the port and collect).
+- The npm licence gate (`node scripts/check-licences.mjs`, the first step of
+  `scripts/check-frontend.sh`) and its tests (`src/test/licence-gate.test.ts`):
+  green, run because the `MIT-0` decision took two rows out of the
+  JavaScript table, which that gate would otherwise fail as rows nobody
+  needs. The script itself did not run here: this machine has node 22, and
+  `frontend/.nvmrc` asks for 24.
+- Not run here: the wheel gate (no change on the wire), and the live tests
+  (`tests/live/`, which need a key; they are on the port and collect).
 
 ## Rebased onto main
 

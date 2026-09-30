@@ -85,6 +85,10 @@ def best(verdicts: Iterable[Verdict]) -> Verdict:
 
 _SPELLINGS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("MIT", ("mit license", "mit license (mit)", "the mit license", "expat")),
+    # MIT with the condition that the notice be reproduced taken out. An
+    # identifier of its own to SPDX and to this table: "MIT" never means it,
+    # and it never means "MIT".
+    ("MIT-0", ("mit no attribution", "mit no attribution license", "mit-0 license")),
     (
         "Apache-2.0",
         (

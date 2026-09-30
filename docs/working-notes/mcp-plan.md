@@ -274,7 +274,11 @@ it here rather than deciding it in passing.
   Windows from the lock, which also drops `colorama` and says Windows is not
   supported); or leaving it. Both decisions together would let the SDK in
   and take step 5's hand-written client out, which is the cost the plan
-  named for the fallback. Step 2 took the fallback pending them.
+  named for the fallback. Step 2 took the fallback pending them. **Half
+  answered (2026-09-30)**: `MIT-0` joined the allowed list, and the runtime
+  exception for `pywin32` was asked for but could not be written -- the 312
+  wheel carries `adodbapi` under LGPL-2.1, which no exception covers. The
+  ways out are in DEPENDENCIES.md, "Known exclusions".
 
 
 ## The seams, by layer

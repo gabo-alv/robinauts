@@ -13,8 +13,8 @@ it**: the whole locked set is checked, not the direct dependencies alone.
 
 ### Allowed
 
-Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Zlib, PostgreSQL,
-PSF-2.0, CNRI-Python, CC0-1.0, Unlicense.
+Apache-2.0, MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Zlib,
+PostgreSQL, PSF-2.0, CNRI-Python, CC0-1.0, Unlicense.
 
 `CNRI-Python` is the licence CNRI released Python 1.6.1 under: permissive and
 OSI-approved, with no copyleft term. The ASF's category list does not name it;
@@ -26,6 +26,19 @@ conjunction of two allowed licences, which now passes. It is locked because
 SPDX `CNRI-Python`, `PSF-2.0` and `Python-2.0` are three **different
 identifiers**, and so is `CNRI-Python-GPL-Compatible`: allowing the first
 allows neither of the others (see the `argparse` row below).
+
+`MIT-0` is the MIT No Attribution licence: the MIT text with the condition
+that the notice be reproduced taken out, so strictly more permissive than
+MIT, OSI-approved and with no copyleft term -- an MIT-style licence, which
+is Category A of the ASF model. It is on this list by the project owner's
+decision (2026-09-30), taken for `cffi`, which states it as its
+`License-Expression` from 2.1.0 (2026-07; 2.0.0 still states `MIT`).
+`cryptography` brings `cffi`, and `pyjwt[crypto]`, which the MCP Python SDK
+requires, brings `cryptography`. Two rows of
+["JavaScript build tooling"](#javascript-build-tooling) had carried the
+identifier by name until then, for `@csstools/color-helpers` and
+`@csstools/css-syntax-patches-for-csstree`; they went with the decision,
+because the npm gate fails a row that its package no longer needs.
 
 ### Restricted
 
@@ -293,8 +306,6 @@ the bundle, and excuses nothing there.
 | `spdx-ranges` | 2.1.1 | development | `(MIT AND CC-BY-3.0)` | the same, for the ranges of the SPDX list |
 | `lru-cache` | 11.5.3 | development | BlueOak-1.0.0 | permissive and OSI-approved, with no copyleft term and no term beyond attribution; it is not on the allowed list only because nothing had brought one before |
 | `minimatch` | 10.2.6 | development | BlueOak-1.0.0 | the same licence and the same reason |
-| `@csstools/color-helpers` | 6.1.1 | development | MIT-0 | MIT with the attribution requirement waived: strictly more permissive than MIT, which is on the list |
-| `@csstools/css-syntax-patches-for-csstree` | 1.1.14 | development | MIT-0 | the same |
 | `argparse` | 2.0.1 | development | Python-2.0 | SPDX `Python-2.0` and SPDX `PSF-2.0` are **different identifiers** — the first is the CNRI-era Python 2.0 licence, the second the PSF licence agreement — so the allowed list's PSF-2.0 does not cover this and a row is the honest way to record it. Both are permissive, non-copyleft and Apache-compatible in the ASF's own category A. The argument parser `js-yaml` uses, brought by ESLint |
 
 ### What the bundle's record does not see
@@ -362,7 +373,6 @@ then, the by-hand list is the record.
 |---|---|---|
 | `psycopg`, `psycopg-pool` | LGPL-3.0-only | not used; the PostgreSQL driver is `asyncpg` |
 | `langgraph-checkpoint-postgres` | MIT, but depends on `psycopg` | cannot be adopted as it is, and is not needed: the model's memory is a column of the platform's own schema ([ADR 0002](docs/adr/0002-conversation-persistence.md), [ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)) |
-| `mcp` (the MCP Python SDK), `langchain-mcp-adapters`, `fastmcp-slim` | MIT, but `mcp` requires `pyjwt[crypto]`, which requires `cryptography`, which requires `cffi`; and `pywin32` on Windows | **adopted pending a licence decision** ([ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)): both agent frameworks' MCP clients are built on the SDK, and the tool loop is theirs now, so the client of our own over `httpx` that stood in for it is gone. The rest of the tree passes -- `mcp-types`, `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `pycparser` (BSD-3-Clause), and what is in the lock already -- and the two below do not (checked 2026-09-28, at `mcp` 2.2.0), so **the licence gate is red until a person decides**: either the two identifiers below join the allowed list, or the tree is refused and the loop goes back above the port. The decision is the pull request's, not this build's |
-| `cffi` | `MIT-0` (the MIT No Attribution licence), stated as its `License-Expression` since 2.1.0 (2026-07); 2.0.0 still states `MIT` | on no list above. It is strictly more permissive than MIT, the ASF category model this document adopts lists it under Category A, and the JavaScript table below already carries it twice for that reason -- so the edit is one identifier on the allowed list, and it is still a decision for a person, not for a build ([docs/working-notes/mcp-plan.md](docs/working-notes/mcp-plan.md), "Open"). It has not been taken. Brought by `cryptography`, and through it by anything that needs `pyjwt[crypto]` |
-| `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence | the gate fails closed and cannot classify it. Windows-only (`sys_platform == "win32"`), which the gate deliberately does not read: the locked set is checked whole, whatever this machine installs |
+| `mcp` (the MCP Python SDK), `langchain-mcp-adapters`, `fastmcp-slim` | MIT, but `mcp` requires `pywin32` on Windows | **adopted pending a licence decision** ([ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)): both agent frameworks' MCP clients are built on the SDK, and the tool loop is theirs now, so the client of our own over `httpx` that stood in for it is gone. The rest of the tree passes -- `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `httpx-sse`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `cffi` (`MIT-0`, allowed by the decision above), `pycparser` (BSD-3-Clause), and what is in the lock already -- and `pywin32` does not (checked 2026-09-30, at `mcp` 1.30.0), for the reason the row below gives, so **the licence gate is red until a person decides** between the ways out that row names, or refuses the tree and sends the loop back above the port. The decision is the pull request's, not this build's |
+| `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence. The licence files the 312 wheel ships (read 2026-09-30) are the three-clause BSD text for `win32`, `com` and `pythonwin`, MIT for the MAPI stub library, an HPND-style notice for Scintilla, the Python licence stack for the IDLE-derived code -- and the **LGPL-2.1** text as `adodbapi/license.txt`, for the `adodbapi` package the wheel carries | the gate fails closed on the metadata, and **no exception can be written for it** under this policy: an exception never covers a forbidden licence, and LGPL is forbidden in any version, transitively, development-only included. The runtime exception by name for family-only metadata that the project owner asked for (2026-09-30), the twin of the development-only table's `colorama` row, was therefore not recorded: a row signs what a person read, and what was read includes the LGPL. It is Windows-only (`sys_platform == "win32"`; `mcp` needs it for the job objects of its stdio transport, which the platform never uses -- its tool servers are reached over HTTP), and the gate deliberately does not read the marker: the locked set is checked whole, whatever this machine installs. The ways out are the owner's, and each is a decision this document does not take: lock only the platforms the project runs on (`[tool.uv] environments` in `backend/pyproject.toml`), which takes `pywin32` out of `backend/uv.lock` -- and `colorama` and `pywin32-ctypes` with it -- and says Windows is not a development platform; a rule for what the lock pins and no supported platform ever installs, which this policy does not have and would be a change to it; or refusing the SDK's tree, which sends the tool loop back above the port |
 | `pgserver` | no licence metadata published: the wheel carries the Apache-2.0 text as its `LICENSE` and states no identifier anywhere, so the gate fails closed | not a dependency, and cannot become one. The tests take the URL of a PostgreSQL they are given, and `demo/` runs this as a **tool** in a throwaway environment (`uv run --with pgserver==<version>`), as `reuse` and `pip-audit` are run: nothing imports it and it is not in `backend/uv.lock` ([demo/README.md](demo/README.md)) |

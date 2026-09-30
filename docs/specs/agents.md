@@ -495,13 +495,16 @@ tools = ["github", "jira", "learn"]
 
 - **The MCP Python SDK (`mcp`), `langchain-mcp-adapters` and `fastmcp` are
   adopted pending a licence decision.** The frameworks' MCP clients are
-  built on the SDK, and its tree was known to fail the licence gate:
-  `pyjwt[crypto]` brings `cryptography`, which brings `cffi`, whose
-  metadata states `MIT-0` — a licence on no list of
-  [DEPENDENCIES.md](../../DEPENDENCIES.md) — and `pywin32`, Windows-only,
-  states a licence family and no licence (checked 2026-09-28, at 2.2.0).
-  The gate is expected red until the decision is taken; what it would take
-  is recorded there ("Known exclusions"). The client of our own that stood
+  built on the SDK, and its tree was known to fail the licence gate on two
+  packages. One is settled: `pyjwt[crypto]` brings `cryptography`, which
+  brings `cffi`, whose metadata states `MIT-0`, and `MIT-0` joined the
+  allowed list of [DEPENDENCIES.md](../../DEPENDENCIES.md) by the owner's
+  decision (2026-09-30). The other is not: `pywin32`, Windows-only, states
+  a licence family and no licence, and the wheel read for the exception
+  the owner asked for carries an LGPL-2.1 package (`adodbapi`), which no
+  exception may cover (checked 2026-09-30, at `mcp` 1.30.0). The gate is
+  expected red until that decision is taken; the ways out are recorded
+  there ("Known exclusions"). The client of our own that stood
   in for the SDK is gone with the loop it served
   ([ADR 0005](../adr/0005-the-framework-owns-the-loop-and-the-memory.md)).
 - `langgraph-checkpoint-postgres` depends on `psycopg`, which is
