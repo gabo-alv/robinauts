@@ -636,7 +636,8 @@ async def test_a_turn_whose_work_never_began_is_interrupted_by_the_shutdown() ->
 
     assert not wiring.agent.asked
     ended = await wiring.store.run_by_id(started.run.id)
-    assert ended is not None and ended.state is RunState.INTERRUPTED
+    assert ended is not None
+    assert ended.state is RunState.INTERRUPTED
     events = await stored_events(wiring.store, started.run.id)
     readable(events, ended)
     assert kinds(events) == ["RunStarted", "RunEnded"]

@@ -50,7 +50,8 @@ class SecretSourceContract:
 
         secret = source.secret()
 
-        assert secret and URL_SAFE.issuperset(secret)
+        assert secret
+        assert URL_SAFE.issuperset(secret)
 
     def test_a_verifier_is_within_the_length_rfc_7636_allows(self) -> None:
         source = self.new_source()
@@ -64,7 +65,8 @@ class SecretSourceContract:
 
         verifier = source.pkce_verifier()
 
-        assert verifier and UNRESERVED.issuperset(verifier)
+        assert verifier
+        assert UNRESERVED.issuperset(verifier)
 
     def test_nothing_is_ever_given_out_twice(self) -> None:
         source = self.new_source()

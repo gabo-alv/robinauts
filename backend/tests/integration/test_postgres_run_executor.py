@@ -169,7 +169,8 @@ async def test_a_turn_runs_in_the_background_and_two_watchers_are_served() -> No
             assert [event.seq for event in told] == list(range(after + 1, last + 1))
 
         ended = await store.run_by_id(run.id)
-        assert ended is not None and ended.state is RunState.FINISHED
+        assert ended is not None
+        assert ended.state is RunState.FINISHED
         answers = [
             message_from_stored(document)
             for document in await store.messages_of(run.conversation_id)
@@ -205,7 +206,8 @@ async def test_a_process_that_stops_interrupts_the_run_it_was_answering() -> Non
 
         await watcher
         ended = await store.run_by_id(started.run.id)
-        assert ended is not None and ended.state is RunState.INTERRUPTED
+        assert ended is not None
+        assert ended.state is RunState.INTERRUPTED
         assert isinstance(seen[-1].event, RunEnded)
         assert seen[-1].event.state is RunState.INTERRUPTED
         check_event_order(

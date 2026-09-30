@@ -218,7 +218,8 @@ def test_a_unix_socket_is_bound_by_the_command_and_handed_over_listening(
 
     (only,) = server.made
     assert code == cli.OK
-    assert only.sockets is not None and len(only.sockets) == 1
+    assert only.sockets is not None
+    assert len(only.sockets) == 1
     assert only.seen == [(str(path), cli.DEFAULT_SOCKET_MODE)]
     assert cli.DEFAULT_SOCKET_MODE == 0o600
     # Already **listening**, which is what "handed over" means: uvicorn calls
@@ -410,7 +411,8 @@ def test_the_command_leaves_a_socket_it_did_not_bind_where_it_is(
         said = capsys.readouterr().err
         assert code == cli.FAILED
         assert path.is_socket()
-        assert str(path) in said and cli.SOCKET_TAKEN in said
+        assert str(path) in said
+        assert cli.SOCKET_TAKEN in said
     finally:
         theirs.close()
         path.unlink(missing_ok=True)

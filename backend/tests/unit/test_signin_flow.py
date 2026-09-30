@@ -616,7 +616,8 @@ async def test_a_cancelled_sign_in_leaves_the_others_their_discovery() -> None:
     # nothing is cached to have answered them, and only one fetch was begun.
     assert at.sign_in.discovering == frozenset({"google"})
     assert at.provider.discoveries == ["google"]
-    assert not first.done() and not second.done()
+    assert not first.done()
+    assert not second.done()
 
     first.cancel()
     at.provider.pause.set()
@@ -930,7 +931,8 @@ async def test_expired_sessions_and_sign_ins_go_as_people_sign_in() -> None:
     at = world()
     opened = await complete(at, await begin(at))
     stale = await begin(at, OKTA)
-    assert len(at.store.sessions) == 1 and len(at.store.pending_logins) == 1
+    assert len(at.store.sessions) == 1
+    assert len(at.store.pending_logins) == 1
 
     at.clock.advance(timedelta(hours=13))
     fresh = await begin(at)
@@ -1036,8 +1038,10 @@ async def test_the_nonce_and_the_verifier_are_in_the_row_on_purpose() -> None:
 
     held = at.store.everything()
 
-    assert login.nonce in held and login.verifier in held
-    assert login.nonce != begun.state and login.verifier != begun.state
+    assert login.nonce in held
+    assert login.verifier in held
+    assert login.nonce != begun.state
+    assert login.verifier != begun.state
 
 
 @asyncio_test
@@ -1049,9 +1053,11 @@ async def test_a_record_that_carries_a_secret_does_not_print_it() -> None:
 
     # The authorization URL carries the state and the nonce in its query, so
     # it is out of the repr along with them.
-    assert begun.state not in repr(begun) and login.nonce not in repr(begun)
+    assert begun.state not in repr(begun)
+    assert login.nonce not in repr(begun)
     assert opened.secret not in repr(opened)
-    assert login.nonce not in repr(login) and login.verifier not in repr(login)
+    assert login.nonce not in repr(login)
+    assert login.verifier not in repr(login)
 
 
 # What the service refuses to be built as.

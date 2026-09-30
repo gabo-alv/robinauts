@@ -120,13 +120,16 @@ async def test_a_time_comes_back_as_the_instant_it_went_in() -> None:
         found = await store.session_by_hash(secret_hash("cookie"), now=created_at)
         login = await store.take_pending_login(secret_hash("state"))
 
-        assert found is not None and login is not None
+        assert found is not None
+        assert login is not None
         for when in (user.created_at, session.created_at, found.created_at, login.created_at):
-            assert when is not None and when.tzinfo is not None
+            assert when is not None
+            assert when.tzinfo is not None
             assert when == created_at
             assert when == datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         for deadline in (session.expires_at, found.expires_at, login.expires_at):
-            assert deadline.tzinfo is not None and deadline == expires_at
+            assert deadline.tzinfo is not None
+            assert deadline == expires_at
 
         # And the decision made from those times is the one the application
         # would make with its own clock, not one the session's zone shifted.

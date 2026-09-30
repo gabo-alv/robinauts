@@ -133,7 +133,8 @@ async def test_our_tables_without_a_version_are_refused() -> None:
             await create_schema(schema.pool)
 
         assert refused.value.found is None
-        assert "records no schema version" in str(refused.value) and "users" in str(refused.value)
+        assert "records no schema version" in str(refused.value)
+        assert "users" in str(refused.value)
 
 
 @asyncio_test

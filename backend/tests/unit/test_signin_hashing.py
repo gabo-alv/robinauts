@@ -47,7 +47,8 @@ def test_the_pkce_challenge_is_the_one_rfc_7636_shows() -> None:
 def test_the_challenge_is_base64url_without_padding() -> None:
     challenge = pkce_challenge("a-verifier-of-no-consequence")
     assert "=" not in challenge
-    assert "+" not in challenge and "/" not in challenge
+    assert "+" not in challenge
+    assert "/" not in challenge
     digest = base64.urlsafe_b64decode(challenge + "==")
     assert digest == hashlib.sha256(b"a-verifier-of-no-consequence").digest()
 

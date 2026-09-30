@@ -159,7 +159,8 @@ async def test_a_streamed_answer_is_announced_streamed_stored_and_announced_agai
     ended = await wiring.store.run_by_id(run.id)
     assert ended.state is RunState.FINISHED
     assert ended.error is None
-    assert ended.started_at is not None and ended.finished_at is not None
+    assert ended.started_at is not None
+    assert ended.finished_at is not None
 
 
 @asyncio_test
@@ -723,7 +724,8 @@ async def test_a_run_begun_before_the_model_was_changed_runs_on_the_one_it_began
 
     assert wiring.agent.asked[-1].model == MODEL
     answer = (await stored_messages(wiring.store, run.conversation_id))[-1]
-    assert answer.provenance is not None and answer.provenance.model == MODEL
+    assert answer.provenance is not None
+    assert answer.provenance.model == MODEL
 
 
 # --- the memory ------------------------------------------------------------------
@@ -986,7 +988,8 @@ async def test_a_tool_round_stores_the_calling_answer_the_tool_message_and_the_a
         run_id=run.id, message_id=batch.id, parent_id=calling.id, role=Role.TOOL
     )
     ended = await wiring.store.run_by_id(run.id)
-    assert ended.state is RunState.FINISHED and ended.error is None
+    assert ended.state is RunState.FINISHED
+    assert ended.error is None
 
 
 @asyncio_test
@@ -1279,7 +1282,8 @@ async def test_an_engine_out_of_order_fails_the_run_before_the_stream_is_unreada
 
     ended = await wiring.store.run_by_id(run.id)
     assert ended.state is RunState.FAILED
-    assert ended.error is not None and refused in ended.error
+    assert ended.error is not None
+    assert refused in ended.error
     readable(await stored_events(wiring.store, run.id), run)
 
 
@@ -1726,7 +1730,8 @@ async def test_what_an_engine_raised_reaches_the_log_escaped_and_bounded(
 
     lines = [record.getMessage() for record in caplog.records]
     assert len(lines) == 1
-    assert "\n" not in lines[0] and "\r" not in lines[0]
+    assert "\n" not in lines[0]
+    assert "\r" not in lines[0]
     assert len(lines[0]) < 2_000
     assert "RuntimeError" in lines[0]
     assert str(run.id) in lines[0]

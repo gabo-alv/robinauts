@@ -199,7 +199,8 @@ async def test_the_memory_holds_a_bounded_number_of_runs() -> None:
     kept = signals.tracked
     assert len(kept) <= 3
     # The newest are the ones worth answering about.
-    assert runs[-1] in kept and runs[0] not in kept
+    assert runs[-1] in kept
+    assert runs[0] not in kept
 
 
 @asyncio_test

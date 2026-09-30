@@ -1049,7 +1049,8 @@ def test_a_slice_may_begin_inside_a_calls_arguments_and_adopts_that_one_call() -
     # Between the two halves of the first call's arguments: what was streamed
     # before the cut was not seen, so the tail is not asked to parse.
     inside = numbered[5:]
-    assert isinstance(inside[0].event, ArgumentsPiece) and inside[0].event.text == 'nauts"}'
+    assert isinstance(inside[0].event, ArgumentsPiece)
+    assert inside[0].event.text == 'nauts"}'
     assert ordered(inside, follows=asked.id, after=numbered[4].seq) is None
     # Every cut of the round is a slice that reads back.
     for cut in range(1, len(numbered)):
@@ -1058,7 +1059,8 @@ def test_a_slice_may_begin_inside_a_calls_arguments_and_adopts_that_one_call() -
     # One call is adopted, and one only: the second, seen without its
     # announcement, is a call that was never announced.
     second = events[7]
-    assert isinstance(second, CallStarted) and second.call_id == "toolu_02"
+    assert isinstance(second, CallStarted)
+    assert second.call_id == "toolu_02"
     with pytest.raises(InvalidValueError, match="completed once, after it was announced"):
         ordered(
             stream(tuple(event for event in events if event is not second))[5:],
@@ -1078,7 +1080,8 @@ def test_a_tool_message_answers_every_call_of_the_answer_before_it_and_nothing_e
     # One call's result never landed and is not in the message either: what
     # landed is what was stored, and it is still not the batch.
     landed = events[11]
-    assert isinstance(landed, ResultLanded) and landed.call_id == "toolu_02"
+    assert isinstance(landed, ResultLanded)
+    assert landed.call_id == "toolu_02"
     completed = events[13]
     assert isinstance(completed, MessageCompleted)
     partial = replace(results, parts=(ToolResultPart("toolu_01", "found 3"),))

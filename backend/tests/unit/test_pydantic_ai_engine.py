@@ -997,7 +997,8 @@ def test_the_settings_over_openai_carry_the_timeout_and_a_ceiling_only_when_conf
         chat_completions.OPENAI_PROVIDER,
     )
 
-    assert "max_tokens" not in unbounded and "anthropic_cache" not in unbounded
+    assert "max_tokens" not in unbounded
+    assert "anthropic_cache" not in unbounded
     assert bounded["max_tokens"] == 1234
 
 

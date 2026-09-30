@@ -89,7 +89,8 @@ def test_the_schema_file_is_readable_from_the_installed_package() -> None:
     # more file claiming a licence for itself.
     header = SQL.splitlines()[:2]
     assert all(line.startswith("-- ") for line in header)
-    assert header[0].endswith("Apache-2.0") and "Robinauts Authors" in header[1]
+    assert header[0].endswith("Apache-2.0")
+    assert "Robinauts Authors" in header[1]
 
 
 def test_the_tables_the_code_looks_for_are_the_tables_the_file_creates() -> None:
@@ -253,7 +254,8 @@ def test_no_default_reads_the_database_clock_for_a_decision() -> None:
 def test_applying_by_hand_is_documented_as_one_transaction() -> None:
     # Without both flags psql keeps going after an error, which is the one
     # way to get a half-applied schema past everything else here.
-    assert "ON_ERROR_STOP=1" in SQL and "--single-transaction" in SQL
+    assert "ON_ERROR_STOP=1" in SQL
+    assert "--single-transaction" in SQL
 
 
 # Every shape of refusal, as the operator reads it.
@@ -271,7 +273,8 @@ def test_a_schema_of_another_version_is_told_both_versions_and_the_command() -> 
     refused = SchemaError.mismatch(1, 2)
 
     assert (refused.expected, refused.found) == (1, 2)
-    assert "schema version 2" in str(refused) and "needs schema version 1" in str(refused)
+    assert "schema version 2" in str(refused)
+    assert "needs schema version 1" in str(refused)
     assert DB_INIT_COMMAND in str(refused)
 
 
@@ -311,7 +314,8 @@ def test_a_database_made_from_an_older_file_is_told_to_drop_it() -> None:
 
         assert refused.found == 1
         assert "made from an older schema.sql" in str(refused)
-        assert "drop it and run" in str(refused) and DB_INIT_COMMAND in str(refused)
+        assert "drop it and run" in str(refused)
+        assert DB_INIT_COMMAND in str(refused)
     assert "not by" not in str(SchemaError.stale(1, "0" * 64))
     assert "not by `robinauts db init`" in str(SchemaError.stale(1, None))
 

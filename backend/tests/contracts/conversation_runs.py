@@ -163,7 +163,8 @@ class ConversationRunsContract(ConversationStoreContract):
                 str(asked.id)
             ]
             going = await store.active_run_of(CONVERSATION)
-            assert going is not None and going.id == RUN
+            assert going is not None
+            assert going.id == RUN
 
     @asyncio_test
     async def test_a_message_in_a_conversation_that_exists_starts_a_run(self) -> None:
@@ -198,7 +199,8 @@ class ConversationRunsContract(ConversationStoreContract):
 
             assert len(await store.messages_of(CONVERSATION)) == 1
             found = await store.conversation_by_id(CONVERSATION)
-            assert found is not None and found.updated_at == at(5)
+            assert found is not None
+            assert found.updated_at == at(5)
             assert await store.active_run_of(CONVERSATION) is not None
 
     @asyncio_test
@@ -484,7 +486,8 @@ class ConversationRunsContract(ConversationStoreContract):
             await store.update_run(transition(await _stored(store), RunState.WAITING, now=at(4)))
 
             found = await store.run_by_id(RUN)
-            assert found is not None and found.state is RunState.WAITING
+            assert found is not None
+            assert found.state is RunState.WAITING
             assert await store.active_run_of(CONVERSATION) == found
 
     @asyncio_test
@@ -498,7 +501,8 @@ class ConversationRunsContract(ConversationStoreContract):
                 )
 
             found = await store.run_by_id(RUN)
-            assert found is not None and found.state is RunState.RUNNING
+            assert found is not None
+            assert found.state is RunState.RUNNING
 
     @asyncio_test
     async def test_a_run_changes_its_state_its_start_and_its_error_and_nothing_else(self) -> None:
@@ -539,7 +543,8 @@ class ConversationRunsContract(ConversationStoreContract):
             await store.end_run(over_with, event, run_event_to_data(event))
 
             found = await store.run_by_id(RUN)
-            assert found is not None and found.state is RunState.CANCELLED
+            assert found is not None
+            assert found.state is RunState.CANCELLED
             assert await store.active_run_of(CONVERSATION) is None
             assert [document["seq"] for document in await store.events_of(RUN)] == [
                 FIRST_POSITION,
@@ -612,7 +617,8 @@ class ConversationRunsContract(ConversationStoreContract):
                 )
 
             found = await store.run_by_id(RUN)
-            assert found is not None and found.state is RunState.CANCELLED
+            assert found is not None
+            assert found.state is RunState.CANCELLED
             assert await store.last_position(RUN) == FIRST_POSITION + 1
 
     @asyncio_test
@@ -640,7 +646,8 @@ class ConversationRunsContract(ConversationStoreContract):
                 )
 
             found = await store.run_by_id(RUN)
-            assert found is not None and found.state is RunState.RUNNING
+            assert found is not None
+            assert found.state is RunState.RUNNING
             assert await store.last_position(RUN) == FIRST_POSITION
 
     # Events.
@@ -963,7 +970,8 @@ class ConversationRunsContract(ConversationStoreContract):
 
             snapshot = await store.conversation_snapshot(CONVERSATION)
 
-            assert snapshot.active_run is not None and snapshot.active_run.id == RUN
+            assert snapshot.active_run is not None
+            assert snapshot.active_run.id == RUN
             assert [document["id"] for document in snapshot.messages] == [
                 str(asked.id),
                 str(replied.id),

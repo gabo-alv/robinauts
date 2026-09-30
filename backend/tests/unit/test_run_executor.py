@@ -231,7 +231,8 @@ async def test_work_that_raises_is_logged_once_and_stops_there(
     # chose the shape of, and with the frames beside it.
     line = said[0].getMessage()
     assert "\n" not in line
-    assert "RuntimeError" in line and "line one" in line
+    assert "RuntimeError" in line
+    assert "line one" in line
     assert len(line) < 2_000
     assert "test_run_executor.py:" in line
     # The executor is not the run: it goes on executing.
@@ -263,7 +264,8 @@ async def test_cancelling_reaches_the_work_and_says_that_it_did() -> None:
     assert executor.cancel(RUN) is True
 
     await gone(executor, RUN)
-    assert work.cancelled and not work.finished
+    assert work.cancelled
+    assert not work.finished
 
 
 @asyncio_test
@@ -292,7 +294,8 @@ async def test_closing_cancels_what_is_left_and_waits_for_it() -> None:
 
     await executor.aclose(timeout=5.0)
 
-    assert first.cancelled and second.cancelled
+    assert first.cancelled
+    assert second.cancelled
     assert executor.running() == frozenset()
 
 
@@ -374,7 +377,8 @@ async def test_work_that_began_is_not_reported_as_never_having_begun() -> None:
     await executor.aclose(timeout=5.0)
 
     # It was cancelled inside its own work, which is what ends its own run.
-    assert work.cancelled and told == []
+    assert work.cancelled
+    assert told == []
 
 
 @asyncio_test

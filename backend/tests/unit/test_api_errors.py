@@ -228,7 +228,8 @@ async def test_a_500_says_nothing_about_what_went_wrong(
     assert answered.status_code == 500
     assert answered.json() == {"error": INTERNAL_ERROR, "detail": GENERIC_DETAIL}
     assert SECRET_IN_A_BUG not in answered.text
-    assert "RuntimeError" not in answered.text and "ConfigError" not in answered.text
+    assert "RuntimeError" not in answered.text
+    assert "ConfigError" not in answered.text
     assert "Traceback" not in answered.text
     # And all of it is in the log, which is where an operator reads it.
     assert SECRET_IN_A_BUG in caplog.text

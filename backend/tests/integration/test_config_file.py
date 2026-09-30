@@ -106,7 +106,8 @@ def test_a_missing_file_names_itself(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as raised:
         read_toml(path)
 
-    assert raised.value.problems and str(path) in raised.value.problems[0]
+    assert raised.value.problems
+    assert str(path) in raised.value.problems[0]
 
 
 def test_a_directory_is_not_a_configuration_file(tmp_path: Path) -> None:

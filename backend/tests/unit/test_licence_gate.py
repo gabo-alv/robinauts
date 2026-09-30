@@ -563,7 +563,8 @@ def test_a_restricted_dependency_that_changes_licence_fails(policy):
     finding = assess(Metadata(expression="CDDL-1.0"), policy)
     passed, reason = decide(_package("pathspec"), True, finding, policy)
     assert passed is False
-    assert "MPL-2.0" in reason and "CDDL-1.0" in reason
+    assert "MPL-2.0" in reason
+    assert "CDDL-1.0" in reason
 
 
 def test_the_stated_licence_is_compared_as_a_licence_not_as_a_string(policy):
@@ -633,7 +634,8 @@ def test_no_exception_reaches_a_no_commercial_use_term(policy):
 def test_a_development_exception_covers_a_family_the_gate_cannot_resolve(policy):
     passed, reason = decide(_package("colorama", "0.4.6"), True, _family_only(), policy)
     assert passed is True
-    assert "BSD-3-Clause" in reason and "0.4.6" in reason
+    assert "BSD-3-Clause" in reason
+    assert "0.4.6" in reason
 
 
 def test_a_development_exception_does_not_cover_unreadable_metadata(policy):
@@ -652,7 +654,8 @@ def test_a_development_exception_does_not_cover_a_runtime_dependency(policy):
 def test_a_development_exception_holds_for_the_version_it_names(policy):
     passed, reason = decide(_package("colorama", "0.4.7"), True, _family_only(), policy)
     assert passed is False
-    assert "0.4.6" in reason and "0.4.7" in reason
+    assert "0.4.6" in reason
+    assert "0.4.7" in reason
 
 
 def test_a_development_exception_cannot_state_a_licence_that_is_not_allowed(policy):
@@ -713,7 +716,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-assert " OR " in TIKTOKEN_LICENCE and " WITH " in TIKTOKEN_LICENCE
+assert " OR " in TIKTOKEN_LICENCE
+assert " WITH " in TIKTOKEN_LICENCE
 
 
 def _tiktoken(text=TIKTOKEN_LICENCE, policy=None, **metadata):
@@ -739,13 +743,15 @@ def test_a_licence_text_row_covers_the_text_it_was_written_about(policy, develop
         _package("tiktoken", "0.14.0"), development_only, _tiktoken(policy=policy), policy
     )
     assert passed is True
-    assert "MIT" in reason and "0.14.0" in reason
+    assert "MIT" in reason
+    assert "0.14.0" in reason
 
 
 def test_a_licence_text_row_holds_for_the_version_it_names(policy):
     passed, reason = decide(_package("tiktoken", "0.15.0"), False, _tiktoken(policy=policy), policy)
     assert passed is False
-    assert "0.14.0" in reason and "0.15.0" in reason
+    assert "0.14.0" in reason
+    assert "0.15.0" in reason
 
 
 def test_a_licence_text_headed_by_another_licence_fails_the_row(policy):
@@ -756,7 +762,8 @@ def test_a_licence_text_headed_by_another_licence_fails_the_row(policy):
     assert finding.title == "BSD-3-Clause"
     passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
     assert passed is False
-    assert "BSD-3-Clause" in reason and "MIT" in reason
+    assert "BSD-3-Clause" in reason
+    assert "MIT" in reason
 
 
 def test_a_licence_text_with_no_title_the_gate_can_read_fails_the_row(policy):
@@ -886,7 +893,8 @@ def test_a_licence_text_that_names_another_licence_fails_the_row(policy, text, n
     assert named in finding.text_names
     passed, reason = decide(_package("tiktoken", "0.14.0"), False, finding, policy)
     assert passed is False
-    assert named in reason and "also names" in reason
+    assert named in reason
+    assert "also names" in reason
 
 
 def test_an_unspelt_forbidden_identifier_in_the_text_is_called_forbidden(policy):
@@ -1086,7 +1094,8 @@ version = "1.0.0"
 source = { editable = "vendor/evil" }
 """
 )
-assert "evil" in VENDORED_LOCK and VENDORED_LOCK != SMALL_LOCK
+assert "evil" in VENDORED_LOCK
+assert VENDORED_LOCK != SMALL_LOCK
 
 
 def test_an_editable_dependency_is_not_this_repository():

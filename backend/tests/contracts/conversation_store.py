@@ -145,12 +145,15 @@ class ConversationStoreContract:
             renamed = await store.rename_conversation(CONVERSATION, "Mine", now=at(30))
             touched = await store.touch_conversation(CONVERSATION, now=at(31))
 
-            assert found is not None and found.model == "gpt-5-5"
+            assert found is not None
+            assert found.model == "gpt-5-5"
             assert [each.model for each in listed.conversations] == ["gpt-5-5"]
             assert snapshot.conversation is not None
             assert snapshot.conversation.model == "gpt-5-5"
-            assert renamed is not None and renamed.model == "gpt-5-5"
-            assert touched is not None and touched.model == "gpt-5-5"
+            assert renamed is not None
+            assert renamed.model == "gpt-5-5"
+            assert touched is not None
+            assert touched.model == "gpt-5-5"
 
     @asyncio_test
     async def test_an_id_nobody_stored_finds_nothing_rather_than_refusing(self) -> None:
@@ -167,7 +170,8 @@ class ConversationStoreContract:
                 await store.add_conversation(conversation(title="a second one"))
 
             found = await store.conversation_by_id(CONVERSATION)
-            assert found is not None and found.title == "What is a robinaut?"
+            assert found is not None
+            assert found.title == "What is a robinaut?"
 
     # Listing.
 
