@@ -44,9 +44,7 @@ that is what is asserted whatever the vendor then says.
 
 from __future__ import annotations
 
-import datetime
 import os
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,13 +62,10 @@ from robinauts.adapters.agents.pydantic_ai import chat_model as pydantic_ai_chat
 from robinauts.domain import (
     AgentDefinition,
     Engine,
-    Message,
     ModelConfig,
     ModelProviderConfig,
     ModelsConfig,
     ProviderKind,
-    Role,
-    TextPart,
 )
 from robinauts.ports import Agent
 
@@ -238,16 +233,8 @@ def models_for(engine: Engine, route: Route) -> ModelsConfig:
     )
 
 
-def question() -> Message:
-    """The one message a turn is asked with. One word, and never answered."""
-    return Message(
-        id=uuid.uuid4(),
-        conversation_id=uuid.uuid4(),
-        parent_id=None,
-        role=Role.USER,
-        parts=(TextPart(text="hi"),),
-        created_at=datetime.datetime.now(datetime.UTC),
-    )
+ASKED = "hi"
+"""The one word a turn is asked with, and never answered."""
 
 
 def answer_in(
@@ -307,7 +294,7 @@ async def test_a_compatible_turn_reaches_the_configured_endpoint(
     )
     try:
         with pytest.raises(Exception) as raised:  # noqa: B017 -- each engine's own
-            async for _ in agent.run_turn(models.agents[AGENT], (question(),), (), model=MODEL):
+            async for _ in agent.stream(models.agents[AGENT], ASKED, model=MODEL, state=None):
                 pass
     finally:
         # The connection this test really opened, given back here rather than

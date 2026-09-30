@@ -14,21 +14,21 @@ provider.
 What is **not** here is what one engine does and the other does not, or what
 only one engine's objects can be asked: those stay in the engine's own module
 (``tests/unit/test_langgraph_engine.py``, ``tests/unit/test_pydantic_ai_engine.py``)
--- the client's own fields, the one shape of stream the two take differently (a
-name before its id), what each makes of a reasoning field, a call the final
-message holds that never streamed, and each framework's own tracing. The
-request both send for one history is compared across the two in
-``tests/unit/test_engine_swap.py``.
+-- the client's own fields, what each makes of a reasoning field beside the
+text, what each makes of a name repeated on every delta, and each framework's
+own tracing. The two engines send different requests for one memory, because
+each keeps a memory of its own (ADR 0005): what is held alike is where the
+request goes, what signs it, what it carries of the configuration, and what a
+turn makes of what comes back.
 
-This module names both engines, as the swap fixtures do, and is one of them for
-the discard test (``docs/layout.md``).
+This module names both engines, and is one of the places the discard test
+counts for each (``docs/layout.md``).
 """
 
 from __future__ import annotations
 
-import dataclasses
-import json
 import os
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -36,8 +36,12 @@ from typing import Any
 import openai
 import pytest
 import tiktoken
+from langchain_core.tools import StructuredTool
+from pydantic_ai.toolsets import FunctionToolset
 
 import chat_completions
+import robinauts.adapters.agents.langgraph as langgraph_adapter
+import robinauts.adapters.agents.pydantic_ai as pydantic_ai_adapter
 from aio import asyncio_test
 from chat_completions import (
     GATEWAY_ENDPOINT,
@@ -46,31 +50,25 @@ from chat_completions import (
     KEY,
     OPENAI_PROVIDER,
     SYSTEM_PROMPT,
-    call_delta,
 )
-from contracts.agents import SEARCH
-from conversations import provenance
-from engines import ADAPTERS, chat_completions_turn, over_chat_completions
+from contracts.agents import PROMPT, SEARCH
 from robinauts.adapters import ProviderKeys
-from robinauts.core import check_engine_events
+from robinauts.adapters.agents.langgraph import LangGraphAgent
+from robinauts.adapters.agents.pydantic_ai import PydanticAIAgent
+from robinauts.core import check_backend_events
 from robinauts.domain import (
-    AnswerCompleted,
-    AnswerReasoningDelta,
-    AnswerStarted,
-    AnswerTextDelta,
     ConfigError,
+    Done,
     Engine,
+    Event,
     ModelConfig,
     ModelProviderConfig,
     ProviderKind,
-    TextPart,
-    ToolCallArgumentsDelta,
-    ToolCallCompleted,
-    ToolCallPart,
-    ToolCallStarted,
-    UnsupportedContentError,
-    WaitingOnTools,
+    TextDelta,
+    ToolCall,
+    ToolResult,
 )
+from robinauts.ports import Agent
 
 OPENAI_ENDPOINT = "https://api.openai.com/v1"
 """OpenAI's own endpoint, which both engines pin (each adapter's ``OPENAI_ENDPOINT``)."""
@@ -87,17 +85,81 @@ KINDS = pytest.mark.parametrize(
     ids=["openai", "openai-compatible"],
 )
 
-NEVER_NAMED = {
-    Engine.LANGGRAPH: "no tool call this engine announced",
-    Engine.PYDANTIC_AI: "never gave its name",
-}
-"""How each engine words its refusal of a call that is never named."""
 
-RENAMED = {
-    Engine.LANGGRAPH: "two names",
-    Engine.PYDANTIC_AI: "changed after the call was announced",
+def search(q: str) -> str:
+    """Search for repositories."""
+    return "found 3"
+
+
+@dataclass(frozen=True)
+class Adapter:
+    """One engine, and how these tests reach the two seams it has and its OpenAI client.
+
+    The two adapters spell their seams differently and keep the vendor's
+    client in different places; this is the one table that knows both, so
+    that every test below is written once.
+    """
+
+    title: str
+    agent: type[Agent]
+    module: Any
+    model_seam: str
+    tools_seam: str
+    plain_tools: Callable[..., Any]
+    client_of: Callable[[Any], openai.AsyncOpenAI]
+
+    def build(self, models: Any, keys: ProviderKeys, **seams: Any) -> Agent:
+        return self.agent(models, keys, **seams)  # type: ignore[call-arg]
+
+    @property
+    def chat_model(self) -> Callable[[ModelConfig, ModelProviderConfig, str], Any]:
+        return self.module.chat_model  # type: ignore[no-any-return]
+
+    @property
+    def endpoint_of(self) -> Callable[[ModelProviderConfig], str]:
+        return self.module.endpoint_of  # type: ignore[no-any-return]
+
+    @property
+    def client_variables_removed(self) -> tuple[str, ...]:
+        return self.module.CLIENT_VARIABLES_REMOVED  # type: ignore[no-any-return]
+
+    @property
+    def anthropic_kinds(self) -> frozenset[ProviderKind]:
+        return self.module.ANTHROPIC_KINDS  # type: ignore[no-any-return]
+
+    @property
+    def openai_kinds(self) -> frozenset[ProviderKind]:
+        return self.module.OPENAI_KINDS  # type: ignore[no-any-return]
+
+
+async def _langchain_tools(*_: object) -> Sequence[Any]:
+    return [StructuredTool.from_function(search, name=SEARCH)]
+
+
+def _pydantic_ai_tools(*_: object) -> Sequence[Any]:
+    return [FunctionToolset([search])]
+
+
+ADAPTERS: dict[Engine, Adapter] = {
+    Engine.LANGGRAPH: Adapter(
+        "LangGraph",
+        LangGraphAgent,
+        langgraph_adapter,
+        "chat_model_for",
+        "tools_for",
+        _langchain_tools,
+        lambda built: built.root_async_client,
+    ),
+    Engine.PYDANTIC_AI: Adapter(
+        "Pydantic AI",
+        PydanticAIAgent,
+        pydantic_ai_adapter,
+        "model_for",
+        "toolsets_for",
+        _pydantic_ai_tools,
+        lambda built: built.client,
+    ),
 }
-"""How each engine words its refusal of a call whose name changes."""
 
 
 def streamed(*chunks: dict[str, Any]) -> chat_completions.Vendor:
@@ -110,14 +172,55 @@ def answering(*pieces: str) -> chat_completions.Vendor:
     return streamed(*chat_completions.said(*pieces), *chat_completions.finished())
 
 
-def calling(*deltas: dict[str, Any]) -> chat_completions.Vendor:
-    """A vendor answering with those tool-call deltas, and ending on the calls."""
-    return streamed(*deltas, *chat_completions.finished("tool_calls"))
-
-
-def built(engine: Engine, provider: ModelProviderConfig = OPENAI_PROVIDER) -> Any:
+def built(engine: Engine, provider: ModelProviderConfig = OPENAI_PROVIDER, **changes: Any) -> Any:
     """What that engine's factory builds for the OpenAI model."""
-    return ADAPTERS[engine].chat_model(chat_completions.gpt(provider), provider, KEY)
+    return ADAPTERS[engine].chat_model(chat_completions.gpt(provider, **changes), provider, KEY)
+
+
+def over_chat_completions(
+    engine: Engine,
+    vendor: chat_completions.Vendor,
+    provider: ModelProviderConfig = OPENAI_PROVIDER,
+    **changes: Any,
+) -> Agent:
+    """That engine, its real OpenAI client answered by that vendor, the tool bound."""
+    adapter = ADAPTERS[engine]
+    model = built(engine, provider, **changes)
+    vendor.plugged_into(adapter.client_of(model))
+    return adapter.build(
+        chat_completions.openai_models(engine, provider, **changes),
+        ProviderKeys({provider.id: KEY}),
+        **{adapter.model_seam: lambda *_: model, adapter.tools_seam: adapter.plain_tools},
+    )
+
+
+async def turn_of(agent: Agent, engine: Engine) -> list[Event]:
+    """One turn of the OpenAI agent, run to its end."""
+    seen: list[Event] = []
+    async for event in agent.stream(
+        chat_completions.gpt_agent(engine), PROMPT, model=GPT, state=None
+    ):
+        seen.append(event)
+    return seen
+
+
+def done(events: list[Event]) -> Done:
+    (ended,) = [event for event in events if isinstance(event, Done)]
+    return ended
+
+
+def vendor_error(raised: BaseException) -> openai.APIStatusError:
+    """The SDK's own exception, from anywhere in that exception's chain.
+
+    LangChain raises it as it is; Pydantic AI wraps it in a ``ModelHTTPError``
+    of its own with the SDK's as the cause.
+    """
+    cause: BaseException | None = raised
+    while cause is not None:
+        if isinstance(cause, openai.APIStatusError):
+            return cause
+        cause = cause.__cause__ or cause.__context__
+    raise raised
 
 
 # --- the kinds the engine reaches --------------------------------------------
@@ -189,7 +292,7 @@ def test_an_openai_client_is_the_configuration_s_and_never_the_environment_s(
         monkeypatch.setenv(name, value)
     adapter = ADAPTERS[engine]
 
-    client = adapter.openai_client(built(engine, provider))
+    client = adapter.client_of(built(engine, provider))
 
     assert adapter.endpoint_of(provider) == endpoint
     assert str(client.base_url).rstrip("/") == endpoint
@@ -204,7 +307,7 @@ def test_the_openai_key_header_is_the_configured_key_whatever_the_environment_in
     # caller passed one of its own -- and the engine always does.
     monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer sk-somebody-elses-key")
 
-    sent = chat_completions.headers_of(ADAPTERS[engine].openai_client(built(engine)))
+    sent = chat_completions.headers_of(ADAPTERS[engine].client_of(built(engine)))
 
     assert sent["authorization"] == f"Bearer {KEY}"
 
@@ -218,7 +321,7 @@ def test_what_no_argument_can_refuse_reaches_a_client_built_before_the_engine(
     for name, value in chat_completions.UNCONFIGURED.items():
         monkeypatch.setenv(name, value)
 
-    client = ADAPTERS[engine].openai_client(built(engine))
+    client = ADAPTERS[engine].client_of(built(engine))
     sent = chat_completions.headers_of(client)
 
     assert sent["x-nobody-configured"] == "this"
@@ -236,7 +339,7 @@ def test_building_the_engine_keeps_every_unconfigured_openai_setting_off_a_turn(
     adapter = ADAPTERS[engine]
 
     adapter.build(chat_completions.openai_models(engine), ProviderKeys({"openai": KEY}))
-    client = adapter.openai_client(built(engine))
+    client = adapter.client_of(built(engine))
     sent = chat_completions.headers_of(client)
 
     assert all(name not in os.environ for name in chat_completions.UNCONFIGURED)
@@ -256,38 +359,38 @@ def test_building_the_engine_keeps_every_unconfigured_openai_setting_off_a_turn(
 async def test_an_openai_turn_streams_its_text_and_sends_the_configuration_s_request(
     monkeypatch: pytest.MonkeyPatch, engine: Engine
 ) -> None:
-    # Nothing on a turn's path counts tokens: tiktoken fetches its encodings
-    # from the network the first time it is asked -- or reads them from a warm
-    # cache, which closed sockets would not notice -- and it is never asked.
+    # Nothing on a turn's path counts tokens with the vendor's tokeniser:
+    # tiktoken fetches its encodings from the network the first time it is
+    # asked -- or reads them from a warm cache, which closed sockets would not
+    # notice -- and it is never asked. The context is measured approximately
+    # (docs/specs/agents.md, "A turn").
     monkeypatch.setattr(tiktoken, "get_encoding", chat_completions.never_tokenised)
     monkeypatch.setattr(tiktoken, "encoding_for_model", chat_completions.never_tokenised)
     vendor = answering("Someone ", "who plays ", "fair.")
     agent = over_chat_completions(engine, vendor, timeout_seconds=17.0)
 
-    seen = await chat_completions_turn(agent, engine)
+    seen = await turn_of(agent, engine)
 
-    check_engine_events(seen)
-    assert seen == [
-        AnswerStarted(),
-        AnswerTextDelta(text="Someone "),
-        AnswerTextDelta(text="who plays "),
-        AnswerTextDelta(text="fair."),
-        AnswerCompleted(parts=(TextPart("Someone who plays fair."),)),
+    check_backend_events(seen)
+    assert [event.text for event in seen if isinstance(event, TextDelta)] == [
+        "Someone ",
+        "who plays ",
+        "fair.",
     ]
+    assert done(seen).text == "Someone who plays fair."
+    assert isinstance(done(seen).state, bytes) and done(seen).state
     assert agent.held == 0
     sent = vendor.request
     assert str(sent.url) == OPENAI_ENDPOINT + chat_completions.PATH
     assert sent.headers["authorization"] == f"Bearer {KEY}"
     assert sent.headers["x-stainless-read-timeout"] == "17.0"
-    assert vendor.body_sent == {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": "What is a robinaut?"},
-        ],
-        "model": chat_completions.MODEL_NAME,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
+    body = vendor.body_sent
+    assert body["messages"] == [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": PROMPT},
+    ]
+    assert body["model"] == chat_completions.MODEL_NAME
+    assert body["stream"] is True
 
 
 @ENGINES
@@ -297,7 +400,7 @@ async def test_an_openai_compatible_turn_goes_to_the_configured_endpoint_and_now
 ) -> None:
     vendor = answering("Hi.")
 
-    await chat_completions_turn(over_chat_completions(engine, vendor, GATEWAY_PROVIDER), engine)
+    await turn_of(over_chat_completions(engine, vendor, GATEWAY_PROVIDER), engine)
 
     assert str(vendor.request.url) == GATEWAY_ENDPOINT + chat_completions.PATH
     assert vendor.request.headers["authorization"] == f"Bearer {KEY}"
@@ -324,10 +427,8 @@ async def test_a_configured_ceiling_is_sent_in_the_field_the_kind_takes(
     unbounded = answering("Hi.")
     bounded = chat_completions.Vendor(unbounded.body)
 
-    await chat_completions_turn(over_chat_completions(engine, unbounded, provider), engine)
-    await chat_completions_turn(
-        over_chat_completions(engine, bounded, provider, max_output_tokens=1234), engine
-    )
+    await turn_of(over_chat_completions(engine, unbounded, provider), engine)
+    await turn_of(over_chat_completions(engine, bounded, provider, max_output_tokens=1234), engine)
 
     assert field not in unbounded.body_sent and not_field not in unbounded.body_sent
     assert bounded.body_sent[field] == 1234
@@ -336,307 +437,82 @@ async def test_a_configured_ceiling_is_sent_in_the_field_the_kind_takes(
 
 @ENGINES
 @asyncio_test
-async def test_a_streamed_think_tag_is_text_and_is_kept_as_the_answer(engine: Engine) -> None:
-    # What the vendor wrote is the answer. langchain-openai does not lift a
-    # `<think>` out of the content, and Pydantic AI, which would, is given no
-    # thinking tags (docs/specs/agents.md, "Known findings").
-    vendor = answering("<think>", "hm", "</think>", "Hi.")
-
-    seen = await chat_completions_turn(over_chat_completions(engine, vendor), engine)
-
-    assert not [event for event in seen if isinstance(event, AnswerReasoningDelta)]
-    assert seen[-1] == AnswerCompleted(parts=(TextPart("<think>hm</think>Hi."),))
-
-
-# --- tools: a call made, and a call in the history -------------------------------
-
-
-@ENGINES
-@asyncio_test
-async def test_an_openai_model_that_asks_for_tools_yields_the_calls_and_ends_the_turn_waiting(
+async def test_a_tool_round_over_chat_completions_is_run_by_the_framework(
     engine: Engine,
 ) -> None:
-    vendor = streamed(
-        *chat_completions.said("Let me look."),
-        *chat_completions.calling("call_1", SEARCH.name, {"q": "robinauts"}),
-        *chat_completions.calling("call_2", SEARCH.name, {"q": "fair play"}, index=1),
-        *chat_completions.finished("tool_calls"),
-    )
-
-    seen = await chat_completions_turn(
-        over_chat_completions(engine, vendor), engine, tools=(SEARCH,)
-    )
-
-    check_engine_events(seen)
-    first = ToolCallPart("call_1", SEARCH.name, {"q": "robinauts"})
-    second = ToolCallPart("call_2", SEARCH.name, {"q": "fair play"})
-    # Each call announced, argued in the two pieces the vendor sent, and
-    # completed, one after the other, between the text and the end.
-    a_call = [ToolCallStarted, ToolCallArgumentsDelta, ToolCallArgumentsDelta, ToolCallCompleted]
-    assert [type(event) for event in seen] == [
-        AnswerStarted,
-        AnswerTextDelta,
-        *a_call,
-        *a_call,
-        AnswerCompleted,
-        WaitingOnTools,
-    ]
-    assert seen[-2] == AnswerCompleted(parts=(TextPart("Let me look."), first, second))
-    # The definition as the vendor takes it, as it stands: the server's schema,
-    # no `strict` added, and the description sent.
-    assert vendor.body_sent["tools"] == [
-        {
-            "type": "function",
-            "function": {
-                "name": SEARCH.name,
-                "description": SEARCH.description,
-                "parameters": dict(SEARCH.input_schema),
-            },
-        }
-    ]
-
-
-@ENGINES
-@asyncio_test
-async def test_a_turn_with_tools_in_its_history_is_translated_for_chat_completions(
-    engine: Engine,
-) -> None:
-    vendor = answering("Found three.")
-    history = chat_completions.history_with_a_call(SEARCH.name)
-
-    await chat_completions_turn(
-        over_chat_completions(engine, vendor), engine, history, tools=(SEARCH,)
-    )
-
-    # The Anthropic blocks in the answer's extras are not replayed: they were
-    # made by another model, and Chat Completions has nowhere to put them. The
-    # result's error flag has no field in this protocol, so the result is
-    # written as an object saying so -- and the whole is spelt alike under both
-    # engines, down to the keys' order and the JSON's separators.
-    assert json.dumps(vendor.body_sent["messages"][1:]) == json.dumps(
-        [
-            {"role": "user", "content": history[0].text},
-            {
-                "role": "assistant",
-                "content": "Let me look.",
-                "tool_calls": [
-                    {
-                        "id": "toolu_01",
-                        "type": "function",
-                        "function": {"name": SEARCH.name, "arguments": '{"q":"robinauts"}'},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "toolu_01", "content": '{"error":"found 3"}'},
+    """The model asks for the tool, the framework runs it and asks again with
+    the result, and the turn is done with the answer after it -- two requests,
+    the second carrying the call and its result as the protocol spells them."""
+    vendor = chat_completions.Vendor(
+        bodies=[
+            chat_completions.streamed(
+                *chat_completions.said("Let me look."),
+                *chat_completions.calling("call_1", SEARCH, {"q": "robinauts"}),
+                *chat_completions.finished("tool_calls"),
+            ),
+            chat_completions.streamed(
+                *chat_completions.said("Found three."), *chat_completions.finished()
+            ),
         ]
     )
+    agent = over_chat_completions(engine, vendor)
 
+    seen = await turn_of(agent, engine)
 
-@ENGINES
-@asyncio_test
-async def test_no_thinking_is_ever_replayed_over_chat_completions(engine: Engine) -> None:
-    # A model id the operator moved from an Anthropic provider to an OpenAI
-    # one between restarts: the stored answer says it was made by this very
-    # id, and still nothing in its extras is sent -- not Anthropic's signed
-    # blocks, and not a block under OpenAI's own key, which Pydantic AI would
-    # write between thinking tags its OpenAI models do not have.
-    vendor = answering("Again.")
-    asked, calling_, results = chat_completions.history_with_a_call(SEARCH.name)
-    signed = {"thinking": [{"type": "thinking", "thinking": "hm", "signature": "SIG"}]}
-    moved = dataclasses.replace(
-        calling_,
-        provenance=provenance(model=GPT),
-        extras={**calling_.extras, "openai": signed},
+    check_backend_events(seen)
+    (called,) = [event for event in seen if isinstance(event, ToolCall)]
+    assert (called.call_id, called.name, dict(called.arguments)) == (
+        "call_1",
+        SEARCH,
+        {"q": "robinauts"},
     )
-
-    await chat_completions_turn(
-        over_chat_completions(engine, vendor), engine, (asked, moved, results), tools=(SEARCH,)
+    (answered,) = [event for event in seen if isinstance(event, ToolResult)]
+    assert (answered.call_id, answered.name, answered.output, answered.is_error) == (
+        "call_1",
+        SEARCH,
+        "found 3",
+        False,
     )
-
-    (sent,) = [m for m in vendor.body_sent["messages"] if m["role"] == "assistant"]
-    assert sent["content"] == "Let me look."
-
-
-# --- what a Chat Completions stream becomes, in shapes the vendors really send
-
-
-@ENGINES
-@pytest.mark.parametrize(
-    "opening",
-    [
-        {"index": 0, "id": "call_1", "type": "function", "function": {}},
-        {"index": 0, "id": "call_1", "type": "function", "function": {"arguments": ""}},
-    ],
-    ids=["empty-function", "empty-arguments"],
-)
-@asyncio_test
-async def test_a_call_whose_id_and_name_arrive_in_separate_chunks_is_announced_once_both_have(
-    engine: Engine, opening: dict[str, Any]
-) -> None:
-    vendor = calling(
-        chat_completions.chunk({"tool_calls": [opening]}),
-        call_delta(0, arguments='{"q":'),
-        call_delta(0, name=SEARCH.name),
-        call_delta(0, arguments='"x"}'),
-    )
-
-    seen = await chat_completions_turn(
-        over_chat_completions(engine, vendor), engine, tools=(SEARCH,)
-    )
-
-    check_engine_events(seen)
-    call = ToolCallPart("call_1", SEARCH.name, {"q": "x"})
-    assert seen[:5] == [
-        AnswerStarted(),
-        ToolCallStarted(call_id="call_1", name=SEARCH.name),
-        ToolCallArgumentsDelta(call_id="call_1", text='{"q":'),
-        ToolCallArgumentsDelta(call_id="call_1", text='"x"}'),
-        ToolCallCompleted(call=call),
-    ]
-    assert seen[-2] == AnswerCompleted(parts=(call,))
-    assert isinstance(seen[-1], WaitingOnTools)
-
-
-@ENGINES
-@asyncio_test
-async def test_a_call_whose_id_and_name_come_again_on_every_delta_is_one_call(
-    engine: Engine,
-) -> None:
-    vendor = calling(
-        call_delta(0, id="call_1", name=SEARCH.name, arguments='{"q":'),
-        call_delta(0, id="call_1", name=SEARCH.name, arguments='"x"}'),
-        call_delta(1, id="call_2", name=SEARCH.name, arguments='{"q":"y"}'),
-    )
-
-    seen = await chat_completions_turn(
-        over_chat_completions(engine, vendor), engine, tools=(SEARCH,)
-    )
-
-    check_engine_events(seen)
-    assert [event for event in seen if isinstance(event, ToolCallStarted)] == [
-        ToolCallStarted(call_id="call_1", name=SEARCH.name),
-        ToolCallStarted(call_id="call_2", name=SEARCH.name),
-    ]
-    assert seen[-2] == AnswerCompleted(
-        parts=(
-            ToolCallPart("call_1", SEARCH.name, {"q": "x"}),
-            ToolCallPart("call_2", SEARCH.name, {"q": "y"}),
-        )
-    )
+    assert done(seen).text == "Found three."
+    assert agent.held == 0
+    first, second = (vendor.body_of(request) for request in vendor.sent)
+    # The tool, declared as the protocol takes it, on both requests.
+    for body in (first, second):
+        (tool,) = body["tools"]
+        assert (tool["type"], tool["function"]["name"]) == ("function", SEARCH)
+    # And the second request carries the round: the call, then its result.
+    roles = [message["role"] for message in second["messages"]]
+    assert roles == ["system", "user", "assistant", "tool"]
+    (call,) = second["messages"][2]["tool_calls"]
+    assert (call["id"], call["function"]["name"]) == ("call_1", SEARCH)
+    assert second["messages"][3]["tool_call_id"] == "call_1"
+    assert "found 3" in str(second["messages"][3]["content"])
 
 
 @ENGINES
 @pytest.mark.parametrize(
-    ("deltas", "calls"),
+    ("status", "error"),
     [
-        (
-            [
-                {"index": None, "id": "call_1", "name": SEARCH.name, "arguments": ""},
-                {"index": None, "arguments": '{"q":'},
-                {"index": None, "arguments": '"x"}'},
-            ],
-            [("call_1", {"q": "x"})],
-        ),
-        (
-            [
-                {"index": 0, "id": "call_1", "name": SEARCH.name, "arguments": '{"q":"x"}'},
-                {"index": None, "id": "call_2", "name": SEARCH.name, "arguments": ""},
-                {"index": None, "arguments": '{"q":"y"}'},
-            ],
-            [("call_1", {"q": "x"}), ("call_2", {"q": "y"})],
-        ),
-        (
-            [
-                {"index": None, "id": "call_1", "name": SEARCH.name, "arguments": '{"q":'},
-                {"index": None, "id": "call_1", "name": SEARCH.name, "arguments": '"x"}'},
-            ],
-            [("call_1", {"q": "x"})],
-        ),
+        (401, {"message": "Incorrect API key provided", "type": "invalid_request_error"}),
+        (429, {"message": "Rate limit reached", "type": "rate_limit_error"}),
     ],
-    ids=["one-call", "after-an-indexed-call", "id-and-name-again"],
-)
-@asyncio_test
-async def test_calls_whose_deltas_carry_no_index_are_taken_alike(
-    engine: Engine, deltas: list[dict[str, Any]], calls: list[tuple[str, dict[str, Any]]]
-) -> None:
-    # OpenAI always sends an index; a compatible server need not. Both
-    # engines take these shapes, and store the same calls
-    # (docs/specs/agents.md, "How a streamed call may arrive").
-    vendor = calling(*(call_delta(**dict(delta)) for delta in deltas))
-
-    seen = await chat_completions_turn(
-        over_chat_completions(engine, vendor), engine, tools=(SEARCH,)
-    )
-
-    check_engine_events(seen)
-    assert seen[-2] == AnswerCompleted(
-        parts=tuple(ToolCallPart(call_id, SEARCH.name, arguments) for call_id, arguments in calls)
-    )
-    assert isinstance(seen[-1], WaitingOnTools)
-
-
-@ENGINES
-@pytest.mark.parametrize("index", [0, None], ids=["indexed", "index-less"])
-@asyncio_test
-async def test_a_call_that_never_gets_a_name_is_refused_not_dropped(
-    engine: Engine, index: int | None
-) -> None:
-    # Stored as it stands, it would be an answer that never waits for the call
-    # it began: Pydantic AI leaves such a call out of its response altogether.
-    vendor = calling(call_delta(index, id="call_1", arguments="{}"))
-
-    with pytest.raises(UnsupportedContentError, match=NEVER_NAMED[engine]):
-        await chat_completions_turn(over_chat_completions(engine, vendor), engine, tools=(SEARCH,))
-
-
-@ENGINES
-@asyncio_test
-async def test_a_tool_name_streamed_in_pieces_is_refused_not_truncated(engine: Engine) -> None:
-    # A name that changes after it is known is not one call's name: Pydantic AI
-    # would announce the call at its first piece and store it under the rest.
-    vendor = calling(
-        call_delta(0, id="call_1", name="github__", arguments=""),
-        call_delta(0, name="search", arguments="{}"),
-    )
-
-    with pytest.raises(UnsupportedContentError, match=RENAMED[engine]):
-        await chat_completions_turn(over_chat_completions(engine, vendor), engine, tools=(SEARCH,))
-
-
-# --- what the vendor refuses ----------------------------------------------------
-
-
-@ENGINES
-@pytest.mark.parametrize(
-    ("status", "error", "raised"),
-    [
-        (401, {"code": "invalid_api_key", "message": "Bad key"}, openai.AuthenticationError),
-        (404, {"code": "model_not_found", "message": "No such model"}, openai.NotFoundError),
-        (429, {"code": "rate_limit_exceeded", "message": "Slow down"}, openai.RateLimitError),
-        (400, {"code": "context_length_exceeded", "message": "Too long"}, openai.BadRequestError),
-        (503, {"message": "Overloaded"}, openai.InternalServerError),
-    ],
-    ids=["key", "model", "rate", "context", "overloaded"],
+    ids=["unauthorized", "rate-limited"],
 )
 @asyncio_test
 async def test_what_the_openai_vendor_refuses_travels_out_of_the_turn_as_it_is(
-    engine: Engine, status: int, error: dict[str, Any], raised: type[Exception]
+    engine: Engine, status: int, error: dict[str, Any]
 ) -> None:
     # The port's rule, over this protocol as over the other: an engine reports
-    # a failure by raising, and the SDK's own exception is what is raised --
-    # as it is under LangGraph, and as the cause of Pydantic AI's own
-    # ``ModelHTTPError`` (``engines.Adapter.vendor_error``). The application
-    # records it, and nothing is retried on the way (``MAX_RETRIES``): one
+    # a failure by raising, and the SDK's own exception is what is raised or
+    # what caused it. Nothing is retried on the way (``MAX_RETRIES``): one
     # request, and the turn holds nothing after it.
     vendor = chat_completions.Vendor(status=status, error=error)
     agent = over_chat_completions(engine, vendor)
 
     with pytest.raises(Exception) as caught:  # noqa: B017 -- each engine's own
-        await chat_completions_turn(agent, engine)
+        await turn_of(agent, engine)
 
-    assert getattr(caught.value, "status_code", None) == status
-    said = ADAPTERS[engine].vendor_error(caught.value)
-    assert isinstance(said, raised)
-    assert isinstance(said, openai.APIStatusError) and said.status_code == status
+    said = vendor_error(caught.value)
+    assert said.status_code == status
     assert len(vendor.sent) == 1
     assert agent.held == 0

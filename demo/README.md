@@ -202,7 +202,7 @@ came back, as text ([../docs/specs/agents.md](../docs/specs/agents.md),
 **GitHub's server is on whenever a GitHub token is exported** in the shell
 that runs `start.sh`, as `ROBINAUTS_GITHUB_TOKEN`. Both agents then get `tools = ["github"]`, and a
 question about a repository has the model call, say,
-`github__get_latest_release`; the answer arrives with the call's toggle above
+`github_get_latest_release`; the answer arrives with the call's toggle above
 it. `start.sh` says `Tools: GitHub's MCP server, for both agents.` when it is
 on.
 
@@ -219,7 +219,7 @@ give a demo.
 `[mcp_servers.learn]` table in `robinauts.toml.in`, add `"learn"` to an
 agent's `tools` (or give it the line, `tools = ["learn"]`, when GitHub is
 off), restart (`demo/stop.sh`, then `demo/start.sh`), and ask that agent
-something about, say, Azure: the model calls `learn__microsoft_docs_search`.
+something about, say, Azure: the model calls `learn_microsoft_docs_search`.
 **The demo then reaches `learn.microsoft.com` from this machine** for as long
 as the line is on. What the request carries is no credential and nothing that
 names you, but it does carry what the model wrote for the tool -- the search
