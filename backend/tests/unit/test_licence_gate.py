@@ -197,6 +197,8 @@ def test_a_missing_section_is_an_error():
         ("MIT License", "MIT"),
         ("  the   MIT   license  ", "MIT"),
         ('"MIT"', "MIT"),
+        ("MIT-0", "MIT-0"),
+        ("MIT No Attribution", "MIT-0"),
         ("Apache-2.0", "Apache-2.0"),
         ("Apache License, Version 2.0", "Apache-2.0"),
         ("BSD 2-Clause License", "BSD-2-Clause"),
@@ -1275,7 +1277,7 @@ def test_the_real_document_parses_and_says_what_the_gate_expects():
 
     assert {"apache-2.0", "mit", "bsd-2-clause", "bsd-3-clause", "0bsd", "isc"} <= policy.allowed
     assert {"zlib", "postgresql", "psf-2.0", "cc0-1.0", "unlicense"} <= policy.allowed
-    assert "cnri-python" in policy.allowed
+    assert {"cnri-python", "mit-0"} <= policy.allowed
     assert policy.restricted == {"mpl-2.0", "epl-2.0", "cddl-1.0", "cddl-1.1"}
     assert "pathspec" in policy.restricted_packages
     assert policy.licence_text_exceptions["tiktoken"] == NamedException("MIT", "0.14.0")
