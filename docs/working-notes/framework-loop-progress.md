@@ -171,19 +171,22 @@ and the parity tests.
 
 ## The checks
 
-- `scripts/check-lint.sh`: green. `scripts/check-tests.sh`: green (3041
+- `scripts/check-lint.sh`: green. `scripts/check-tests.sh`: green (3043
   passed, 224 skipped; the Postgres suite skips without a database).
-  `scripts/check-reuse.sh`: green. `scripts/check-audit.sh`: green (113
-  packages, no known vulnerability).
-- `scripts/check-licences.sh`: **red on one package**, `pywin32`. It was red
+  `scripts/check-reuse.sh`: green. `scripts/check-audit.sh`: green (109
+  packages, no known vulnerability), all re-run on the restricted lock.
+- `scripts/check-licences.sh`: **green**, on 110 locked packages. It was red
   on two, as the plan said it would be. `MIT-0`, `cffi`'s licence, joined
   the allowed list by the owner's decision (2026-09-30). The exception the
   owner asked for `pywin32` was not written: the 312 wheel, read for it,
   carries `adodbapi` under LGPL-2.1, which is forbidden and which no
-  exception covers. The ways out are the owner's
-  ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known exclusions"). Everything
-  else the new tree brings passes, `tiktoken` and `regex` included, which
-  `main` settled.
+  exception covers. The owner chose the platforms instead: the lock is
+  resolved for Linux and macOS only (`[tool.uv] environments`), which took
+  `pywin32`, `pywin32-ctypes`, `colorama` and `httpx2-jsfetch` out of it and
+  the `colorama` row out of the development-only table; Windows is not a
+  target ([DEPENDENCIES.md](../../DEPENDENCIES.md), "Known exclusions";
+  [deployment.md](../deployment.md)). Everything else the new tree brings
+  passes, `tiktoken` and `regex` included, which `main` settled.
 - `scripts/check-dco.sh`: red until the taker-over signs the commit, as
   with the MCP branch: the recipe is in [mcp-progress.md](mcp-progress.md)
   ("Where it stands").

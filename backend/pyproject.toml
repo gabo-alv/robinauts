@@ -88,6 +88,16 @@ dev = [
     "import-linter>=2.0",
 ]
 
+[tool.uv]
+# The platforms the project runs on, and the only ones the lock resolves for:
+# Windows is not a target (docs/deployment.md). A package that another platform
+# alone would need is then not locked, and the licence gate reads the lock
+# whole (DEPENDENCIES.md).
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin'",
+]
+
 [project.scripts]
 robinauts = "robinauts.cli:run"
 

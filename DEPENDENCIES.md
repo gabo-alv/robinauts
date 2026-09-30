@@ -9,6 +9,15 @@ common use. The reasoning is in
 The policy applies to every dependency **and to everything it brings with
 it**: the whole locked set is checked, not the direct dependencies alone.
 
+The locked set is resolved for the platforms the project runs on, **Linux
+and macOS**, and for no other: `[tool.uv] environments` in
+`backend/pyproject.toml` holds `backend/uv.lock` to those two, so a package
+that another platform alone would need is not locked, not checked and not
+installed anywhere. Windows is not a target
+([docs/deployment.md](docs/deployment.md)), by the project owner's decision
+(2026-09-30), taken over `pywin32` -- see
+["Known exclusions"](#known-exclusions).
+
 ## Categories
 
 ### Allowed
@@ -200,11 +209,15 @@ here, and that gate checks them.
 ## Excepted development-only dependencies
 
 The licence is the one that was read, and the version is the one it was read
-in; the gate checks both.
+in; the gate checks both. The table has no row at present. `colorama` had
+one -- 0.4.6, BSD-3-Clause read in the wheel's LICENSE.txt, since its metadata
+states the classifier `License :: OSI Approved :: BSD License` and nothing
+else, brought by `pytest` on Windows alone -- until the lock was resolved for
+Linux and macOS only (2026-09-30), which took it out of the locked set; a row
+for a package the lock does not have is an error, not a memory.
 
 | package | version | licence | why it is acceptable |
 |---|---|---|---|
-| `colorama` | 0.4.6 | BSD-3-Clause | development only; brought by `pytest` on Windows. Its metadata states the classifier `License :: OSI Approved :: BSD License` and nothing else, which names no version of the BSD licence; the LICENSE.txt shipped in the 0.4.6 wheel is the three-clause text |
 
 ## Excepted licence texts
 
@@ -373,6 +386,6 @@ then, the by-hand list is the record.
 |---|---|---|
 | `psycopg`, `psycopg-pool` | LGPL-3.0-only | not used; the PostgreSQL driver is `asyncpg` |
 | `langgraph-checkpoint-postgres` | MIT, but depends on `psycopg` | cannot be adopted as it is, and is not needed: the model's memory is a column of the platform's own schema ([ADR 0002](docs/adr/0002-conversation-persistence.md), [ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)) |
-| `mcp` (the MCP Python SDK), `langchain-mcp-adapters`, `fastmcp-slim` | MIT, but `mcp` requires `pywin32` on Windows | **adopted pending a licence decision** ([ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)): both agent frameworks' MCP clients are built on the SDK, and the tool loop is theirs now, so the client of our own over `httpx` that stood in for it is gone. The rest of the tree passes -- `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `httpx-sse`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `cffi` (`MIT-0`, allowed by the decision above), `pycparser` (BSD-3-Clause), and what is in the lock already -- and `pywin32` does not (checked 2026-09-30, at `mcp` 1.30.0), for the reason the row below gives, so **the licence gate is red until a person decides** between the ways out that row names, or refuses the tree and sends the loop back above the port. The decision is the pull request's, not this build's |
-| `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence. The licence files the 312 wheel ships (read 2026-09-30) are the three-clause BSD text for `win32`, `com` and `pythonwin`, MIT for the MAPI stub library, an HPND-style notice for Scintilla, the Python licence stack for the IDLE-derived code -- and the **LGPL-2.1** text as `adodbapi/license.txt`, for the `adodbapi` package the wheel carries | the gate fails closed on the metadata, and **no exception can be written for it** under this policy: an exception never covers a forbidden licence, and LGPL is forbidden in any version, transitively, development-only included. The runtime exception by name for family-only metadata that the project owner asked for (2026-09-30), the twin of the development-only table's `colorama` row, was therefore not recorded: a row signs what a person read, and what was read includes the LGPL. It is Windows-only (`sys_platform == "win32"`; `mcp` needs it for the job objects of its stdio transport, which the platform never uses -- its tool servers are reached over HTTP), and the gate deliberately does not read the marker: the locked set is checked whole, whatever this machine installs. The ways out are the owner's, and each is a decision this document does not take: lock only the platforms the project runs on (`[tool.uv] environments` in `backend/pyproject.toml`), which takes `pywin32` out of `backend/uv.lock` -- and `colorama` and `pywin32-ctypes` with it -- and says Windows is not a development platform; a rule for what the lock pins and no supported platform ever installs, which this policy does not have and would be a change to it; or refusing the SDK's tree, which sends the tool loop back above the port |
+| `mcp` (the MCP Python SDK), `langchain-mcp-adapters`, `fastmcp-slim` | MIT; `mcp` requires `pywin32` on Windows, which the lock does not resolve for | **adopted** (2026-09-30; [ADR 0005](docs/adr/0005-the-framework-owns-the-loop-and-the-memory.md)): both agent frameworks' MCP clients are built on the SDK, and the tool loop is theirs now, so the client of our own over `httpx` that stood in for it is gone. The whole tree passes -- `jsonschema` and what it brings, `pyjwt`, `sse-starlette`, `httpx-sse`, `python-multipart`, `cryptography` (`Apache-2.0 OR BSD-3-Clause`), `cffi` (`MIT-0`, allowed by the decision above), `pycparser` (BSD-3-Clause), and what is in the lock already (checked 2026-09-30, at `mcp` 1.30.0). It was known to fail on two packages until then: `MIT-0` settled one, and the row below records the other |
+| `pywin32` | the classifier `License :: OSI Approved :: Python Software Foundation License` and `PSF` in the free-text field, which name a family and no licence. The licence files the 312 wheel ships (read 2026-09-30) are the three-clause BSD text for `win32`, `com` and `pythonwin`, MIT for the MAPI stub library, an HPND-style notice for Scintilla, the Python licence stack for the IDLE-derived code -- and the **LGPL-2.1** text as `adodbapi/license.txt`, for the `adodbapi` package the wheel carries | **not locked**: `mcp` needs it on Windows alone (`sys_platform == "win32"`, for the job objects of its stdio transport, which the platform never uses -- its tool servers are reached over HTTP), and the lock is resolved for Linux and macOS only. That is the decision the wheel forced. The gate fails closed on the metadata, and the runtime exception by name that the project owner asked for first, the twin of the `colorama` row the development-only table had, could not be written: an exception never covers a forbidden licence, LGPL is forbidden in any version, transitively, development-only included, and a row signs what a person read. So the owner chose the platforms over the exception (2026-09-30), and `colorama` and `pywin32-ctypes`, Windows-only too, left the lock with it. The gate does not read platform markers, on purpose: what the lock has is checked whole, and what it does not have is not supported |
 | `pgserver` | no licence metadata published: the wheel carries the Apache-2.0 text as its `LICENSE` and states no identifier anywhere, so the gate fails closed | not a dependency, and cannot become one. The tests take the URL of a PostgreSQL they are given, and `demo/` runs this as a **tool** in a throwaway environment (`uv run --with pgserver==<version>`), as `reuse` and `pip-audit` are run: nothing imports it and it is not in `backend/uv.lock` ([demo/README.md](demo/README.md)) |

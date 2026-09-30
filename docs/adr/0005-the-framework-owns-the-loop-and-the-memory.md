@@ -82,7 +82,9 @@ context, the memory — and the platform keeps a transcript.**
 - The dependencies come in now — `langchain`, `langchain-mcp-adapters`,
   `mcp`, `pydantic-ai-slim[mcp]`, `fastmcp` — and the licence decision on
   the MCP SDK's tree comes later, with the pull request. The gate is
-  expected red until then.
+  expected red until then. Taken (2026-09-30): `MIT-0` is allowed, and the
+  lock is resolved for Linux and macOS only, which leaves `pywin32` out;
+  Windows is not a target ([DEPENDENCIES.md](../../DEPENDENCIES.md)).
 
 ## Consequences
 
