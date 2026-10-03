@@ -233,6 +233,7 @@ All of it in `demo/.state/`, and none of it is committed
 | | |
 |---|---|
 | `pgdata/` | the PostgreSQL data directory: the conversations are in here |
+| `pg-password` | the database's password, made at random on the first start |
 | `venv/` | the platform installed from `backend/uv.lock` (see below) |
 | `robinauts.toml` | the configuration, written from [robinauts.toml.in](robinauts.toml.in) by [config.py](config.py) |
 | `server.log` | everything the server said |
@@ -277,9 +278,10 @@ To look inside it while the demo is running, ask `pg.py` where it is:
 
     uv run --no-project --python 3.12 --with pgserver==0.1.4 python demo/pg.py url
 
-The cluster listens on the loopback interface only and uses `trust`
-authentication, so there is no password for a script to keep. That is a demo on
-one person's machine; a deployment does none of it
+The cluster listens on the loopback interface only, and every connection needs
+the password in `demo/.state/pg-password`, which the first start makes at random
+(the URL `pg.py url` prints includes it). That is a demo on one person's machine;
+a deployment does none of it
 ([../docs/deployment.md](../docs/deployment.md)).
 
 ## When something goes wrong
