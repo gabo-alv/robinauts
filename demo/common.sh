@@ -82,12 +82,10 @@ file_mode() {
 }
 
 pg() {
-    # demo/pg.py, with the PostgreSQL binaries `uv` fetched for it. Everything
-    # about where the server lives is here, so the two scripts cannot disagree
-    # about which cluster they mean.
+    # demo/pg.py, with the PostgreSQL binaries `uv` fetched for it. pg.py keeps
+    # its cluster under demo/.state/pgdata, the $PGDATA above.
     uv run --no-project --python "$PYTHON" \
-        --with "pgserver==$PGSERVER_VERSION" python "$demo/pg.py" "$@" \
-        --pgdata "$PGDATA"
+        --with "pgserver==$PGSERVER_VERSION" python "$demo/pg.py" "$@"
 }
 
 server_pid() {

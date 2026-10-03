@@ -33,6 +33,12 @@ import sys
 import tomllib
 from pathlib import Path
 
+DEMO = Path(__file__).resolve().parent
+TEMPLATE = DEMO / "robinauts.toml.in"
+OUT = DEMO / ".state" / "robinauts.toml"
+"""Where the template is read from and the configuration written to: beside this file,
+wherever the demo was run from, as ``demo/common.sh`` names them too."""
+
 MODELS = (
     ("@MODEL_ID@", "@MODEL_NAME@", "@MODEL_TITLE@"),
     ("@MODEL_2_ID@", "@MODEL_2_NAME@", "@MODEL_2_TITLE@"),
@@ -221,8 +227,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="demo/config.py", description="the demo's configuration, from its template"
     )
-    parser.add_argument("--template", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--provider-id", required=True)
     parser.add_argument("--kind", required=True)
     parser.add_argument("--key-variable", required=True)
@@ -277,9 +281,9 @@ def main(argv: list[str] | None = None) -> int:
     if github_env and ENV_NAME.fullmatch(github_env) is None:
         raise SystemExit(f"the GitHub token's variable is not a variable name: {github_env!r}")
 
-    text = filled(arguments.template.read_text(encoding="utf-8"), values, base_url, github_env)
+    text = filled(TEMPLATE.read_text(encoding="utf-8"), values, base_url, github_env)
     written(text, values, base_url, github_env)
-    arguments.out.write_text(text, encoding="utf-8")
+    OUT.write_text(text, encoding="utf-8")
     return 0
 
 
