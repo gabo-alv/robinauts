@@ -1430,27 +1430,17 @@ def _report(outcomes: Sequence[Outcome], policy: Policy, out) -> int:
     return 0
 
 
+ROOT = Path(__file__).resolve().parents[1]
+LOCK = ROOT / "backend" / "uv.lock"
+"""The lockfile whose every package is checked."""
+DEPENDENCIES = ROOT / "DEPENDENCIES.md"
+"""The document that states the policy and names the exceptions."""
+ENVIRONMENT = ROOT / "backend" / ".venv"
+"""A synced virtual environment to read metadata from first."""
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--lock",
-        type=Path,
-        default=root / "backend" / "uv.lock",
-        help="the lockfile whose every package is checked",
-    )
-    parser.add_argument(
-        "--dependencies",
-        type=Path,
-        default=root / "DEPENDENCIES.md",
-        help="the document that states the policy and names the exceptions",
-    )
-    parser.add_argument(
-        "--environment",
-        type=Path,
-        default=root / "backend" / ".venv",
-        help="a synced virtual environment to read metadata from first",
-    )
     parser.add_argument(
         "--offline",
         action="store_true",
@@ -1458,7 +1448,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
     try:
-        return run(arguments.lock, arguments.dependencies, arguments.environment, arguments.offline)
+        return run(LOCK, DEPENDENCIES, ENVIRONMENT, arguments.offline)
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as problem:
         # Nothing was checked, so nothing passed. Exit 2 rather than 1, to
         # separate "this dependency fails the policy" from "the gate could not
