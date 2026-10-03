@@ -51,7 +51,7 @@ function Welcome() {
  */
 const COMPONENTS = { Welcome, ToolFallback: ToolCall };
 
-export function Chat(props: ChatProps) {
+export function Chat(props: Readonly<ChatProps>) {
   const { state, runtime } = useChat(props);
   // Only on the empty chat: a conversation with nothing in it yet is still a
   // conversation, and its agent is no longer a choice (`../index.ts`).

@@ -176,7 +176,7 @@ export function cssPackage(name: string, modules: string): CssPackage {
   const version = manifest.version;
   const license = manifest.license;
   if (typeof version !== "string" || typeof license !== "string") {
-    throw new Error(
+    throw new TypeError(
       `${name} states no version or no licence in its package.json. ` +
         "../DEPENDENCIES.md: an exception can never cover metadata nobody " +
         "can read, and this is code that ships.",
@@ -389,7 +389,7 @@ export function bundledPackagesFrom(
   const written = [
     "# Packages in the built bundle, written by the build.",
     "# A change here is reviewed: see docs/contributing/js-dependencies.md.",
-    ...[...new Set(lines)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    ...[...new Set(lines)].sort(),
   ].join("\n");
   if (!check) return written;
   let committed: string;

@@ -159,8 +159,9 @@ from_env_file() {
     # executing whatever somebody pasted into it. `export NAME=` is accepted,
     # because that is how people write these files, and one pair of surrounding
     # quotes is removed with any trailing carriage return.
+    env_name=$1
     [ -f "$ENV_FILE" ] || return 0
-    sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1=//p" "$ENV_FILE" |
+    sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$env_name=//p" "$ENV_FILE" |
         tail -n 1 |
         sed -e 's/\r$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
@@ -217,8 +218,11 @@ title_of() {
     # nothing for a model the operator chose, since a title written here for
     # another model would name the wrong one. demo/config.py calls that one by
     # the vendor's name, cut to the length a title may have.
-    if [ "$1" = "$2" ]; then
-        printf '%s\n' "$3"
+    title_model=$1
+    title_default=$2
+    title_text=$3
+    if [ "$title_model" = "$title_default" ]; then
+        printf '%s\n' "$title_text"
     fi
 }
 

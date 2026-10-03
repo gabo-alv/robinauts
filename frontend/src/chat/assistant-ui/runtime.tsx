@@ -794,7 +794,7 @@ export function asRepository(
     message: stored(message),
     parentId: at === 0 ? null : (messages[at - 1]?.id ?? null),
   }));
-  const headId = items[items.length - 1]?.message.id ?? null;
+  const headId = items.at(-1)?.message.id ?? null;
   return {
     messages: items,
     // Left out rather than given as `null`, which would mean "no thread at

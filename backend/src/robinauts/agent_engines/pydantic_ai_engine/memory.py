@@ -69,6 +69,7 @@ class InProcessMemory(Memory):
         self._sessions: dict[uuid.UUID, dict[str, list[ModelMessage]]] = {}
 
     async def setup(self) -> None:
+        # Nothing to set up: this memory lives in the process and starts empty.
         pass
 
     async def create(self, session_id: uuid.UUID) -> None:

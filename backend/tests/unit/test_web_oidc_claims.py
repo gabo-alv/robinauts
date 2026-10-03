@@ -114,8 +114,9 @@ def test_a_token_within_the_rules_is_accepted(changes: dict[str, Any]) -> None:
     ],
 )
 def test_a_token_outside_the_rules_is_an_invalid_id_token(changes: dict[str, Any]) -> None:
+    claims = token_claims(OKTA, **changes)
     with pytest.raises(SignInError) as refused:
-        checked_claims(token_claims(OKTA, **changes), OKTA, nonce=NONCE, now=NOW)
+        checked_claims(claims, OKTA, nonce=NONCE, now=NOW)
 
     assert refused.value.code is SignInErrorCode.INVALID_ID_TOKEN
 

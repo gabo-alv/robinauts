@@ -57,6 +57,7 @@ class InProcessMemory(Memory):
         self._known: set[uuid.UUID] = set()
 
     async def setup(self) -> None:
+        # Nothing to set up: this memory lives in the process and starts empty.
         pass
 
     async def create(self, session_id: uuid.UUID) -> None:

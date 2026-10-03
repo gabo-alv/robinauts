@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -671,7 +671,7 @@ def create_app(
         conversation_id: uuid.UUID,
         run_id: uuid.UUID,
         after: int | None = None,
-        last_event_id: str | None = Header(default=None),
+        last_event_id: Annotated[str | None, Header()] = None,
         user: User = asking,
     ) -> StreamingResponse:
         position = after if after is not None else int(last_event_id or 0)

@@ -186,7 +186,7 @@ const summary = (n, title, bound = DEFAULT_BOUND) => ({
   title,
   ...bound,
   created_at: "2026-09-18T09:00:00Z",
-  updated_at: new Date(Date.parse("2026-09-21T16:00:00Z") - n * 3600_000)
+  updated_at: new Date(Date.parse("2026-09-21T16:00:00Z") - n * 3_600_000)
     .toISOString()
     .replace(".000", ""),
   active_leaf_id: null,
@@ -711,7 +711,7 @@ async function conversations(request, response, path, query) {
     const id = cancel[1] ?? "";
     const runId = cancel[2] ?? "";
     const going = runs.get(runId);
-    if (going !== undefined && going.conversationId === id) {
+    if (going?.conversationId === id) {
       // A run this process is streaming: stopping it is what the stream's
       // own ending then says, as the backend's cancel does.
       going.cancelled = true;
@@ -724,7 +724,7 @@ async function conversations(request, response, path, query) {
       return true;
     }
     const held = trees.get(id);
-    if (held === undefined || held.run_id !== runId) {
+    if (held?.run_id !== runId) {
       refuse(
         response,
         404,
@@ -769,9 +769,12 @@ async function conversations(request, response, path, query) {
  * @param {Record<string, unknown>} body
  * @param {number | null} position
  */
-const sse = (type, body, position) =>
-  `${position === null ? "" : `id: ${position}\n`}event: ${type}\n` +
-  `data: ${JSON.stringify({ type, ...body })}\n\n`;
+const sse = (type, body, position) => {
+  const id = position === null ? "" : `id: ${position}\n`;
+  return (
+    `${id}event: ${type}\n` + `data: ${JSON.stringify({ type, ...body })}\n\n`
+  );
+};
 
 /**
  * A run's events: one step per event the platform numbered.
@@ -871,14 +874,16 @@ function script(threadId, runId, messageId, how) {
     });
     return { steps, said: "" };
   }
-  steps.push({
-    position: ending,
-    events: [sse("TEXT_MESSAGE_END", { messageId }, ending)],
-  });
-  steps.push({
-    position: ending + 1,
-    events: [sse("RUN_FINISHED", { threadId, runId }, ending + 1)],
-  });
+  steps.push(
+    {
+      position: ending,
+      events: [sse("TEXT_MESSAGE_END", { messageId }, ending)],
+    },
+    {
+      position: ending + 1,
+      events: [sse("RUN_FINISHED", { threadId, runId }, ending + 1)],
+    },
+  );
   return { steps, said: said.join("") };
 }
 
@@ -1012,7 +1017,10 @@ async function follow(response, runId, after) {
   const held = trees.get(run.conversationId);
   if (held === undefined) return;
   const finished = !stopped && run.how === "finishes";
-  const badly = stopped ? "cancelled" : run.how === "fails" ? "failed" : null;
+  /** @type {"cancelled" | "failed" | null} */
+  let badly = null;
+  if (stopped) badly = "cancelled";
+  else if (run.how === "fails") badly = "failed";
   trees.set(run.conversationId, {
     ...held,
     messages: finished

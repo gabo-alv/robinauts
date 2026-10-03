@@ -46,7 +46,7 @@ import tseslint from "typescript-eslint";
  * subpaths are named too -- `assistant-cloud/x` is the same package.
  */
 const ASSISTANT_UI_PACKAGES = {
-  source: String.raw`^(@assistant-ui/|assistant-cloud(/|$))`,
+  source: "^(@assistant-ui/|assistant-cloud(/|$))",
   message:
     "assistant-ui may be imported only under src/chat/assistant-ui/ " +
     "(ADR 0001). The rest of the application imports src/chat/index.ts.",
@@ -96,7 +96,7 @@ const CHAT_IMPLEMENTATION_FROM_SEAM = {
  */
 const PLAIN_SEGMENTS = String.raw`(?:\.\.?/)*(?:(?!\.\.?(?:/|$))[^/]+)(?:/(?:(?!\.\.?(?:/|$))[^/]+))*`;
 const UNNORMALISED_SPECIFIER = {
-  source: String.raw`^(?!(?:${PLAIN_SEGMENTS})$)`,
+  source: `^(?!(?:${PLAIN_SEGMENTS})$)`,
   message:
     "write the path plainly: no empty, `.` or `..` segments inside it, and " +
     "no trailing slash. One spelling per path is what lets the rules of " +
@@ -114,7 +114,7 @@ const BACKSLASH_SPECIFIER = {
 
 /** A package is imported by its name, never by a path into node_modules. */
 const THROUGH_NODE_MODULES = {
-  source: String.raw`(?:^|/)node_modules(?:/|$)`,
+  source: "(?:^|/)node_modules(?:/|$)",
   message:
     "import a package by its name. A path through node_modules/ is a way " +
     "into a package that no rule here -- and no stylesheet scan -- reads as " +
@@ -216,7 +216,8 @@ const spellings = ({ source, message }) => {
   // esquery delimits the regular expression with slashes, so the ones inside
   // it are escaped here rather than being written twice. The `i` flag matches
   // no-restricted-imports, which ignores case.
-  const pattern = `/${source.replaceAll("/", "\\/")}/i`;
+  const escaped = source.replaceAll("/", String.raw`\/`);
+  const pattern = `/${escaped}/i`;
   return [
     { selector: `ImportExpression[source.value=${pattern}]`, message },
     {

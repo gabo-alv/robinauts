@@ -79,7 +79,8 @@ file_mode() {
     # spelling of `stat` is the one this machine has. GNU's `-c` is Linux's and
     # BSD's `-f` is macOS's; a caller that gets nothing says so rather than
     # reading "" as "safe".
-    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || true
+    file_mode_path=$1
+    stat -c '%a' "$file_mode_path" 2>/dev/null || stat -f '%Lp' "$file_mode_path" 2>/dev/null || true
 }
 
 pg() {

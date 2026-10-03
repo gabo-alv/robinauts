@@ -112,7 +112,7 @@ export function loginHref(provider: string, hash: string): string {
   return `/auth/login/${encodeURIComponent(provider)}?return_to=${target}`;
 }
 
-export function SignInPage({ session }: { session: Session }) {
+export function SignInPage({ session }: Readonly<{ session: Session }>) {
   const providers = session.providers ?? [];
   const message = failure(errorInHash(location.hash));
   return (

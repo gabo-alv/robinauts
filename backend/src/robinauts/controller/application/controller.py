@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import dataclasses
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -383,5 +382,5 @@ def _decode_cursor(cursor: str) -> Cursor:
         if updated_at.tzinfo is None:
             raise ValueError("a time without its zone")
         return updated_at, uuid.UUID(which)
-    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+    except ValueError as exc:  # UnicodeDecodeError and binascii.Error are ValueErrors
         raise InvalidValueError(f"a cursor that does not decode: {cursor!r}") from exc

@@ -132,8 +132,9 @@ def test_every_event_kind_round_trips(event: object, kind: str) -> None:
 
 
 def test_turn_started_has_no_document() -> None:
+    started = TurnStarted(SESSION, TURN, answer())
     with pytest.raises(InvalidValueError, match="TurnStarted"):
-        event_to_document(TURN, 1, TurnStarted(SESSION, TURN, answer()))
+        event_to_document(TURN, 1, started)
 
 
 def test_a_nul_is_dropped_and_a_lone_surrogate_replaced_wherever_text_goes() -> None:
