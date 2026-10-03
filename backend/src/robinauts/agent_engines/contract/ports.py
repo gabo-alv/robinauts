@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from importlib import import_module
@@ -107,7 +107,7 @@ class AgentEngine(ABC):
         raise NotImplementedError
 
 
-EngineFactory = Callable[[EngineSettings, StorageConfig], Awaitable[AgentEngine]]
+EngineFactory = Callable[[EngineSettings, StorageConfig], AgentEngine]
 
 
 _SHIPPED: Mapping[str, tuple[str, str]] = {

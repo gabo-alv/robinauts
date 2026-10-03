@@ -39,6 +39,12 @@ class MemoryStore(Store):
         self._events: dict[uuid.UUID, list[StoredEvent]] = {}
         self._changed = asyncio.Condition()
 
+    async def open(self) -> None:
+        """Nothing to open: the engines keep their memory in this process too."""
+
+    async def close(self) -> None:
+        """Nothing to release."""
+
     # --- helpers ------------------------------------------------------------
 
     def _visible(self, owner: uuid.UUID, session: uuid.UUID) -> Session:

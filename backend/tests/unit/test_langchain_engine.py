@@ -36,10 +36,9 @@ from contracts.engine import (
     Script,
     add,
 )
+from engine_settings import Keys, NoSecrets, settings_for
 from robinauts.agent_engines.contract.domain import (
     AgentDefinition,
-    ModelConfig,
-    ModelProviderConfig,
     ModelsConfig,
     ProviderKind,
     ToolServerAuth,
@@ -49,7 +48,6 @@ from robinauts.agent_engines.contract.domain import (
 from robinauts.agent_engines.contract.ports import (
     AgentEngine,
     EngineSettings,
-    ProviderKeyLookup,
     StorageConfig,
     StorageKind,
     ToolSecretLookup,
@@ -60,28 +58,6 @@ from robinauts.agent_engines.langchain_engine.clients import chat_model
 from robinauts.agent_engines.langchain_engine.engine import LangChainEngine
 from robinauts.agent_engines.langchain_engine.memory import InProcessMemory
 from robinauts.agent_engines.langchain_engine.tools import connection_for, tools_for
-
-
-class Keys(ProviderKeyLookup):
-    def key_for(self, provider_id: str) -> str:
-        return f"key-of-{provider_id}"
-
-
-class NoSecrets(ToolSecretLookup):
-    def secret_for(self, server_id: str) -> str:
-        raise AssertionError(server_id)
-
-
-def settings_for(kind: ProviderKind, base_url: str | None = None) -> EngineSettings:
-    provider = ModelProviderConfig(id="p", kind=kind, api_key_env="", base_url=base_url)
-    model = ModelConfig(
-        id="m", provider="p", name="vendor-name", timeout_seconds=7.0, max_output_tokens=321
-    )
-    return EngineSettings(
-        models=ModelsConfig(providers={"p": provider}, models={"m": model}),
-        keys=Keys(),
-        tool_secrets=NoSecrets(),
-    )
 
 
 @pytest.mark.parametrize(
@@ -135,9 +111,8 @@ def test_the_engine_answers_the_four_kinds_and_turns_hosted_tracing_off(
     assert not langsmith.utils.tracing_is_enabled()
 
 
-@asyncio_test
-async def test_init_langchain_keeps_memory_in_this_process_without_postgres() -> None:
-    engine = await init_langchain(
+def test_init_langchain_keeps_memory_in_this_process_without_postgres() -> None:
+    engine = init_langchain(
         settings_for(ProviderKind.ANTHROPIC), StorageConfig(StorageKind.IN_MEMORY, {})
     )
     assert isinstance(engine, LangChainEngine)

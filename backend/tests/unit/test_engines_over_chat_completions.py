@@ -1,18 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright The Robinauts Authors
 
-"""The LangChain engine over OpenAI's Chat Completions: real client and framework, in-process."""
+"""Both engines over OpenAI's Chat Completions: real client and framework, in-process.
+
+Every test runs once per engine (the engine is in the test's id). Each engine's ``plug_*``
+function builds the engine with the test's vendor plugged into its client and ``add`` as its
+one tool; everything after that is the same for both.
+"""
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import pytest
+from pydantic_ai.toolsets import FunctionToolset
 
 from aio import asyncio_test
 from chat_completions import PATH, Vendor, calling, finished, said, streamed
 from contracts.engine import AGENT, ANSWER, ARGUMENTS, CALL_ID, add
+from engine_settings import Keys, NoSecrets
 from robinauts.agent_engines.contract.domain import (
     Done,
     Event,
@@ -24,29 +32,16 @@ from robinauts.agent_engines.contract.domain import (
     ToolCall,
     ToolResult,
 )
-from robinauts.agent_engines.contract.ports import (
-    EngineSettings,
-    ProviderKeyLookup,
-    ToolSecretLookup,
-)
-from robinauts.agent_engines.langchain_engine import engine as engine_module
-from robinauts.agent_engines.langchain_engine.clients import chat_model
+from robinauts.agent_engines.contract.ports import AgentEngine, EngineSettings
+from robinauts.agent_engines.langchain_engine import engine as langchain_module
 from robinauts.agent_engines.langchain_engine.engine import LangChainEngine
-from robinauts.agent_engines.langchain_engine.memory import InProcessMemory
+from robinauts.agent_engines.langchain_engine.memory import InProcessMemory as LangChainMemory
+from robinauts.agent_engines.pydantic_ai_engine import engine as pydantic_ai_module
+from robinauts.agent_engines.pydantic_ai_engine.engine import PydanticAIEngine
+from robinauts.agent_engines.pydantic_ai_engine.memory import InProcessMemory as PydanticAIMemory
 
 ENDPOINT = "https://gateway.example.test/v1"
 PROMPT = "What are two and three?"
-
-
-class Keys(ProviderKeyLookup):
-    def key_for(self, provider_id: str) -> str:
-        return f"key-of-{provider_id}"
-
-
-class NoSecrets(ToolSecretLookup):
-    def secret_for(self, server_id: str) -> str:
-        raise AssertionError(server_id)
-
 
 SETTINGS = EngineSettings(
     models=ModelsConfig(
@@ -62,18 +57,47 @@ SETTINGS = EngineSettings(
 )
 
 
-async def turn_over(vendor: Vendor, monkeypatch: pytest.MonkeyPatch) -> list[Event]:
+def plug_langchain(vendor: Vendor, monkeypatch: pytest.MonkeyPatch) -> AgentEngine:
+    real_chat_model = langchain_module.chat_model
+
     def plugged_chat_model(*args: Any) -> Any:
-        model = chat_model(*args)
+        model = real_chat_model(*args)
         vendor.plugged_into(model.root_async_client)
         return model
 
     async def tools_for(*_: object) -> list[Any]:
         return [add]
 
-    monkeypatch.setattr(engine_module, "chat_model", plugged_chat_model)
-    monkeypatch.setattr(engine_module, "tools_for", tools_for)
-    engine = LangChainEngine(SETTINGS, InProcessMemory())
+    monkeypatch.setattr(langchain_module, "chat_model", plugged_chat_model)
+    monkeypatch.setattr(langchain_module, "tools_for", tools_for)
+    return LangChainEngine(SETTINGS, LangChainMemory())
+
+
+def plug_pydantic_ai(vendor: Vendor, monkeypatch: pytest.MonkeyPatch) -> AgentEngine:
+    real_chat_model = pydantic_ai_module.chat_model
+
+    def plugged_chat_model(*args: Any) -> Any:
+        model, model_settings = real_chat_model(*args)
+        vendor.plugged_into(model.client)
+        return model, model_settings
+
+    def toolsets_for(*_: object) -> list[Any]:
+        return [FunctionToolset([add])]
+
+    monkeypatch.setattr(pydantic_ai_module, "chat_model", plugged_chat_model)
+    monkeypatch.setattr(pydantic_ai_module, "toolsets_for", toolsets_for)
+    return PydanticAIEngine(SETTINGS, PydanticAIMemory())
+
+
+Plug = Callable[[Vendor, pytest.MonkeyPatch], AgentEngine]
+
+ENGINES = pytest.mark.parametrize(
+    "plug", [plug_langchain, plug_pydantic_ai], ids=["langchain", "pydantic-ai"]
+)
+
+
+async def turn_over(plug: Plug, vendor: Vendor, monkeypatch: pytest.MonkeyPatch) -> list[Event]:
+    engine = plug(vendor, monkeypatch)
     await engine.setup()
     session = uuid.uuid4()
     await engine.create(session)
@@ -83,12 +107,13 @@ async def turn_over(vendor: Vendor, monkeypatch: pytest.MonkeyPatch) -> list[Eve
     return [event async for event in stream]
 
 
+@ENGINES
 @asyncio_test
 async def test_an_answer_is_asked_for_as_configured_and_streamed_back(
-    monkeypatch: pytest.MonkeyPatch,
+    plug: Plug, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vendor = Vendor(streamed(*said("Two and three ", "make five."), *finished()))
-    events = await turn_over(vendor, monkeypatch)
+    events = await turn_over(plug, vendor, monkeypatch)
 
     pieces = [event.text for event in events if isinstance(event, TextDelta)]
     assert pieces == ["Two and three ", "make five."]
@@ -108,9 +133,10 @@ async def test_an_answer_is_asked_for_as_configured_and_streamed_back(
     ]
 
 
+@ENGINES
 @asyncio_test
 async def test_a_tool_round_is_run_and_its_result_sent_back(
-    monkeypatch: pytest.MonkeyPatch,
+    plug: Plug, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vendor = Vendor(
         bodies=[
@@ -118,7 +144,7 @@ async def test_a_tool_round_is_run_and_its_result_sent_back(
             streamed(*said(ANSWER), *finished()),
         ]
     )
-    events = await turn_over(vendor, monkeypatch)
+    events = await turn_over(plug, vendor, monkeypatch)
 
     assert events.index(ToolCall(CALL_ID, "add", ARGUMENTS)) < events.index(
         ToolResult(CALL_ID, "add", "5")

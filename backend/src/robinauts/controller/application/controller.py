@@ -121,7 +121,7 @@ class RobinautsController(Controller):
             if factory is None:
                 raise UnknownEngineError(f"engine {name!r}, which this build does not have")
             settings = engine_settings(self._config, self._secret_for)
-            engine = await factory(settings, engine_storage(self._storage, self._handle))
+            engine = factory(settings, engine_storage(self._storage, self._handle))
             if self._sets_up_engines():
                 await engine.setup()
             self._engines[name] = engine

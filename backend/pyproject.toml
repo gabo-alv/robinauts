@@ -160,7 +160,7 @@ markers = [
 ]
 # `tests/live/` is never collected by a plain run, and therefore never by CI:
 # those tests call a vendor with a real key and are run by hand, by naming the
-# file (`uv run pytest tests/live/test_langchain_live.py`). Not a marker
+# file (`uv run pytest tests/live/test_engines_live.py`). Not a marker
 # expression in `addopts`, which would set `markexpr` on every run and so
 # silence the check that the database tests really ran (tests/conftest.py).
 #

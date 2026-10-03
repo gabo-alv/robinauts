@@ -58,47 +58,47 @@ def sse(event: BaseEvent, position: int | None = None) -> str:
     return f"{numbered}event: {event.type.value}\n{ENCODER.encode(event)}"
 
 
-def mapped(thread_id: str, run_id: str, event: TurnEvent) -> tuple[BaseEvent, ...]:
+def mapped(thread_id: str, run_id: str, event: TurnEvent) -> list[BaseEvent]:
     match event:
         case MessageStarted(role=Role.ASSISTANT):
-            return (TextMessageStartEvent(message_id=str(event.message_id), role="assistant"),)
+            return [TextMessageStartEvent(message_id=str(event.message_id), role="assistant")]
         case TextPiece():
-            return (TextMessageContentEvent(message_id=str(event.message_id), delta=event.text),)
+            return [TextMessageContentEvent(message_id=str(event.message_id), delta=event.text)]
         case CallStarted():
-            return (
+            return [
                 ToolCallStartEvent(
                     tool_call_id=event.call_id,
                     tool_call_name=event.name,
                     parent_message_id=str(event.message_id),
-                ),
-            )
+                )
+            ]
         case ArgumentsPiece():
-            return (ToolCallArgsEvent(tool_call_id=event.call_id, delta=event.text),)
+            return [ToolCallArgsEvent(tool_call_id=event.call_id, delta=event.text)]
         case CallCompleted():
-            return (ToolCallEndEvent(tool_call_id=event.call_id),)
+            return [ToolCallEndEvent(tool_call_id=event.call_id)]
         case ResultLanded():
-            return (
+            return [
                 ToolCallResultEvent(
                     message_id=str(event.message_id),
                     tool_call_id=event.call_id,
                     content=event.text,
                     role="tool",
                     metadata={"isError": True} if event.is_error else None,
-                ),
-            )
+                )
+            ]
         case MessageCompleted():
-            return (TextMessageEndEvent(message_id=str(event.message_id)),)
+            return [TextMessageEndEvent(message_id=str(event.message_id))]
         case TurnEnded(state=TurnState.FINISHED):
-            return (RunFinishedEvent(thread_id=thread_id, run_id=run_id),)
+            return [RunFinishedEvent(thread_id=thread_id, run_id=run_id)]
         case TurnEnded(state=TurnState.CANCELLED):
-            return (
+            return [
                 RunFinishedEvent(
                     thread_id=thread_id, run_id=run_id, outcome=RunFinishedCancelledOutcome()
-                ),
-            )
+                )
+            ]
         case TurnEnded():
-            return (RunErrorEvent(message=ENDED_BADLY[event.state], code=event.state.value),)
-    return ()
+            return [RunErrorEvent(message=ENDED_BADLY[event.state], code=event.state.value)]
+    return []
 
 
 async def stream(

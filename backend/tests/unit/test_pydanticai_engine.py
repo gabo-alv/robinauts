@@ -26,7 +26,6 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from aio import asyncio_test
 from contracts.engine import (
     ANSWER,
     ARGUMENTS,
@@ -37,10 +36,9 @@ from contracts.engine import (
     Script,
     add,
 )
+from engine_settings import Keys, NoSecrets, settings_for
 from robinauts.agent_engines.contract.domain import (
     AgentDefinition,
-    ModelConfig,
-    ModelProviderConfig,
     ModelsConfig,
     ProviderKind,
     ToolServerAuth,
@@ -50,7 +48,6 @@ from robinauts.agent_engines.contract.domain import (
 from robinauts.agent_engines.contract.ports import (
     AgentEngine,
     EngineSettings,
-    ProviderKeyLookup,
     StorageConfig,
     StorageKind,
     ToolSecretLookup,
@@ -61,28 +58,6 @@ from robinauts.agent_engines.pydantic_ai_engine.clients import chat_model
 from robinauts.agent_engines.pydantic_ai_engine.engine import PydanticAIEngine
 from robinauts.agent_engines.pydantic_ai_engine.memory import InProcessMemory
 from robinauts.agent_engines.pydantic_ai_engine.tools import toolset_for, toolsets_for
-
-
-class Keys(ProviderKeyLookup):
-    def key_for(self, provider_id: str) -> str:
-        return f"key-of-{provider_id}"
-
-
-class NoSecrets(ToolSecretLookup):
-    def secret_for(self, server_id: str) -> str:
-        raise AssertionError(server_id)
-
-
-def settings_for(kind: ProviderKind, base_url: str | None = None) -> EngineSettings:
-    provider = ModelProviderConfig(id="p", kind=kind, api_key_env="", base_url=base_url)
-    model = ModelConfig(
-        id="m", provider="p", name="vendor-name", timeout_seconds=7.0, max_output_tokens=321
-    )
-    return EngineSettings(
-        models=ModelsConfig(providers={"p": provider}, models={"m": model}),
-        keys=Keys(),
-        tool_secrets=NoSecrets(),
-    )
 
 
 @pytest.mark.parametrize(
@@ -177,17 +152,15 @@ def test_a_public_server_carries_no_credential_and_asks_for_none() -> None:
     assert toolset_for(server, tool_settings(NoSecrets())).client.transport.headers == {}
 
 
-@asyncio_test
-async def test_an_agent_without_tools_has_none() -> None:
-    assert await toolsets_for(AgentDefinition("be brief"), tool_settings(NoSecrets())) == []
+def test_an_agent_without_tools_has_none() -> None:
+    assert toolsets_for(AgentDefinition("be brief"), tool_settings(NoSecrets())) == []
 
 
-@asyncio_test
-async def test_an_agent_has_a_toolset_per_server_it_names() -> None:
+def test_an_agent_has_a_toolset_per_server_it_names() -> None:
     server = ToolServerConfig(id="docs", url="https://mcp.example/docs", auth=ToolServerAuth.NONE)
     other = ToolServerConfig(id="gh", url="https://mcp.example/gh")
     settings = tool_settings(NoSecrets(), server, other)
-    [toolset] = await toolsets_for(AgentDefinition("be brief", tools=("docs",)), settings)
+    [toolset] = toolsets_for(AgentDefinition("be brief", tools=("docs",)), settings)
     assert isinstance(toolset, MCPToolset)
     assert toolset.client.transport.url == "https://mcp.example/docs"
 
@@ -202,9 +175,8 @@ def test_the_engine_answers_the_four_kinds_and_turns_tracing_off(
     assert Agent._instrument_default is False
 
 
-@asyncio_test
-async def test_init_pydantic_ai_keeps_memory_in_this_process_without_postgres() -> None:
-    engine = await init_pydantic_ai(
+def test_init_pydantic_ai_keeps_memory_in_this_process_without_postgres() -> None:
+    engine = init_pydantic_ai(
         settings_for(ProviderKind.ANTHROPIC), StorageConfig(StorageKind.IN_MEMORY, {})
     )
     assert isinstance(engine, PydanticAIEngine)
@@ -246,7 +218,7 @@ def scripted(script: Script) -> FunctionModel:
 class TestPydanticAIEngineTurn(EngineTurnContract):
     @pytest.fixture(autouse=True)
     def plain_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def toolsets_for(*_: object) -> list[Any]:
+        def toolsets_for(*_: object) -> list[Any]:
             return [FunctionToolset([add])]
 
         monkeypatch.setattr(engine_module, "toolsets_for", toolsets_for)

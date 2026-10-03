@@ -46,7 +46,7 @@ async def build_engines(
                 f"agent {agent.id!r} runs on engine {agent.engine!r}, which this build"
                 f" does not have"
             )
-        engine = await factory(settings, storage)
+        engine = factory(settings, storage)
         if setup:
             await engine.setup()
         engines[agent.engine] = engine

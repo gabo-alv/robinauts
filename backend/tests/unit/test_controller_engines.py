@@ -61,7 +61,7 @@ class FakeEngine(AgentEngine):
         raise NotImplementedError
 
 
-async def init_fake(settings: EngineSettings, storage: StorageConfig) -> AgentEngine:
+def init_fake(settings: EngineSettings, storage: StorageConfig) -> AgentEngine:
     return FakeEngine(settings, storage)
 
 

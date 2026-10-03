@@ -8,11 +8,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from test_pydanticai_engine import scripted, settings_for
+from test_pydanticai_engine import scripted
 
 from aio import asyncio_test
 from contracts.engine import EngineMemoryContract, EngineTurnContract, Script
 from controller_db import TemporarySchema, requires_postgres, temporary_schema
+from engine_settings import settings_for
 from robinauts.agent_engines.contract.domain import ProviderKind
 from robinauts.agent_engines.contract.ports import AgentEngine, StorageConfig, StorageKind
 from robinauts.agent_engines.pydantic_ai_engine import engine as engine_module
@@ -60,7 +61,7 @@ class TestPydanticAIEngineTurnOnPostgres(OnPostgres, EngineTurnContract):
 
         from contracts.engine import add
 
-        async def toolsets_for(*_: object) -> list[object]:
+        def toolsets_for(*_: object) -> list[object]:
             return [FunctionToolset([add])]
 
         monkeypatch.setattr(engine_module, "toolsets_for", toolsets_for)
@@ -75,7 +76,7 @@ class TestPydanticAIEngineTurnOnPostgres(OnPostgres, EngineTurnContract):
 @asyncio_test
 async def test_init_pydantic_ai_puts_memory_on_postgres_when_asked() -> None:
     async with temporary_schema(applied=False, size=2) as schema:
-        engine = await init_pydantic_ai(
+        engine = init_pydantic_ai(
             settings_for(ProviderKind.ANTHROPIC),
             StorageConfig(StorageKind.POSTGRES, {"pool": schema.pool}),
         )

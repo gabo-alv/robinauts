@@ -52,14 +52,16 @@ class StoredEvent:
 
 
 class Store(ABC):
+    @abstractmethod
     async def open(self) -> object | None:
         """Open what the store needs, if anything, and hand back what the engines take as
         their storage's handle: a PostgreSQL pool, or ``None``."""
-        return None
+        raise NotImplementedError
 
+    @abstractmethod
     async def close(self) -> None:
-        """Release what ``open`` took; nothing by default."""
-        return None
+        """Release what ``open`` took."""
+        raise NotImplementedError
 
     # --- users --------------------------------------------------------------
 

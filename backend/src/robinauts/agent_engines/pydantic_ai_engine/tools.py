@@ -35,8 +35,6 @@ def toolset_for(server: ToolServerConfig, settings: EngineSettings) -> MCPToolse
     )
 
 
-async def toolsets_for(
-    agent: AgentDefinition, settings: EngineSettings
-) -> list[AbstractToolset[Any]]:
+def toolsets_for(agent: AgentDefinition, settings: EngineSettings) -> list[AbstractToolset[Any]]:
     servers = settings.models.tool_servers
     return [toolset_for(servers[server_id], settings) for server_id in agent.tools]

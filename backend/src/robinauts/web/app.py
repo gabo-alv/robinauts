@@ -381,7 +381,7 @@ def create_app(
 
     # --- who is asking -----------------------------------------------------------
 
-    async def same_origin(request: Request) -> None:
+    def same_origin(request: Request) -> None:
         if (
             sign_in is not None
             and request.method not in SAFE_METHODS

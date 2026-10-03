@@ -15,7 +15,7 @@ from robinauts.agent_engines.langchain_engine.engine import LangChainEngine
 from robinauts.agent_engines.langchain_engine.memory import InProcessMemory, PostgresMemory
 
 
-async def init_langchain(settings: EngineSettings, storage: StorageConfig) -> AgentEngine:
+def init_langchain(settings: EngineSettings, storage: StorageConfig) -> AgentEngine:
     """The engine over the storage asked: its memory in the controller's PostgreSQL, else
     kept in this process."""
     if storage.kind is StorageKind.POSTGRES:

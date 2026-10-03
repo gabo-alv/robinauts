@@ -89,7 +89,7 @@ class PydanticAIEngine(AgentEngine):
             client,
             instructions=agent.system_prompt,
             model_settings=model_settings,
-            toolsets=await toolsets_for(agent, self._settings),
+            toolsets=toolsets_for(agent, self._settings),
         )
         # The deadline bounds the run, not the caller's handling of what is yielded.
         deadline = asyncio.get_running_loop().time() + timeout_seconds

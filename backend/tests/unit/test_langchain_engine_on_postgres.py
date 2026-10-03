@@ -13,11 +13,12 @@ from typing import Any
 import pytest
 from langchain_core.language_models import GenericFakeChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from test_langchain_engine import ScriptedChatModel, settings_for
+from test_langchain_engine import ScriptedChatModel
 
 from aio import asyncio_test
 from contracts.engine import AGENT, EngineMemoryContract, EngineTurnContract, Script, add
 from controller_db import TemporarySchema, requires_postgres, temporary_schema
+from engine_settings import settings_for
 from robinauts.agent_engines.contract.domain import Done, ProviderKind
 from robinauts.agent_engines.contract.ports import AgentEngine, StorageConfig, StorageKind
 from robinauts.agent_engines.langchain_engine import engine as engine_module
@@ -135,7 +136,7 @@ def test_the_saver_holds_what_the_in_memory_one_would(
 @asyncio_test
 async def test_init_langchain_puts_memory_on_postgres_when_asked() -> None:
     async with temporary_schema(applied=False, size=2) as schema:
-        engine = await init_langchain(
+        engine = init_langchain(
             settings_for(ProviderKind.ANTHROPIC),
             StorageConfig(StorageKind.POSTGRES, {"pool": schema.pool}),
         )

@@ -9,5 +9,5 @@ from robinauts.agent_engines.contract.ports import AgentEngine, EngineSettings, 
 from robinauts.agent_engines.echo_engine.engine import EchoEngine
 
 
-async def init_echo(settings: EngineSettings, storage: StorageConfig) -> AgentEngine:
+def init_echo(settings: EngineSettings, storage: StorageConfig) -> AgentEngine:
     return EchoEngine()

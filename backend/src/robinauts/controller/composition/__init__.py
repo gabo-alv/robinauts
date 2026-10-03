@@ -111,7 +111,7 @@ async def init_database(url: str, config: Config, secret_for: SecretLookup) -> s
         settings = engine_settings(config, secret_for)
         storage = EngineStorage(EngineStorageKind.POSTGRES, {"pool": pool})
         for factory in installed().values():
-            engine = await factory(settings, storage)
+            engine = factory(settings, storage)
             await engine.setup()
     finally:
         await pool.close()

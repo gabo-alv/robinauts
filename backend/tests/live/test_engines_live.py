@@ -1,20 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright The Robinauts Authors
 
-"""One real turn of the Pydantic AI engine per route. Run by hand, never by CI.
+"""One real turn of each engine per route. Run by hand, never by CI.
 
 ``tests/live`` is not collected by a plain run (``norecursedirs``); name the file to run it.
-Each test reads its key from a variable of its own and skips without it.
+Each test reads its key from a variable of its own and skips without it. Every test runs once
+per engine (the engine is in the test's id).
 """
 
 from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Callable
 
 import pytest
 
 from aio import asyncio_test
+from engine_settings import NoSecrets
 from robinauts.agent_engines.contract.domain import (
     AgentDefinition,
     Done,
@@ -24,18 +27,31 @@ from robinauts.agent_engines.contract.domain import (
     ProviderKind,
     TextDelta,
 )
-from robinauts.agent_engines.contract.ports import (
-    EngineSettings,
-    ProviderKeyLookup,
-    ToolSecretLookup,
-)
+from robinauts.agent_engines.contract.ports import AgentEngine, EngineSettings, ProviderKeyLookup
+from robinauts.agent_engines.langchain_engine.engine import LangChainEngine
+from robinauts.agent_engines.langchain_engine.memory import InProcessMemory as LangChainMemory
 from robinauts.agent_engines.pydantic_ai_engine.engine import PydanticAIEngine
-from robinauts.agent_engines.pydantic_ai_engine.memory import InProcessMemory
+from robinauts.agent_engines.pydantic_ai_engine.memory import InProcessMemory as PydanticAIMemory
 
 pytestmark = [pytest.mark.io, pytest.mark.live]
 
 ANTHROPIC_KEY = "ROBINAUTS_LIVE_ANTHROPIC_KEY"
 OPENROUTER_KEY = "ROBINAUTS_LIVE_OPENROUTER_KEY"
+
+
+def langchain(settings: EngineSettings) -> AgentEngine:
+    return LangChainEngine(settings, LangChainMemory())
+
+
+def pydantic_ai(settings: EngineSettings) -> AgentEngine:
+    return PydanticAIEngine(settings, PydanticAIMemory())
+
+
+NewEngine = Callable[[EngineSettings], AgentEngine]
+
+ENGINES = pytest.mark.parametrize(
+    "new_engine", [langchain, pydantic_ai], ids=["langchain", "pydantic-ai"]
+)
 
 
 class Key(ProviderKeyLookup):
@@ -46,12 +62,9 @@ class Key(ProviderKeyLookup):
         return self._key
 
 
-class NoSecrets(ToolSecretLookup):
-    def secret_for(self, server_id: str) -> str:
-        raise AssertionError(server_id)
-
-
-async def one_real_turn(provider: ModelProviderConfig, name: str, key: str) -> None:
+async def one_real_turn(
+    new_engine: NewEngine, provider: ModelProviderConfig, name: str, key: str
+) -> None:
     model = ModelConfig(
         id="m", provider=provider.id, name=name, timeout_seconds=60.0, max_output_tokens=64
     )
@@ -60,7 +73,7 @@ async def one_real_turn(provider: ModelProviderConfig, name: str, key: str) -> N
         keys=Key(key),
         tool_secrets=NoSecrets(),
     )
-    engine = PydanticAIEngine(settings, InProcessMemory())
+    engine = new_engine(settings)
     await engine.setup()
     session = uuid.uuid4()
     await engine.create(session)
@@ -84,16 +97,18 @@ async def one_real_turn(provider: ModelProviderConfig, name: str, key: str) -> N
 
 
 @pytest.mark.skipif(not os.environ.get(ANTHROPIC_KEY), reason=f"{ANTHROPIC_KEY} is not set")
+@ENGINES
 @asyncio_test
-async def test_one_real_turn_on_anthropic() -> None:
+async def test_one_real_turn_on_anthropic(new_engine: NewEngine) -> None:
     provider = ModelProviderConfig(id="anthropic", kind=ProviderKind.ANTHROPIC, api_key_env="")
     name = os.environ.get("ROBINAUTS_LIVE_ANTHROPIC_MODEL", "claude-haiku-4-5")
-    await one_real_turn(provider, name, os.environ[ANTHROPIC_KEY])
+    await one_real_turn(new_engine, provider, name, os.environ[ANTHROPIC_KEY])
 
 
 @pytest.mark.skipif(not os.environ.get(OPENROUTER_KEY), reason=f"{OPENROUTER_KEY} is not set")
+@ENGINES
 @asyncio_test
-async def test_one_real_turn_through_openrouter() -> None:
+async def test_one_real_turn_through_openrouter(new_engine: NewEngine) -> None:
     provider = ModelProviderConfig(
         id="openrouter",
         kind=ProviderKind.OPENAI_COMPATIBLE,
@@ -101,4 +116,4 @@ async def test_one_real_turn_through_openrouter() -> None:
         base_url="https://openrouter.ai/api/v1",
     )
     name = os.environ.get("ROBINAUTS_LIVE_OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
-    await one_real_turn(provider, name, os.environ[OPENROUTER_KEY])
+    await one_real_turn(new_engine, provider, name, os.environ[OPENROUTER_KEY])
