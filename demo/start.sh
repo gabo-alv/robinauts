@@ -305,7 +305,7 @@ say "Starting the demo's own PostgreSQL under $PGDATA ..."
 database_url=$(pg start) ||
     fail "the demo's PostgreSQL would not start; its own log is $PGDATA/log." 1
 export ROBINAUTS_DATABASE_URL="$database_url"
-say "Database: $database_url"
+say "Database: postgresql://${database_url#*@} (password in $state/pg-password)"
 
 # --- the configuration -------------------------------------------------------
 

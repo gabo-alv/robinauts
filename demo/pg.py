@@ -32,18 +32,16 @@ Four commands, and each is safe to run again:
 creating it needs the client binaries and this process is the only one that has
 them; a second script would be a second copy of where they live.
 
-**Loopback only, trust authentication, and no password anywhere.** There is no
-password for a script to print, put in a file or leak into a log, and what
-stands in its place is two walls: the server listens on ``127.0.0.1`` alone, so
-nothing off this machine can reach it, and its unix socket lives in a directory
-inside ``pgdata``, which ``initdb`` makes ``0700``, so nothing but this account
-can reach *that*.
+**Loopback only, and a password made on this machine.** The server listens on
+``127.0.0.1`` alone, so nothing off this machine can reach it. The first
+``start`` writes a random password to ``demo/.state/pg-password``, readable by
+this account only and never committed, and every connection needs it, so
+another account on this machine cannot connect either. The password is in the
+URL that ``start`` and ``url`` print, for the server and for whoever asks.
 
-What those two do **not** stop is another account **on this machine** opening
-the loopback port and being trusted as ``postgres``. That is what ``trust``
-means, and it is the reason this is a demo on one person's laptop and not a way
-to run anything: a deployment gives the database a role and a password of its
-own (``docs/deployment.md``), and the README says so too.
+This is still a demo on one person's laptop and not a way to run anything: a
+deployment gives the database a role and a password of its own
+(``docs/deployment.md``), and the README says so too.
 """
 
 from __future__ import annotations
@@ -51,6 +49,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -119,9 +118,25 @@ def pgdata_default() -> Path:
     return Path(__file__).resolve().parent / ".state" / "pgdata"
 
 
+def password_file() -> Path:
+    """``demo/.state/pg-password``, beside the data directory."""
+    return pgdata_default().parent / "pg-password"
+
+
+def password() -> str:
+    """The cluster's password, made at random the first time and kept for the next."""
+    path = password_file()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Created readable by this account only, before anything is written to it.
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as out:
+            out.write(secrets.token_urlsafe(32))
+    return path.read_text(encoding="utf-8").strip()
+
+
 def url_for(port: int, database: str) -> str:
-    """The URL the server is handed: this machine, that port, that database."""
-    return f"postgresql://{SUPERUSER}@{HOST}:{port}/{database}"
+    """The URL the server is handed: this machine, that port, that database, the password."""
+    return f"postgresql://{SUPERUSER}:{password()}@{HOST}:{port}/{database}"
 
 
 def listening_port(pgdata: Path) -> int | None:
@@ -177,11 +192,14 @@ def start(pgdata: Path, port: int, database: str) -> None:
     pgdata.parent.mkdir(parents=True, exist_ok=True)
     if not (pgdata / "PG_VERSION").exists():
         pgdata.mkdir(parents=True, exist_ok=True)
-        # `--auth=trust` on a server nothing off this machine can connect to.
-        # A password would be a secret for a demo script to keep, and a demo
-        # script is the worst place to keep one.
         pgserver.initdb(
-            ["--auth=trust", "--auth-local=trust", "--encoding=utf8", "-U", SUPERUSER],
+            [
+                "--auth=scram-sha-256",
+                f"--pwfile={password_file()}",
+                "--encoding=utf8",
+                "-U",
+                SUPERUSER,
+            ],
             pgdata=pgdata,
         )
     if not running(pgdata, port):
@@ -274,6 +292,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--database", default=DEFAULT_DATABASE)
     arguments = parser.parse_args(argv)
+    # psql and createdb below connect over TCP and need the password. Through the
+    # environment rather than as an argument: pgserver logs the arguments it runs with.
+    os.environ["PGPASSWORD"] = password()
     pgdata = arguments.pgdata or pgdata_default()
 
     # The variable is read here rather than as the argument's default, so that
