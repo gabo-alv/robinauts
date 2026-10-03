@@ -114,7 +114,7 @@ function compareInstants(a: string, b: string): number {
 }
 
 function instant(text: string): [number, string] {
-  const found = /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$/.exec(text);
+  const found = /^([^T]*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$/.exec(text);
   if (found === null) return [Date.parse(text), ""];
   const [, whole = "", fraction = "", zone = ""] = found;
   return [Date.parse(whole + zone), fraction.padEnd(9, "0")];
