@@ -1,5 +1,9 @@
 # Robinauts
 
+[![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=open-shipyard_robinauts&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=open-shipyard_robinauts)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=open-shipyard_robinauts&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=open-shipyard_robinauts)
+[![Security issues](https://sonarcloud.io/api/project_badges/measure?project=open-shipyard_robinauts&metric=software_quality_security_issues)](https://sonarcloud.io/summary/new_code?id=open-shipyard_robinauts)
+
 An open source AI assistant platform that a company runs on its own
 servers, leveraging the best capabilities from any vendor, on its own terms.
 
