@@ -13,7 +13,7 @@ the ones the engine runs on; the sync ones stay the base class's, which refuse.
 
 from __future__ import annotations
 
-import random
+import secrets
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -212,7 +212,7 @@ class PostgresSaver(BaseCheckpointSaver[str]):
             current_v = current
         else:
             current_v = int(current.split(".")[0])
-        return f"{current_v + 1:032}.{random.random():016}"
+        return f"{current_v + 1:032}.{secrets.randbelow(10**16):016}"
 
     async def _tuple(self, row: Any) -> CheckpointTuple:
         thread_id, checkpoint_ns = row["thread_id"], row["checkpoint_ns"]

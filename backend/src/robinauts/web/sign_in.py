@@ -45,7 +45,7 @@ GOOGLE_ISSUER = "https://accounts.google.com"
 DEFAULT_SCOPES = ("openid", "email", "profile")
 SESSION_HOURS = 12
 
-PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9_-]*")
+PROVIDER_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*")
 """How a provider's id is spelt. The local development mode's ``!local`` is not spelt so, and
 no configuration can name it."""
 LOCAL_PROVIDER = "!local"
@@ -144,7 +144,7 @@ def parse_sign_in(raw: Mapping[str, Any]) -> SignInConfig | None:
     known = {field.name for field in dataclasses.fields(ProviderConfig)} - {"id"}
     providers = {}
     for id_, table in tables.items():
-        if not PROVIDER_ID.fullmatch(id_):
+        if not PROVIDER_ID_PATTERN.fullmatch(id_):
             problems.append(f"providers.{id_}: an id is lower-case letters, digits, - and _")
         elif unknown := sorted(set(table) - known):
             problems.append(f"providers.{id_}: unknown key(s) {', '.join(unknown)}")

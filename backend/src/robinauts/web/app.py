@@ -58,6 +58,7 @@ from robinauts.web.oidc import Exchange
 from robinauts.web.sign_in import (
     LOCAL_PROVIDER,
     PENDING_LOGIN_LIFE,
+    PROVIDER_ID_PATTERN,
     SignIn,
     SignInConfig,
     SignInError,
@@ -88,7 +89,7 @@ NO_SUCH_TOKEN = "you have no API token of that id"
 
 LOCAL_IDENTITY = Identity(provider=LOCAL_PROVIDER, subject="developer", name="Local development")
 """The one user of the local development mode, under a provider no configuration can name
-(``sign_in.PROVIDER_ID``), so that no identity a provider vouches for can carry it."""
+(``sign_in.PROVIDER_ID_PATTERN``), so that no identity a provider vouches for can carry it."""
 
 log = logging.getLogger(__name__)
 
@@ -463,6 +464,10 @@ def create_app(
         log.warning("sign-in refused, %s: %s", refusal.code, refusal.detail)
         return RedirectResponse(SIGN_IN_PAGE + refusal.code, status_code=302)
 
+    malformed_provider = SignInError(
+        SignInErrorCode.UNKNOWN_PROVIDER, "the provider in the URL is not a valid id"
+    )
+
     @app.get("/auth/session")
     async def current_user_session(request: Request) -> UserSessionResponse:
         if sign_in is None:
@@ -493,6 +498,8 @@ def create_app(
 
         @app.get("/auth/login/{provider}", include_in_schema=False)
         async def begin_sign_in(provider: str, return_to: str | None = None) -> Response:
+            if not PROVIDER_ID_PATTERN.fullmatch(provider):
+                return not_signed_in(malformed_provider)
             try:
                 url, state = await flow.begin(provider, return_to=return_to, now=datetime.now(UTC))
             except SignInError as refusal:
@@ -510,6 +517,8 @@ def create_app(
             error: str | None = None,
             error_description: str | None = None,
         ) -> Response:
+            if not PROVIDER_ID_PATTERN.fullmatch(provider):
+                return not_signed_in(malformed_provider)
             if error is not None or code is None:
                 return not_signed_in(
                     SignInError(
