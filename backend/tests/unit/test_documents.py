@@ -151,11 +151,11 @@ def test_a_nul_is_dropped_and_a_lone_surrogate_replaced_wherever_text_goes() -> 
         NOW,
     )
     parts = message_to_document(message)["parts"]
-    assert parts[0]["text"] == "ab�c"
+    assert parts[0]["text"] == "ab\ufffdc"
     assert parts[1]["name"] == "weather"
-    assert parts[1]["arguments"] == {"city": "Lis�bon", "n": ["x"]}
+    assert parts[1]["arguments"] == {"city": "Lis\ufffdbon", "n": ["x"]}
     assert parts[2]["text"] == "\U0001f600 split pair joined"
-    assert event_to_document(TURN, 1, TextPiece(ANSWER, "\x00\udfff"))["text"] == "�"
+    assert event_to_document(TURN, 1, TextPiece(ANSWER, "\x00\udfff"))["text"] == "\ufffd"
     assert clean_text("plain") == "plain"
 
 
