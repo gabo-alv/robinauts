@@ -147,7 +147,7 @@ command -v node >/dev/null 2>&1 ||
 
 running=$(server_pid)
 if [ -n "$running" ]; then
-    say "Already running on http://$HOST:$PORT/ (pid $running); demo/stop.sh stops it."
+    say "Already running on $BASE_URL/ (pid $running); demo/stop.sh stops it."
     exit 0
 fi
 
@@ -367,7 +367,7 @@ say "Creating the schema if it is not there (robinauts db init) ..."
 # The console script and not `uv run`, so that the pid in the pid file is the
 # server's own and demo/stop.sh signals the process that holds the socket.
 
-say "Starting the server on http://$HOST:$PORT/ ..."
+say "Starting the server on $BASE_URL/ ..."
 : >"$LOG_FILE"
 # The secrets, at last, and **only here**: they are exported inside a subshell
 # that then becomes the server (`exec`), so they are in the server's
@@ -405,7 +405,7 @@ printf '%s\n' "$server" >"$PID_FILE"
 # so a refusal to start is one line and its log rather than two minutes of
 # silence.
 if ! "$VENV/bin/python" - \
-    "http://$HOST:$PORT/health" "$HEALTH_SECONDS" "$server" "$HEALTH_TRIES_PER_SECOND" \
+    "$BASE_URL/health" "$HEALTH_SECONDS" "$server" "$HEALTH_TRIES_PER_SECOND" \
     <<'PY'
 import json
 import os
@@ -444,7 +444,7 @@ then
     fail "the server did not come up; the log above says why." 1
 fi
 
-url="http://$HOST:$PORT/"
+url="$BASE_URL/"
 say ""
 say "The demo is up: $url"
 say "  sign-in is off (the local development mode), loopback only, one user"
