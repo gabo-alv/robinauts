@@ -21,7 +21,7 @@ cd "$root/backend"
 PYTHONDONTWRITEBYTECODE=1
 export PYTHONDONTWRITEBYTECODE
 
-uv run --locked python - <<'PY'
+uv run --locked --no-build python - <<'PY'
 import json
 from pathlib import Path
 
