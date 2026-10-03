@@ -316,7 +316,6 @@ say "Database: postgresql://${database_url#*@} (password in $state/pg-password)"
 # config.py substitutes literally, refuses what TOML cannot hold, and reads the
 # file back to prove that each value arrived whole.
 uv run --no-project --python "$PYTHON" python "$demo/config.py" \
-    --template "$demo/robinauts.toml.in" --out "$CONFIG" \
     --provider-id "$provider_id" --kind "$provider_kind" \
     --key-variable "$key_variable" \
     --model "$id" "$model" "$title" \

@@ -283,7 +283,6 @@ def main(argv: list[str] | None = None) -> int:
         prog="demo/pg.py", description="the demo's throwaway PostgreSQL"
     )
     parser.add_argument("command", choices=["start", "status", "stop", "url"])
-    parser.add_argument("--pgdata", type=Path, default=None, help="the data directory")
     parser.add_argument(
         "--port",
         type=int,
@@ -295,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     # psql and createdb below connect over TCP and need the password. Through the
     # environment rather than as an argument: pgserver logs the arguments it runs with.
     os.environ["PGPASSWORD"] = password()
-    pgdata = arguments.pgdata or pgdata_default()
+    pgdata = pgdata_default()
 
     # The variable is read here rather than as the argument's default, so that
     # a variable holding something that is not a number is one line like every
