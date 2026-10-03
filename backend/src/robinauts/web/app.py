@@ -54,6 +54,7 @@ from robinauts.controller.contract.domain import (
 from robinauts.controller.contract.ports import Controller, Credentials
 from robinauts.web import agui
 from robinauts.web.cookies import Cookies
+from robinauts.web.logs import loggable
 from robinauts.web.oidc import Exchange
 from robinauts.web.sign_in import (
     LOCAL_PROVIDER,
@@ -538,7 +539,7 @@ def create_app(
                 )
             except SignInError as refusal:
                 return not_signed_in(refusal)
-            log.info("user %s signed in with %s", done.user.id, provider)
+            log.info("user %s signed in with %s", done.user.id, loggable(provider))
             response = RedirectResponse(sign_in.public_url + done.return_to, status_code=302)
             cookies.set(response, cookies.session, done.secret, done.expires_at - now)
             cookies.clear(response, cookies.login)
