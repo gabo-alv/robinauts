@@ -322,9 +322,10 @@ export class GateError extends Error {}
  * @returns {string}
  */
 function sectionOf(document, heading) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   const found = new RegExp(
-    `^#+\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$\\n` +
-      "([\\s\\S]*?)(?=^#+\\s|$(?![\\s\\S]))",
+    String.raw`^#+\s+${escaped}\s*$\n` +
+      String.raw`([\s\S]*?)(?=^#+\s|$(?![\s\S]))`,
     "m",
   ).exec(document);
   if (found === null) {

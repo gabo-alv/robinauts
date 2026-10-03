@@ -572,7 +572,7 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
       const ending = find(state, event.messageId);
       // Not held: the no-op for an end a re-attach derived for a message this
       // client never had open.
-      if (ending === null || ending.state !== "running") return state;
+      if (ending?.state !== "running") return state;
       // **An answer that asked for tools is not over when its text is.** The
       // backend completes it before it runs the calls, and their results
       // land on it afterwards: it stays running until the last one has,
@@ -680,7 +680,7 @@ function applied(state: ChatState, event: AguiEvent): ChatState {
       // call's start -- and one for an answer that is complete is a stream
       // repeating itself.
       const holder = holding(state, event.toolCallId);
-      if (holder === null || holder.state !== "running") return state;
+      if (holder?.state !== "running") return state;
       return withCall(state, holder.id, event.toolCallId, (call) => ({
         ...call,
         argsText: call.argsText + event.delta,
@@ -872,7 +872,7 @@ function appended(
   piece: ChatTextPart,
 ): ChatState {
   return withMessage(state, messageId, (message) => {
-    const last = message.parts[message.parts.length - 1];
+    const last = message.parts.at(-1);
     if (
       last !== undefined &&
       last.kind !== "tool-call" &&
@@ -1027,7 +1027,7 @@ function folded(
       continue;
     }
     const answer = thread.at(-1);
-    if (answer === undefined || answer.role !== "assistant") continue;
+    if (answer?.role !== "assistant") continue;
     thread[thread.length - 1] = answered(answer, message);
   }
   return thread.map((message, at) => {

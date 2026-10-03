@@ -45,6 +45,7 @@ class EchoEngine(AgentEngine):
         return frozenset(ProviderKind)
 
     async def setup(self) -> None:
+        # Nothing to set up: its sessions live in this process and start empty.
         pass
 
     async def create(self, session_id: uuid.UUID) -> None:

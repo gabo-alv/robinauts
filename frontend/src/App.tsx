@@ -67,7 +67,7 @@ function Pages() {
   return <Shell session={session} />;
 }
 
-function Centred({ children }: { children: ReactNode }) {
+function Centred({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-3 px-4 text-muted-foreground">
       {children}

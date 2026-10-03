@@ -180,8 +180,9 @@ class StoreContract:
         await store.hide_session(me.id, one.id, NOW)
         with pytest.raises(SessionNotFoundError):
             await store.get_session(me.id, one.id)
+        on_purged = turn(one.id, uuid.uuid4())
         with pytest.raises(SessionNotFoundError):
-            await store.start_turn(me.id, turn(one.id, uuid.uuid4()), None)
+            await store.start_turn(me.id, on_purged, None)
         assert await store.sessions_of(me.id, 10, None) == []
         await store.purge_session(me.id, one.id)
         with pytest.raises(SessionNotFoundError):
@@ -199,8 +200,9 @@ class StoreContract:
         assert await store.latest_turn(me.id, one.id) == running
         assert await store.get_turn(me.id, one.id, running.id) == running
         second = question(one.id, "again")
+        while_running = turn(one.id, second.id)
         with pytest.raises(TurnActiveError):
-            await store.start_turn(me.id, turn(one.id, second.id), second)
+            await store.start_turn(me.id, while_running, second)
         assert await store.messages_of(me.id, one.id) == [asked.document]
 
     @store_test
@@ -213,8 +215,9 @@ class StoreContract:
         after_one = await store.events_after(me.id, one.id, running.id, 1)
         assert after_one == [(2, piece(2, "2").document), (3, piece(3, "3").document)]
         await self.append(store, me, one, running, piece(2, "2"))
+        other = piece(2, "other")
         with pytest.raises(TurnLostError):
-            await self.append(store, me, one, running, piece(2, "other"))
+            await self.append(store, me, one, running, other)
         assert len(await store.events_after(me.id, one.id, running.id, 0)) == 3
 
     @store_test
@@ -254,8 +257,9 @@ class StoreContract:
         await store.finish_turn(
             me.id, one.id, running.id, TurnState.FAILED, NOW, "boom", None, [piece(1)], NOW
         )
+        too_late = piece(2)
         with pytest.raises(TurnLostError):
-            await self.append(store, me, one, running, piece(2))
+            await self.append(store, me, one, running, too_late)
         with pytest.raises(TurnLostError):
             await store.finish_turn(
                 me.id, one.id, running.id, TurnState.FINISHED, NOW, None, None, [], NOW
@@ -273,8 +277,9 @@ class StoreContract:
         running = turn(one.id, asked.id, lease_until=NOW + MINUTE)
         await store.start_turn(me.id, running, asked)
         await self.append(store, me, one, running, piece(1), at=NOW + MINUTE / 2)
+        expired = piece(2)
         with pytest.raises(TurnLostError):
-            await self.append(store, me, one, running, piece(2), at=NOW + 2 * MINUTE)
+            await self.append(store, me, one, running, expired, at=NOW + 2 * MINUTE)
         with pytest.raises(TurnLostError):
             await store.finish_turn(
                 me.id, one.id, running.id, TurnState.FINISHED, NOW + 2 * MINUTE, None, None, [], NOW

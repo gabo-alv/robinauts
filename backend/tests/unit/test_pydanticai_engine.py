@@ -103,8 +103,9 @@ def test_an_openai_model_is_built_from_the_settings(
 
 
 def test_a_model_not_in_the_settings_is_refused() -> None:
+    settings = settings_for(ProviderKind.ANTHROPIC)
     with pytest.raises(UnknownModelError):
-        chat_model("other", settings_for(ProviderKind.ANTHROPIC))
+        chat_model("other", settings)
 
 
 class FixedSecret(ToolSecretLookup):

@@ -126,25 +126,19 @@ def test_storage_kinds_map_to_the_engines_options(tmp_path) -> None:
 @asyncio_test
 async def test_an_engine_this_build_lacks_is_refused_by_name() -> None:
     settings = engine_settings(config(engine="other"), ENV.get)
+    other = config(engine="other")
+    storage = engine_storage(domain.StorageConfig(domain.StorageKind.IN_MEMORY), None)
     with pytest.raises(domain.UnknownEngineError, match="'other'"):
-        await build_engines(
-            config(engine="other"),
-            settings,
-            engine_storage(domain.StorageConfig(domain.StorageKind.IN_MEMORY), None),
-            FACTORIES,
-        )
+        await build_engines(other, settings, storage, FACTORIES)
 
 
 @asyncio_test
 async def test_a_provider_kind_the_engine_cannot_reach_is_refused() -> None:
     settings = engine_settings(config(domain.ProviderKind.OPENAI), ENV.get)
+    on_openai = config(domain.ProviderKind.OPENAI)
+    storage = engine_storage(domain.StorageConfig(domain.StorageKind.IN_MEMORY), None)
     with pytest.raises(domain.UnreachableProviderError, match="'openai'"):
-        await build_engines(
-            config(domain.ProviderKind.OPENAI),
-            settings,
-            engine_storage(domain.StorageConfig(domain.StorageKind.IN_MEMORY), None),
-            FACTORIES,
-        )
+        await build_engines(on_openai, settings, storage, FACTORIES)
 
 
 @asyncio_test

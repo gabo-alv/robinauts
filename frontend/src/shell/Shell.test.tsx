@@ -631,7 +631,7 @@ test("an open conversation's line has its model, and a change is a PUT", async (
   expect(screen.getByLabelText("Model")).toHaveValue("opus");
   // A change dates the conversation, so the panel's list is asked for again.
   await waitFor(() => {
-    expect(callsTo(fetch, "/api/conversations").length).toBe(listings + 1);
+    expect(callsTo(fetch, "/api/conversations")).toHaveLength(listings + 1);
   });
   expect(screen.queryByRole("alert")).toBeNull();
 });

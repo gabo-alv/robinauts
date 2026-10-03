@@ -155,10 +155,10 @@ function usePanelCollapsed(): [boolean, (collapsed: boolean) => void] {
 export function Shell({
   session,
   signOut = endSession,
-}: {
+}: Readonly<{
   session: Session;
   signOut?: () => Promise<void>;
-}) {
+}>) {
   const [collapsed, setCollapsed] = usePanelCollapsed();
   const [drawer, setDrawer] = useState(false);
   // Where the interface is: `#/` or `#/c/<id>` (`src/router.ts`).

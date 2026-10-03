@@ -39,7 +39,7 @@ import { blocks } from "./sse";
 import { decode, isTerminal, type AguiEvent } from "./events";
 
 /** A position, as this build writes one: decimal digits and nothing else. */
-const DIGITS = /^[0-9]+$/;
+const DIGITS = /^\d+$/;
 
 /** What a response says about the run it is the stream of. */
 const RUN_ID_HEADER = "x-robinauts-run-id";

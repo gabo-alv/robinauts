@@ -164,7 +164,8 @@ function url(
     }
   }
   const tail = search.toString();
-  return `${BASE_URL}${filled}${tail === "" ? "" : `?${tail}`}`;
+  const suffix = tail === "" ? "" : `?${tail}`;
+  return `${BASE_URL}${filled}${suffix}`;
 }
 
 /**

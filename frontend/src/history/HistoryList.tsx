@@ -68,7 +68,11 @@ export interface HistoryListProps {
   onOpened?: () => void;
 }
 
-export function HistoryList({ history, current, onOpened }: HistoryListProps) {
+export function HistoryList({
+  history,
+  current,
+  onOpened,
+}: Readonly<HistoryListProps>) {
   const { status, items, more, loadingMore, refreshing, error } = history;
   /**
    * Where the focus goes when the row it was in is not there any more.
@@ -156,14 +160,14 @@ function HistoryItem({
   history,
   onGone,
   onOpened,
-}: {
+}: Readonly<{
   conversation: Conversation;
   isCurrent: boolean;
   history: History;
   /** Called when a write has left this row off the list it came back with. */
   onGone: () => void;
   onOpened?: () => void;
-}) {
+}>) {
   const [mode, setMode] = useState<Mode>("idle");
   const [draft, setDraft] = useState(conversation.title);
   const [busy, setBusy] = useState(false);

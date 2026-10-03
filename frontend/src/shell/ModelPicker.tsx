@@ -120,13 +120,13 @@ export function ModelPicker({
   chosen,
   onChoose,
   busy = false,
-}: {
+}: Readonly<{
   models: Models;
   chosen: string | null;
   onChoose: (id: string) => void;
   /** A change is being saved. */
   busy?: boolean;
-}) {
+}>) {
   if (models.status === "loading") {
     return <p className="text-sm text-muted-foreground">Loading the models…</p>;
   }
@@ -202,7 +202,7 @@ export function ConversationModel({
   model,
   onMoved,
   onNotOffered,
-}: {
+}: Readonly<{
   models: Models;
   conversationId: ConversationId;
   model: string;
@@ -210,7 +210,7 @@ export function ConversationModel({
   onMoved: (moved: Conversation) => void;
   /** A change refused because the deployment no longer offers the model. */
   onNotOffered?: () => void;
-}) {
+}>) {
   // What the picker shows while a change is being saved: the latest asked for.
   const [moving, setMoving] = useState<string | null>(null);
   const [refused, setRefused] = useState<string | null>(null);

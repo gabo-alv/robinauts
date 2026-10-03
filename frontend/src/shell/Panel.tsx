@@ -131,7 +131,7 @@ export function Panel({
   signOut,
   signInConfigured,
   closeRef,
-}: PanelProps) {
+}: Readonly<PanelProps>) {
   // Below the breakpoint the panel *is* the drawer; above it, it stands
   // beside the page and none of what follows applies.
   const asDrawer = !useWide();
@@ -258,7 +258,7 @@ function useTrappedFocus(
       if (node === null) return;
       const inside = stops(node);
       const first = inside[0];
-      const last = inside[inside.length - 1];
+      const last = inside.at(-1);
       if (first === undefined || last === undefined) return;
       const active = document.activeElement;
       if (!node.contains(active)) {
@@ -301,13 +301,13 @@ function ProfileBlock({
   signOut,
   signInConfigured,
   onSignedOut,
-}: {
+}: Readonly<{
   user: User | null;
   collapsed: boolean;
   signOut: () => Promise<void>;
   signInConfigured: boolean;
   onSignedOut: () => void;
-}) {
+}>) {
   const [leaving, setLeaving] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
   if (user === null) return null;

@@ -89,8 +89,9 @@ def test_the_spec_example_parses_to_its_records() -> None:
 
 
 def test_names_every_problem_at_once() -> None:
+    document = tomllib.loads(THREE_MISTAKES)
     with pytest.raises(ConfigError) as raised:
-        parse_sign_in(tomllib.loads(THREE_MISTAKES))
+        parse_sign_in(document)
     message = str(raised.value)
     assert "public_url: 'http://robinauts.example.com' is not https" in message
     assert "allow 1: everyone is refused for Google" in message

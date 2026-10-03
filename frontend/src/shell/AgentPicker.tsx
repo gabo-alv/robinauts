@@ -81,11 +81,11 @@ export function AgentPicker({
   agents,
   chosen,
   onChoose,
-}: {
+}: Readonly<{
   agents: Agents;
   chosen: string | null;
   onChoose: (id: string) => void;
-}) {
+}>) {
   if (agents.status === "loading") {
     return <p className="text-sm text-muted-foreground">Loading the agents…</p>;
   }

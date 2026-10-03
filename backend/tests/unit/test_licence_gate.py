@@ -1069,8 +1069,9 @@ def test_a_dependency_of_both_kinds_is_not_development_only():
     ],
 )
 def test_a_lock_the_gate_cannot_believe_is_an_error(lock, complaint):
+    parsed = tomllib.loads(lock)
     with pytest.raises(ValueError, match=re.escape(complaint)):
-        read_lock(tomllib.loads(lock), "robinauts")
+        read_lock(parsed, "robinauts")
 
 
 @pytest.mark.io
@@ -1171,8 +1172,9 @@ def test_the_artefacts_the_lock_pins_are_remembered():
     ],
 )
 def test_a_lock_of_the_wrong_shape_is_an_error_not_a_traceback(lock, complaint):
+    parsed = tomllib.loads(lock)
     with pytest.raises(ValueError, match=complaint):
-        read_lock(tomllib.loads(lock), "robinauts")
+        read_lock(parsed, "robinauts")
 
 
 def test_a_workspace_member_is_this_repository():

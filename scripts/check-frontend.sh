@@ -54,6 +54,7 @@ case $wanted in
             "$nvmrc" >&2
         exit 2
         ;;
+    *) ;;
 esac
 if [ "$running" -lt "$wanted" ]; then
     printf 'node %s is older than the %s frontend/.nvmrc asks for\n' \
