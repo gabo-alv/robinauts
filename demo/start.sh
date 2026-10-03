@@ -331,7 +331,7 @@ export ROBINAUTS_CONFIG="$CONFIG"
 if [ ! -f "$root/frontend/dist/index.html" ]; then
     if [ ! -d "$root/frontend/node_modules" ]; then
         say "Installing the interface's locked dependencies (npm ci) ..."
-        (cd "$root/frontend" && npm ci) || fail "npm ci failed in $root/frontend." 1
+        (cd "$root/frontend" && npm ci --ignore-scripts) || fail "npm ci failed in $root/frontend." 1
     fi
     say "Building the interface (npm run build) ..."
     (cd "$root/frontend" && npm run build) ||

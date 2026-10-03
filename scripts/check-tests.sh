@@ -21,4 +21,4 @@ cd "$root/backend"
 PYTHONDONTWRITEBYTECODE=1
 export PYTHONDONTWRITEBYTECODE
 
-uv run --locked pytest "$@"
+uv run --locked --no-build pytest "$@"

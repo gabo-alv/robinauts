@@ -12,4 +12,4 @@ cd "$root/backend"
 
 # Run under the synced environment: the gate reads the licence metadata of
 # what is installed, and asks PyPI only about what this platform leaves out.
-uv run --locked python "$root/scripts/licence_gate.py" "$@"
+uv run --locked --no-build python "$root/scripts/licence_gate.py" "$@"
