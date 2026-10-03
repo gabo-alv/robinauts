@@ -54,12 +54,13 @@ PYTHON=3.12
 #   for is the difference between a demo that starts and an unsatisfiable
 #   resolution.
 
-HOST=127.0.0.1
-# The demo's whole world. The local development mode refuses any other bind
-# address before it binds a socket (docs/specs/sign-in.md).
-
 DEFAULT_PORT=8000
 PORT=${ROBINAUTS_DEMO_PORT:-$DEFAULT_PORT}
+
+BASE_URL="http://127.0.0.1:$PORT"
+# The demo's whole world: loopback, so plain http never leaves this machine.
+# The local development mode refuses any other bind address before it binds a
+# socket (docs/specs/sign-in.md).
 
 fail() {
     # One line and a non-zero exit. 2 is "put this right and run it again", 1 is
