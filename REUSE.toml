@@ -10,6 +10,7 @@ path = [
     "README.md",
     "CONTRIBUTING.md",
     "DEPENDENCIES.md",
+    "SECURITY.md",
     "NOTICE",
     "AUTHORS",
     ".gitignore",
