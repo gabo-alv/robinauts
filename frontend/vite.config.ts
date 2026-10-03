@@ -120,6 +120,12 @@ const BARE = /^(licen[cs]e|copying|notice)$/i;
  * an addition to one rather than the thing itself. Ties go alphabetically,
  * so the answer does not depend on the order a directory happens to list.
  */
+/** Character-code order, the order `bundled-packages.txt` is compared in; not the locale's. */
+function byCodeUnit(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
 function rank(file: string): number {
   const licence = /^licen[cs]e/i.test(file);
   if (BARE.test(file)) return licence ? 0 : 1;
@@ -137,7 +143,7 @@ function licenceFile(where: string): string | undefined {
         return false;
       }
     })
-    .sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))[0];
+    .sort((a, b) => rank(a) - rank(b) || byCodeUnit(a, b))[0];
 }
 
 /** What a package that reaches the bundle through CSS contributes. */
@@ -389,7 +395,7 @@ export function bundledPackagesFrom(
   const written = [
     "# Packages in the built bundle, written by the build.",
     "# A change here is reviewed: see docs/contributing/js-dependencies.md.",
-    ...[...new Set(lines)].sort(),
+    ...[...new Set(lines)].sort(byCodeUnit),
   ].join("\n");
   if (!check) return written;
   let committed: string;
