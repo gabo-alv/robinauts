@@ -1,7 +1,7 @@
 # Packages in the built bundle, written by the build.
 # A change here is reviewed: see docs/contributing/js-dependencies.md.
 @assistant-ui/core 0.3.20 MIT
-@assistant-ui/react 0.15.19 MIT
+@assistant-ui/react 0.15.20 MIT
 @assistant-ui/react-markdown 0.14.15 MIT
 @assistant-ui/store 0.3.14 MIT
 @assistant-ui/tap 0.9.18 MIT
@@ -59,7 +59,7 @@ html-url-attributes 3.0.1 MIT
 inline-style-parser 0.2.7 MIT
 is-plain-obj 4.1.0 MIT
 longest-streak 3.1.0 MIT
-lucide-react 1.45.0 ISC
+lucide-react 1.47.0 ISC
 markdown-table 3.0.4 MIT
 mdast-util-find-and-replace 3.0.2 MIT
 mdast-util-from-markdown 2.0.3 MIT
