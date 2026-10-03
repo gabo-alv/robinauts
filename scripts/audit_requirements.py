@@ -31,7 +31,7 @@ def pins(export: str) -> list[tuple[str, str]]:
     """Every `name==version` of an export, without its markers or comments."""
     found = []
     for line in export.splitlines():
-        line = re.sub(r" *;.*$", "", line.split("#")[0]).strip()
+        line = line.split("#")[0].split(";")[0].strip()
         if "==" in line:
             name, _, version = line.partition("==")
             found.append((canonical_name(name), version.strip()))
