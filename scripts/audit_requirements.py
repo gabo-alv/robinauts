@@ -10,7 +10,9 @@ machine is running, they would hide most of the locked set from the audit --
 and once they are gone, the two pins cannot share a requirements file.
 
 So the pins are dealt into as many conflict-free files as it takes, usually
-one. Prints how many were written. Used by `scripts/check-audit.sh`.
+one. Reads the export from standard input, writes ``requirements-<n>.txt`` into
+the current directory and prints how many it wrote. Used by
+`scripts/check-audit.sh`.
 """
 
 from __future__ import annotations
@@ -51,11 +53,10 @@ def deal(pinned: list[tuple[str, str]]) -> list[dict[str, str]]:
     return groups
 
 
-def main(argv: list[str]) -> int:
-    export, work = Path(argv[1]), Path(argv[2])
-    groups = deal(pins(export.read_text(encoding="utf-8")))
+def main() -> int:
+    groups = deal(pins(sys.stdin.read()))
     for number, group in enumerate(groups, start=1):
-        (work / f"requirements-{number}.txt").write_text(
+        Path(f"requirements-{number}.txt").write_text(
             "".join(f"{name}=={version}\n" for name, version in sorted(group.items())),
             encoding="utf-8",
         )
@@ -64,4 +65,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main())

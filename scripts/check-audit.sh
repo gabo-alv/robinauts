@@ -31,7 +31,7 @@ uv export --locked --all-groups --no-emit-project --no-annotate --no-hashes \
 # What a marker was keeping apart, though, can be two versions of one package,
 # which no single requirements file may hold. They are dealt out into as many
 # files as it takes, and each file is audited in its turn.
-groups=$(python3 "$root/scripts/audit_requirements.py" "$work/export.txt" "$work")
+groups=$(cd "$work" && python3 "$root/scripts/audit_requirements.py" <export.txt)
 
 # --disable-pip keeps pip out of it; with pip in the loop, a package that
 # happens to be in pip-audit's own environment is skipped, and quietly.
