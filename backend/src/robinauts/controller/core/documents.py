@@ -49,7 +49,7 @@ VERSION = 1
 """One number for both documents. Additive changes keep it; anything else moves it."""
 
 NUL = "\x00"
-REPLACEMENT = "�"
+REPLACEMENT = "\ufffd"
 _SURROGATE = re.compile("[\ud800-\udfff]")
 _TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 _ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
