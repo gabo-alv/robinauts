@@ -115,7 +115,7 @@ export function AgentPicker({
   }
   return (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
-      Agent
+      <span>Agent</span>
       <select
         value={chosen ?? ""}
         onChange={(event) => {

@@ -140,7 +140,7 @@ export function ModelPicker({
   const stale = chosen !== null && isOffered(models, chosen) === false;
   return (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
-      Model
+      <span>Model</span>
       <select
         value={chosen ?? ""}
         // Never disabled while a change is saved: a disabled control drops

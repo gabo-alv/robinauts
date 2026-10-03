@@ -424,7 +424,7 @@ export function readTable(document) {
     const names = header;
     /** @param {string} name */
     const cell = (name) =>
-      (cells[names.indexOf(name)] ?? "").replace(/`/g, "").trim();
+      (cells[names.indexOf(name)] ?? "").replaceAll("`", "").trim();
     const scope = cell("scope").toLowerCase();
     if (!SCOPES.has(scope)) {
       throw new GateError(

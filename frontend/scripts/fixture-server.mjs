@@ -157,6 +157,11 @@ const conversationId = (n) =>
   `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 /**
+ * The agent and model a conversation is bound to unless a fixture says otherwise.
+ */
+const DEFAULT_BOUND = { agent: "helper", model: "claude-sonnet" };
+
+/**
  * One conversation as the panel lists it.
  *
  * `updated_at` counts backwards from the first, because a listing is most
@@ -176,11 +181,7 @@ const conversationId = (n) =>
  *   active_leaf_id: string | null,
  * }}
  */
-const summary = (
-  n,
-  title,
-  bound = { agent: "helper", model: "claude-sonnet" },
-) => ({
+const summary = (n, title, bound = DEFAULT_BOUND) => ({
   id: conversationId(n),
   title,
   ...bound,
@@ -708,13 +709,14 @@ async function conversations(request, response, path, query) {
   const cancel = CANCEL.exec(path);
   if (cancel !== null && method === "POST") {
     const id = cancel[1] ?? "";
-    const going = runs.get(cancel[2] ?? "");
+    const runId = cancel[2] ?? "";
+    const going = runs.get(runId);
     if (going !== undefined && going.conversationId === id) {
       // A run this process is streaming: stopping it is what the stream's
       // own ending then says, as the backend's cancel does.
       going.cancelled = true;
       json(response, 200, {
-        id: cancel[2],
+        id: runId,
         state: "cancelled",
         started_at: "2026-09-21T16:00:00Z",
         ended_at: new Date().toISOString(),
@@ -722,7 +724,7 @@ async function conversations(request, response, path, query) {
       return true;
     }
     const held = trees.get(id);
-    if (held === undefined || held.run_id !== cancel[2]) {
+    if (held === undefined || held.run_id !== runId) {
       refuse(
         response,
         404,
