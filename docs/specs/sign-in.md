@@ -107,9 +107,8 @@ With providers configured and no allow entry, start-up fails.
   on** — only the argument the starting command passes — so nothing a
   process inherits can turn sign-in off in a deployment.
 - It may still be given the **configuration file** (`ROBINAUTS_CONFIG`),
-  and then **only its model tables are read** ([agents.md](agents.md)):
-  the chat is developed in this mode ([frontend.md](frontend.md)) and a
-  chat needs an agent. A file that also holds sign-in tables — `public_url`,
+  and then **only its model tables are read**: the chat is developed in
+  this mode ([frontend.md](frontend.md)) and a chat needs an agent. A file that also holds sign-in tables — `public_url`,
   `session_hours`, `providers`, `allow`, `admin` — is what "cannot be
   combined" refuses,
   because the mode exists where there is nothing to sign in to. With no
@@ -141,16 +140,29 @@ With providers configured and no allow entry, start-up fails.
 - Tests still exercise the real sign-in flow, against a stand-in identity
   provider; this mode is not a substitute for that.
 
-## Not there yet
+## API tokens
 
-- **API tokens** are planned. Until they exist every API is reached with a
-  signed-in session. They are also what channels other than the browser
-  will sign in with ([channels.md](channels.md)).
+- A signed-in person mints a token for themselves, with a name, at
+  `POST /auth/tokens`. The answer shows its secret, and it is the only
+  time the secret is shown: the database holds its SHA-256, as it does a
+  session's.
+- A token lives ninety days and is not renewed. `GET /auth/tokens` lists
+  the person's tokens, oldest first, without their secrets;
+  `DELETE /auth/tokens/{token_id}` revokes one of them.
+- It is sent as `Authorization: Bearer <secret>` and reaches every route
+  under `/api/`, and these three, as the person who minted it. It is what
+  channels other than the browser sign in with.
+- A bearer is not a cookie: a write that carries one, and no session
+  cookie, is not subject to the `Origin` check.
+- In the local development mode a token is minted for the local user. Like
+  a session naming that user, it signs nobody in where sign-in is on.
+- Not there yet: tokens minted by an operator for somebody else, and scopes.
+  A token reaches all that its owner can.
 
 ## Details likely to change
 
 Configuration — one TOML file, named by `ROBINAUTS_CONFIG`, holding the
-sign-in tables below and the model tables of [agents.md](agents.md);
+sign-in tables below and the model tables of [deployment.md](../deployment.md);
 secrets are given as the *name* of an environment variable; unknown keys
 are errors; all problems are reported at once:
 
@@ -193,6 +205,9 @@ Routes:
 | `GET /auth/login/{provider}` | start a sign-in |
 | `GET /auth/callback/{provider}` | finish it; the redirect URI to register |
 | `POST /auth/logout` | sign out |
+| `POST /auth/tokens` | mint an API token; the one answer that shows its secret |
+| `GET /auth/tokens` | the API tokens of the person asking, without their secrets |
+| `DELETE /auth/tokens/{token_id}` | revoke one of them |
 
 - A pending sign-in is stored under the SHA-256 of `state`, single use, for
   10 minutes; their number is capped.

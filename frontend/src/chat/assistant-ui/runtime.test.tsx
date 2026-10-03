@@ -436,6 +436,29 @@ test("a run cancelled in the middle of a batch leaves the call without a result"
   expect(failed.messages[1]?.detail).toBe(saidFor("failed"));
 });
 
+test("opened, an answer that holds its own results has them on its calls", () => {
+  const answer = calling("m2", "", [
+    { call_id: "call-1", name: "echo", arguments: { text: "hi" } },
+  ]);
+  answer.parts.push(
+    { kind: "tool_result", call_id: "call-1", text: "hi", is_error: false },
+    { kind: "text", text: "The tool said: hi" },
+  );
+  const stored = after({
+    kind: "opened",
+    conversationId: CONVERSATION,
+    messages: [message("m1", "user", "hi"), answer],
+    runId: null,
+    endedBadly: null,
+  });
+  expect(stored.messages[1]?.state).toBe("stored");
+  expect(call(stored, "m2", "call-1")).toMatchObject({ result: "hi" });
+  expect(parts(stored, "m2")).toEqual([
+    ["tool-call", "echo"],
+    ["text", "The tool said: hi"],
+  ]);
+});
+
 test("opened, an answer whose calls were never answered is shown as the run left it", () => {
   const stored = [
     message("m1", "user", "why?"),
@@ -1106,7 +1129,7 @@ test("a conversation with a run in flight is attached to at resume.after", async
         }),
       );
     }
-    if (call.url === `/api/runs/${RUN}/events`) {
+    if (call.url === `/api/conversations/${CONVERSATION}/runs/${RUN}/events`) {
       return streamed(
         [
           event(
@@ -1126,7 +1149,8 @@ test("a conversation with a run in flight is attached to at resume.after", async
     expect(result.current.state.messages).toHaveLength(2);
   });
   const attaching = fetch.mock.calls.find(
-    ([url]) => String(url) === `/api/runs/${RUN}/events`,
+    ([url]) =>
+      String(url) === `/api/conversations/${CONVERSATION}/runs/${RUN}/events`,
   );
   expect(
     (attaching?.[1]?.headers as Record<string, string>)["last-event-id"],
@@ -1172,7 +1196,11 @@ test("editing is a new message under the parent of the one it replaces", async (
     });
     await settle();
   });
-  expect(posts[0]?.body).toEqual({ text: "and at night?", parent_id: "m2" });
+  expect(posts[0]?.body).toEqual({
+    text: "and at night?",
+    parent_id: "m2",
+    model_id: "sonnet",
+  });
 
   // The root's own edit still hangs under nothing.
   await act(async () => {
@@ -1184,7 +1212,11 @@ test("editing is a new message under the parent of the one it replaces", async (
     });
     await settle();
   });
-  expect(posts[1]?.body).toEqual({ text: "why really?", parent_id: null });
+  expect(posts[1]?.body).toEqual({
+    text: "why really?",
+    parent_id: null,
+    model_id: "sonnet",
+  });
 });
 
 test("an edit after a tool round hangs under the tool message, not the answer", async () => {
@@ -1227,7 +1259,11 @@ test("an edit after a tool round hangs under the tool message, not the answer", 
     });
     await settle();
   });
-  expect(posts[0]?.body).toEqual({ text: "and at night?", parent_id: "t1" });
+  expect(posts[0]?.body).toEqual({
+    text: "and at night?",
+    parent_id: "t1",
+    model_id: "sonnet",
+  });
 });
 
 test("after a turn that went wrong, asking again replaces the question", async () => {
@@ -1265,7 +1301,11 @@ test("after a turn that went wrong, asking again replaces the question", async (
     result.current.runtime.thread.append("why, really?");
     await settle();
   });
-  expect(posts[0]?.body).toEqual({ text: "why, really?", parent_id: null });
+  expect(posts[0]?.body).toEqual({
+    text: "why, really?",
+    parent_id: null,
+    model_id: "sonnet",
+  });
 });
 
 test("opening a conversation says what the server says it is", async () => {
@@ -1310,7 +1350,7 @@ test("regenerating names the answer to produce again, and sends no message", asy
     result.current.runtime.thread.startRun({ parentId: "m1", sourceId: "m2" });
     await settle();
   });
-  expect(posts[0]?.body).toEqual({ regenerate: "m2" });
+  expect(posts[0]?.body).toEqual({ regenerate: "m2", model_id: "sonnet" });
 });
 
 test("regenerating the answer after a tool round takes the whole turn off the screen", async () => {
@@ -1349,7 +1389,7 @@ test("regenerating the answer after a tool round takes the whole turn off the sc
     result.current.runtime.thread.startRun({ parentId: "m2", sourceId: "m3" });
     await settle();
   });
-  expect(posts[0]?.body).toEqual({ regenerate: "m3" });
+  expect(posts[0]?.body).toEqual({ regenerate: "m3", model_id: "sonnet" });
   expect(result.current.state.messages.map((each) => each.id)).toEqual(["m1"]);
   await act(async () => {
     write(event("RUN_FINISHED", { threadId: CONVERSATION, runId: RUN }, 9));
@@ -1486,7 +1526,7 @@ test("a stream that is lost reads the store and watches the run again", async ()
           event("TEXT_MESSAGE_CONTENT", { messageId: "m2", delta: "half" }, 3),
         ),
     ],
-    [`/api/runs/${RUN}/events`]: [
+    [`/api/conversations/${CONVERSATION}/runs/${RUN}/events`]: [
       // The client's own tries are spent: a refusal is not one it repeats.
       () => refusal(404, "NotFoundError", "no"),
       // Read again, the run is still in flight, and this watch delivers.
@@ -1524,7 +1564,8 @@ test("a stream that is lost reads the store and watches the run again", async ()
   expect(result.current.state.ended).toBeNull();
   expect(
     fetch.mock.calls.filter(
-      ([url]) => String(url) === `/api/runs/${RUN}/events`,
+      ([url]) =>
+        String(url) === `/api/conversations/${CONVERSATION}/runs/${RUN}/events`,
     ),
   ).toHaveLength(2);
 });
@@ -1532,7 +1573,9 @@ test("a stream that is lost reads the store and watches the run again", async ()
 test("a second loss is said rather than retried for ever", async () => {
   inTurn({
     "/api/turns": [() => streamOf()],
-    [`/api/runs/${RUN}/events`]: [() => refusal(404, "NotFoundError", "no")],
+    [`/api/conversations/${CONVERSATION}/runs/${RUN}/events`]: [
+      () => refusal(404, "NotFoundError", "no"),
+    ],
     [`/api/conversations/${CONVERSATION}`]: [
       () => json(opened(conversation(1), [TREE[0]!], ANSWERING)),
     ],
@@ -1709,7 +1752,7 @@ test("a read that finds a run in flight watches it, whichever read it is", async
         ),
       () => json(opened(conversation(1), TREE)),
     ],
-    [`/api/runs/${OTHER_RUN}/events`]: [
+    [`/api/conversations/${CONVERSATION}/runs/${OTHER_RUN}/events`]: [
       () =>
         streamed(
           [
@@ -1737,7 +1780,9 @@ test("a read that finds a run in flight watches it, whichever read it is", async
   // answering here.
   expect(
     fetch.mock.calls.filter(
-      ([url]) => String(url) === `/api/runs/${OTHER_RUN}/events`,
+      ([url]) =>
+        String(url) ===
+        `/api/conversations/${CONVERSATION}/runs/${OTHER_RUN}/events`,
     ),
   ).toHaveLength(1);
   // And the panel was still told, though the turn's own watcher was stopped
@@ -1832,7 +1877,7 @@ test("a refused retry leaves the question it was retrying on the thread", async 
   expect(result.current.state.messages.map((each) => each.id)).toEqual(["m1"]);
 });
 
-test("the model goes with the first message, and no turn after it", async () => {
+test("the model goes with every turn", async () => {
   const posts: Call[] = [];
   const fetch = stub((call) => {
     if (call.url === "/api/turns") {
@@ -1884,11 +1929,11 @@ test("the model goes with the first message, and no turn after it", async () => 
     result.current.runtime.thread.startRun({ parentId: "m1", sourceId: "m2" });
     await settle();
   });
-  // A continued turn and a regeneration name no model: the conversation's
-  // is what they run on, and the server reads it.
+  // A continued turn and a regeneration name the model too: it goes with
+  // every turn.
   expect(posts).toHaveLength(2);
   for (const post of posts) {
-    expect(post.body).not.toHaveProperty("model_id");
+    expect(post.body).toHaveProperty("model_id", "opus");
   }
 });
 

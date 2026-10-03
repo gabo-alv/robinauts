@@ -68,7 +68,7 @@ the server.** `demo/.env` is read rather than sourced — a `.env` that could ru
 commands would be the demo executing whatever was pasted into it — and the
 configuration the demo generates holds the *name* of the variable and nothing
 else, which is the rule the platform keeps everywhere
-([../docs/specs/agents.md](../docs/specs/agents.md)). `start.sh` also takes all
+([../docs/deployment.md](../docs/deployment.md)). `start.sh` also takes all
 three variables **out of its own environment** as the first thing it does,
 before it runs anything, and puts the one that is used back on the server's
 invocation alone: nvm and the node it may run, uv, PostgreSQL, and npm and
@@ -88,7 +88,7 @@ Completions too, and a configuration of your own may reach it as an
 `openai-compatible` provider at `https://openrouter.ai/api/v1` instead; the
 demo does not, so the OpenRouter models below are the ones it has always had.
 **OpenAI is reached with the OpenAI client**, at `https://api.openai.com/v1`,
-which both engines pin ([../docs/specs/agents.md](../docs/specs/agents.md)).
+which both engines pin ([../docs/deployment.md](../docs/deployment.md)).
 
 ## What you get
 
@@ -102,7 +102,7 @@ An agent is chosen when a conversation is started and stays with it, so
 and then look at the two conversations in the panel. The same configuration,
 the same model, the same stored format; two frameworks underneath. That is the
 seam the project exists to prove
-([../docs/specs/agents.md](../docs/specs/agents.md)).
+([../docs/specs/agent-engines.md](../docs/specs/agent-engines.md)).
 
 And three models, in the picker beside the agent's. Which three depends on
 the key:
@@ -196,30 +196,29 @@ The configuration the demo writes can hold two MCP tool servers and a `tools`
 line under each agent ([robinauts.toml.in](robinauts.toml.in)); an agent whose
 `tools` names a server can call what that server offers, and the chat shows each call behind a
 tool-call toggle above the answer -- the tool's name, its arguments and what
-came back, as text ([../docs/specs/agents.md](../docs/specs/agents.md),
-"Tools").
+came back, as text.
 
 **GitHub's server is on whenever a GitHub token is exported** in the shell
 that runs `start.sh`, as `ROBINAUTS_GITHUB_TOKEN`. Both agents then get `tools = ["github"]`, and a
 question about a repository has the model call, say,
-`github_get_latest_release`; the answer arrives with the call's toggle above
+`get_latest_release`; the answer arrives with the call's toggle above
 it. `start.sh` says `Tools: GitHub's MCP server, for both agents.` when it is
 on.
 
 The token is handled like the model key: taken **out of the script's
 environment** as the first thing it does, so nvm, node, uv, PostgreSQL and
 npm never see it, and put back on the server's invocation alone, as
-`ROBINAUTS_GITHUB_TOKEN`, the variable `[mcp_servers.github]` names. The
+`ROBINAUTS_GITHUB_TOKEN`, the variable `[tool_servers.github]` names. The
 configuration holds that name and nothing else. **The agents act as the
 token's owner** on `api.githubcopilot.com`, with whatever the token may do,
 so a token with no more than read access to public repositories is the one to
 give a demo.
 
 **Microsoft Learn's server needs no credential.** Take the `#` off the
-`[mcp_servers.learn]` table in `robinauts.toml.in`, add `"learn"` to an
+`[tool_servers.learn]` table in `robinauts.toml.in`, add `"learn"` to an
 agent's `tools` (or give it the line, `tools = ["learn"]`, when GitHub is
 off), restart (`demo/stop.sh`, then `demo/start.sh`), and ask that agent
-something about, say, Azure: the model calls `learn_microsoft_docs_search`.
+something about, say, Azure: the model calls `microsoft_docs_search`.
 **The demo then reaches `learn.microsoft.com` from this machine** for as long
 as the line is on. What the request carries is no credential and nothing that
 names you, but it does carry what the model wrote for the tool -- the search

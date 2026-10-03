@@ -8,16 +8,6 @@ description = "Conversational agents that play fair: the Robinauts backend."
 requires-python = ">=3.12"
 license = "Apache-2.0"
 authors = [{ name = "The Robinauts Authors" }]
-# FastAPI is pinned to the one minor version whose `APIRouter` somebody has
-# read. `robinauts.api.access` reads two of its private route lists to check
-# that nothing is served without a permission (ROUTE_LISTS), and
-# `test_the_walk_knows_every_route_list_fastapi_keeps` pins the same range as
-# READ_FASTAPI, so the metadata and the test say one thing rather than two.
-# **Bumping this means opening `fastapi.routing.APIRouter`**, seeing which
-# attributes hold routes, and updating ROUTE_LISTS and READ_FASTAPI to match.
-# There is a backstop that needs no such knowledge -- a list of routes under a
-# name nothing reads stops the deployment -- so a bump cannot quietly open a
-# door either way; the range is what makes somebody look.
 dependencies = [
     "ag-ui-protocol>=1.0,<2",
     # Anthropic's own SDK, which both engines reach the vendor through and
@@ -55,13 +45,13 @@ dependencies = [
     # that engine reaches the tool servers (docs/specs/agents.md, "Tools").
     "pydantic-ai-slim[anthropic,mcp,openai]>=2.47,<3",
     # The ASGI server `robinauts start` runs (docs/specs/backend.md, "Web"),
-    # imported by `robinauts.cli` and by nothing else -- the import-linter
+    # imported by `robinauts.web.cli` and by nothing else -- the import-linter
     # contract below has named it since before it was a dependency. BSD-3-Clause,
     # bringing `click` (BSD-3-Clause) and `h11` (MIT), both already in the lock.
     # Not `uvicorn[standard]`: that adds `uvloop`, `httptools`, `watchfiles`,
     # `websockets` and `python-dotenv` -- a faster loop and a parser we have not
     # measured a need for, a reloader a deployment must not have, a protocol
-    # this platform deliberately does not serve (robinauts.api.protection) and a
+    # this platform deliberately does not serve and a
     # second way to set environment variables.
     #
     # The upper bound is the ten-day cooldown (.github/dependabot.yml): 0.53.0
@@ -99,7 +89,7 @@ environments = [
 ]
 
 [project.scripts]
-robinauts = "robinauts.cli:run"
+robinauts = "robinauts.web.cli:run"
 
 [build-system]
 requires = ["hatchling"]
@@ -114,7 +104,7 @@ path = "hatch_build.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/robinauts"]
 # The built interface (`frontend/dist` -> `robinauts/ui/`, which is what
-# `robinauts.app.packaged_ui` reads) and the refusal to build a wheel without
+# `robinauts.web.cli.interface` reads) and the refusal to build a wheel without
 # it. Both are in the hook rather than in a `force-include` table here, because
 # an **editable** install has no built frontend by design and a declared
 # force-include is looked for whichever kind of build it is -- which would make
@@ -156,10 +146,7 @@ testpaths = ["tests"]
 # and neither can pytest: "coroutine was never awaited" is raised inside the
 # garbage collector, where nothing can turn it into a failure -- it reaches
 # the warnings summary and no further -- and "task exception was never
-# retrieved" is not a warning at all but a line the event loop logs. That is
-# why robinauts.adapters.run_executor retrieves every exception itself, and
-# why its tests install an exception handler on the loop and assert that it
-# saw nothing.
+# retrieved" is not a warning at all but a line the event loop logs.
 filterwarnings = ["error"]
 # The gate scripts are not part of the robinauts package, but their pure
 # logic is tested like anything else.
@@ -173,7 +160,7 @@ markers = [
 ]
 # `tests/live/` is never collected by a plain run, and therefore never by CI:
 # those tests call a vendor with a real key and are run by hand, by naming the
-# file (`uv run pytest tests/live/test_langgraph_live.py`). Not a marker
+# file (`uv run pytest tests/live/test_engines_live.py`). Not a marker
 # expression in `addopts`, which would set `markexpr` on every run and so
 # silence the check that the database tests really ran (tests/conftest.py).
 #
@@ -193,231 +180,149 @@ norecursedirs = [
     "live",
 ]
 
+
 # ---------------------------------------------------------------------------
-# Architecture rules. See docs/layout.md section 3 for the dependency matrix.
+# Layer rules. docs/architecture/rules.md says them; these enforce them.
+# Anything not allowed is forbidden.
 # ---------------------------------------------------------------------------
 [tool.importlinter]
 root_package = "robinauts"
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "domain imports nothing from robinauts"
-type = "forbidden"
-source_modules = ["robinauts.domain"]
-forbidden_modules = [
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.adapters",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
-]
-
-[[tool.importlinter.contracts]]
-name = "core imports only domain"
-type = "forbidden"
-source_modules = ["robinauts.core"]
-forbidden_modules = [
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.adapters",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
-]
-
-[[tool.importlinter.contracts]]
-name = "ports import only domain"
-type = "forbidden"
-source_modules = ["robinauts.ports"]
-forbidden_modules = [
-    "robinauts.core",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.adapters",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
-]
-
-[[tool.importlinter.contracts]]
-name = "application imports only ports, core and domain"
-type = "forbidden"
-source_modules = ["robinauts.application"]
-forbidden_modules = [
-    "robinauts.api",
-    "robinauts.adapters",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
-]
-
-# Direct imports only. `api` calls the application, and the application
-# imports core and ports, so every one of those is something `api` reaches
-# indirectly the moment it has a route -- which is allowed and unavoidable.
-# The rule is that `api` itself never names them (docs/layout.md section 5).
-[[tool.importlinter.contracts]]
-name = "api imports only application and domain"
+name = "agent_engines imports nothing from robinauts outside itself"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = ["robinauts.api"]
-forbidden_modules = [
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.adapters",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
-]
+source_modules = ["robinauts.agent_engines"]
+forbidden_modules = ["robinauts.controller", "robinauts.web"]
 
 [[tool.importlinter.contracts]]
-name = "adapters import only ports and domain"
+name = "the engines' contract imports no engine"
 type = "forbidden"
-source_modules = ["robinauts.adapters"]
+allow_indirect_imports = true
+source_modules = ["robinauts.agent_engines.contract"]
 forbidden_modules = [
-    "robinauts.core",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
+    "robinauts.agent_engines.echo_engine",
+    "robinauts.agent_engines.langchain_engine",
+    "robinauts.agent_engines.pydantic_ai_engine",
 ]
 
 [[tool.importlinter.contracts]]
-name = "datastore imports only ports and domain"
+name = "no engine imports another"
+type = "independence"
+modules = [
+    "robinauts.agent_engines.echo_engine",
+    "robinauts.agent_engines.langchain_engine",
+    "robinauts.agent_engines.pydantic_ai_engine",
+]
+
+[[tool.importlinter.contracts]]
+name = "controller imports only the engines' contract of the engines"
 type = "forbidden"
-source_modules = ["robinauts.datastore"]
+allow_indirect_imports = true
+source_modules = ["robinauts.controller"]
 forbidden_modules = [
-    "robinauts.core",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
+    "robinauts.agent_engines.echo_engine",
+    "robinauts.agent_engines.langchain_engine",
+    "robinauts.agent_engines.pydantic_ai_engine",
+    "robinauts.web",
 ]
 
-# The database driver is confined to datastore, like each agent framework to
-# its adapter: no SQL and no connection anywhere else (docs/layout.md).
-#
-# `allow_indirect_imports` on every library contract below. The rule each one
-# states is "this module must not import the library ITSELF"; reaching it
-# through the one package that may is the whole point of that package. Without
-# it, the composition root -- whose job is to import `adapters` and
-# `datastore` -- would break all four contracts the day it is written, and the
-# only way to keep them green would be to stop it importing them at all. What
-# stops a library leaking sideways is the layer contracts above: nothing but
-# infrastructure may import `adapters` or `datastore` in the first place.
 [[tool.importlinter.contracts]]
-name = "asyncpg only under datastore"
+name = "the controller's contract imports nothing from robinauts"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["robinauts.controller.contract"]
+forbidden_modules = [
+    "robinauts.controller.ports",
+    "robinauts.controller.core",
+    "robinauts.controller.adapters",
+    "robinauts.controller.application",
+    "robinauts.controller.composition",
+    "robinauts.agent_engines",
+]
+
+[[tool.importlinter.contracts]]
+name = "controller.ports imports only the controller's contract"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["robinauts.controller.ports"]
+forbidden_modules = [
+    "robinauts.controller.core",
+    "robinauts.controller.adapters",
+    "robinauts.controller.application",
+    "robinauts.controller.composition",
+    "robinauts.agent_engines",
+]
+
+[[tool.importlinter.contracts]]
+name = "controller.adapters imports only the contract and the ports"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["robinauts.controller.adapters"]
+forbidden_modules = [
+    "robinauts.controller.core",
+    "robinauts.controller.application",
+    "robinauts.controller.composition",
+    "robinauts.agent_engines",
+]
+
+[[tool.importlinter.contracts]]
+name = "controller.core imports the contract, the ports and the engines' contract"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["robinauts.controller.core"]
+forbidden_modules = [
+    "robinauts.controller.adapters",
+    "robinauts.controller.application",
+    "robinauts.controller.composition",
+]
+
+[[tool.importlinter.contracts]]
+name = "controller.application imports the contract, the ports and the engines' contract"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["robinauts.controller.application"]
+forbidden_modules = ["robinauts.controller.adapters", "robinauts.controller.composition"]
+
+[[tool.importlinter.contracts]]
+name = "composition is imported by web alone"
 type = "forbidden"
 allow_indirect_imports = true
 source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
+    "robinauts.controller.contract",
+    "robinauts.controller.ports",
+    "robinauts.controller.core",
+    "robinauts.controller.adapters",
+    "robinauts.controller.application",
+    "robinauts.agent_engines",
 ]
-forbidden_modules = ["asyncpg"]
+forbidden_modules = ["robinauts.controller.composition"]
 
-# The HTTP client is confined to adapters, like the driver to datastore: the
-# platform's outbound traffic is the identity provider and the model providers,
-# and both are adapters (docs/layout.md, "Third-party libraries").
 [[tool.importlinter.contracts]]
-name = "httpx only under adapters"
+name = "web imports only the controller's contract and composition"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
+source_modules = ["robinauts.web"]
+forbidden_modules = [
+    "robinauts.controller.ports",
+    "robinauts.controller.adapters",
+    "robinauts.controller.application",
+    "robinauts.agent_engines",
 ]
-forbidden_modules = ["httpx"]
 
-# The web framework is confined to the inbound side and the composition root
-# (docs/specs/backend.md, "Web"): the application never sees a request object,
-# and nothing below `api` knows that HTTP is how anybody reached it. Direct
-# imports, like the contracts above: `app.py` imports `api`, which imports
-# FastAPI, and that is the point of `api`.
-#
-# `uvicorn` is named here before it is a dependency at all. It arrives with
-# `robinauts start` (the CLI step), it belongs to infrastructure alone, and a
-# contract written the day the import is written is a contract written after
-# the fact.
+# --- third-party libraries: where each may be imported ----------------------
+# The source is the whole package, so a module added tomorrow is inside the
+# rule; the places that may import a library are written as exceptions.
+# `unmatched_ignore_imports_alerting = "none"`: an exception that matches
+# nothing (a client not installed, a module not written yet) leaves the rule
+# stricter, never looser.
+
 [[tool.importlinter.contracts]]
-name = "FastAPI, Starlette and uvicorn only under api and infrastructure"
+name = "LangChain, LangGraph, its provider clients and langsmith only under langchain_engine"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.adapters",
-    "robinauts.datastore",
-]
-forbidden_modules = ["fastapi", "starlette", "uvicorn"]
-
-# AG-UI is the wire's vocabulary and nothing else's (docs/specs/wire.md): the
-# application yields the platform's own turn events and `api` maps them, so a
-# second wire -- or a client that cannot stream -- is another mapping rather
-# than a change to anything below. Confined more tightly than the web
-# framework, which the composition root also imports: nothing outside `api`
-# has an AG-UI event to build, `app.py` included, so `app` and `cli` are
-# sources here.
-[[tool.importlinter.contracts]]
-name = "ag_ui only under api"
-type = "forbidden"
-allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.adapters",
-    "robinauts.datastore",
-    "robinauts.app",
-    "robinauts.cli",
-]
-forbidden_modules = ["ag_ui"]
-
-# The agent frameworks are replaceable: each is confined to its own adapter.
-# Every provider client is named, installed or not: `langchain-anthropic` and
-# `langchain-openai` are installed and imported by the adapter, and the rest
-# arrive the day a provider's tree passes the licence policy -- a contract
-# written then would be a contract written after the fact.
-[[tool.importlinter.contracts]]
-name = "LangGraph, LangChain, its provider clients and langsmith only under adapters.agents.langgraph"
-type = "forbidden"
-allow_indirect_imports = true
-#
-# `robinauts.adapters` is named as a **package**, so every module under it is a
-# source -- including one added tomorrow, which a hand-written list would have
-# left outside the rule until somebody remembered to add it. The one
-# sub-package that may import the framework is the exception below, and it is
-# written as an exception rather than as an omission.
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
-]
+source_modules = ["robinauts"]
 forbidden_modules = [
     "langgraph",
     "langchain",
@@ -426,171 +331,88 @@ forbidden_modules = [
     "langchain_openai",
     "langchain_google_genai",
     "langchain_aws",
-    # The framework's MCP client, which is how that adapter reaches the tool
-    # servers (docs/specs/agents.md, "Tools").
     "langchain_mcp_adapters",
-    # Imported by the adapter for one call -- `langsmith.configure(enabled=
-    # False)`, which is how hosted tracing is turned off -- and for nothing
-    # else. Naming it here is what keeps "nothing phones home" from becoming
-    # an import somewhere nobody was looking (docs/specs/agents.md).
     "langsmith",
 ]
-# The exception, and the only one: the sub-package the framework belongs to.
-# `-> *` rather than a list of the modules above, so that a framework added to
-# the list tomorrow is forbidden everywhere and allowed here, which is the
-# rule -- and so that the exception cannot quietly grow to cover a module
-# outside this sub-package.
 ignore_imports = [
-    "robinauts.adapters.agents.langgraph -> *",
-    "robinauts.adapters.agents.langgraph.** -> *",
+    "robinauts.agent_engines.langchain_engine -> *",
+    "robinauts.agent_engines.langchain_engine.** -> *",
 ]
-# An expression that matches nothing is not an error: most of the clients
-# above are not installed, so most of these exceptions have nothing to ignore.
-# An exception that matches nothing leaves the contract stricter, never looser.
 unmatched_ignore_imports_alerting = "none"
 
 [[tool.importlinter.contracts]]
-name = "Pydantic AI, logfire and OpenTelemetry only under adapters.agents.pydantic_ai"
+name = "Pydantic AI, fastmcp, logfire and OpenTelemetry only under pydantic_ai_engine"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
-]
+source_modules = ["robinauts"]
 forbidden_modules = [
-    # The framework and the graph library it runs its agents on. A provider
-    # client of Pydantic AI's is a module *inside* `pydantic_ai`, not a
-    # distribution of its own, so unlike the LangGraph contract there is no
-    # list of clients to write out: its Anthropic and OpenAI models, which the
-    # adapter builds, are covered by this rule, and so is any other the day
-    # its provider's tree passes the licence policy.
     "pydantic_ai",
     "pydantic_graph",
-    # The MCP client Pydantic AI's MCP toolset is built on, which is how
-    # that adapter reaches the tool servers (docs/specs/agents.md, "Tools").
     "fastmcp",
-    # Pydantic AI's hosted observability, and the tracing API underneath it.
-    # `logfire_api` arrives with `pydantic-graph` and `opentelemetry-api` with
-    # `pydantic-ai-slim`; neither is imported by this platform at all, and
-    # naming them here is what keeps "nothing phones home" from becoming an
-    # import somewhere nobody was looking (docs/specs/agents.md). The adapter
-    # turns instrumentation off with the framework's own switch and needs no
-    # import of either, so the exception below is what they are allowed by and
-    # not what they are used through.
     "logfire",
     "logfire_api",
     "opentelemetry",
 ]
 ignore_imports = [
-    "robinauts.adapters.agents.pydantic_ai -> *",
-    "robinauts.adapters.agents.pydantic_ai.** -> *",
+    "robinauts.agent_engines.pydantic_ai_engine -> *",
+    "robinauts.agent_engines.pydantic_ai_engine.** -> *",
 ]
 unmatched_ignore_imports_alerting = "none"
 
-# The vendor's own SDK, which is neither framework's and which both engines
-# end up on: `langchain-anthropic` is built on it, and the Pydantic AI adapter
-# imports it directly to build the client with the retries and the headers
-# pinned. It is confined to the two agent sub-packages for the same reason the
-# frameworks are -- a model call belongs to an engine, and a key is what
-# travels in one, so an `anthropic` import anywhere else is a second way to
-# reach a vendor that no contract suite covers (docs/layout.md).
 [[tool.importlinter.contracts]]
-name = "the Anthropic SDK only under the two agent adapters"
+name = "the Anthropic SDK, the OpenAI SDK and the MCP SDK only under the two framework engines"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
-]
-forbidden_modules = ["anthropic"]
+source_modules = ["robinauts"]
+forbidden_modules = ["anthropic", "openai", "mcp"]
 ignore_imports = [
-    "robinauts.adapters.agents.langgraph -> *",
-    "robinauts.adapters.agents.langgraph.** -> *",
-    "robinauts.adapters.agents.pydantic_ai -> *",
-    "robinauts.adapters.agents.pydantic_ai.** -> *",
+    "robinauts.agent_engines.langchain_engine -> *",
+    "robinauts.agent_engines.langchain_engine.** -> *",
+    "robinauts.agent_engines.pydantic_ai_engine -> *",
+    "robinauts.agent_engines.pydantic_ai_engine.** -> *",
 ]
 unmatched_ignore_imports_alerting = "none"
 
-# The other vendor's SDK, for the same reason and in the same shape:
-# `langchain-openai` is built on it, and both adapters import it directly to
-# build the client with the endpoint, the retries and the key's header pinned
-# (docs/specs/agents.md). A model call belongs to an engine, and an `openai`
-# import anywhere else would be a way to reach a vendor that no contract suite
-# covers.
 [[tool.importlinter.contracts]]
-name = "the OpenAI SDK only under the two agent adapters"
+name = "database drivers only under the two framework engines and controller.adapters"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
-]
-forbidden_modules = ["openai"]
+source_modules = ["robinauts"]
+forbidden_modules = ["asyncpg", "sqlite3", "aiosqlite"]
 ignore_imports = [
-    "robinauts.adapters.agents.langgraph -> *",
-    "robinauts.adapters.agents.langgraph.** -> *",
-    "robinauts.adapters.agents.pydantic_ai -> *",
-    "robinauts.adapters.agents.pydantic_ai.** -> *",
+    "robinauts.agent_engines.langchain_engine -> *",
+    "robinauts.agent_engines.langchain_engine.** -> *",
+    "robinauts.agent_engines.pydantic_ai_engine -> *",
+    "robinauts.agent_engines.pydantic_ai_engine.** -> *",
+    "robinauts.controller.adapters -> *",
+    "robinauts.controller.adapters.** -> *",
 ]
 unmatched_ignore_imports_alerting = "none"
 
-# The MCP Python SDK, confined to the two agent adapters: each framework
-# reaches the tool servers through its own MCP client (langchain-mcp-adapters,
-# and fastmcp under Pydantic AI's MCP toolset), and both are built on the SDK
-# (docs/specs/agents.md, "Tools"). The platform itself speaks no MCP: a client
-# of our own over `httpx` was the fallback while the SDK's tree failed the
-# licence gate, and it went with the tool loop (ADR 0005). Same shape as the
-# two framework rules above -- `robinauts.adapters` named as a package, the
-# exceptions written as exceptions.
 [[tool.importlinter.contracts]]
-name = "the MCP SDK only under the two agent adapters"
+name = "httpx only under web and the two framework engines"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = [
-    "robinauts.domain",
-    "robinauts.core",
-    "robinauts.ports",
-    "robinauts.application",
-    "robinauts.api",
-    "robinauts.datastore",
-    "robinauts.adapters",
-    "robinauts.app",
-    "robinauts.cli",
-]
-forbidden_modules = ["mcp"]
+source_modules = ["robinauts"]
+forbidden_modules = ["httpx"]
 ignore_imports = [
-    "robinauts.adapters.agents.langgraph -> *",
-    "robinauts.adapters.agents.langgraph.** -> *",
-    "robinauts.adapters.agents.pydantic_ai -> *",
-    "robinauts.adapters.agents.pydantic_ai.** -> *",
+    "robinauts.web -> *",
+    "robinauts.web.** -> *",
+    "robinauts.agent_engines.langchain_engine -> *",
+    "robinauts.agent_engines.langchain_engine.** -> *",
+    "robinauts.agent_engines.pydantic_ai_engine -> *",
+    "robinauts.agent_engines.pydantic_ai_engine.** -> *",
 ]
 unmatched_ignore_imports_alerting = "none"
 
 [[tool.importlinter.contracts]]
-name = "the two agent adapters do not import each other"
-type = "independence"
-modules = [
-    "robinauts.adapters.agents.langgraph",
-    "robinauts.adapters.agents.pydantic_ai",
+name = "FastAPI, Starlette, uvicorn and ag_ui only under web"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["robinauts"]
+forbidden_modules = ["fastapi", "starlette", "uvicorn", "ag_ui"]
+ignore_imports = [
+    "robinauts.web -> *",
+    "robinauts.web.** -> *",
 ]
+unmatched_ignore_imports_alerting = "none"

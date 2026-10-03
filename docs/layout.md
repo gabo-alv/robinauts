@@ -1,3 +1,4 @@
+[STALE - NEEDS UPDATING]
 # Robinauts — project layout and architecture
 
 Status: draft v1. Goals and design principles are in
@@ -172,11 +173,11 @@ Depends on domain only.
 
 ### application
 
-Control flow and business rules. Orchestrates a turn as a run
-([specs/runs.md](specs/runs.md), ADR 0005): create the run, find the memory
-on the visible path, call the agent port with the question and that memory,
-publish events, append each new message as it completes, then finish the run
-with the memory the adapter handed back — or fail or cancel it with none.
+Control flow and business rules. Orchestrates a turn as a run (ADR 0005):
+create the run, find the memory on the visible path, call the agent port with the
+question and that memory, publish events, append each new message as it completes,
+then finish the run with the memory the adapter handed back — or fail or cancel it
+with none.
 Also the sign-in flow, conversation management (list, rename, delete) and
 usage export.
 
@@ -345,7 +346,7 @@ HTTP clients are confined to adapters.
 | the tool loop: listing the servers' tools, calling them, asking the model again | the framework, under each agent adapter (ADR 0005) |
 | talking to tool servers, the credential in use | adapters (each agent adapter, through its framework's MCP client) |
 | the model's memory of a conversation: written with a run's ending, found on the visible path | application finds and hands over, datastore stores, the framework reads and writes |
-| the turn and run lifecycle (ADR 0005, specs/runs.md) | application |
+| the turn and run lifecycle (ADR 0005) | application |
 | executing runs in the background | adapters (run executor) |
 | saying that a run has stored something new | adapters (run signals) |
 | delivering a run's events to whoever may see them | application (the watcher), over the store and the signals |

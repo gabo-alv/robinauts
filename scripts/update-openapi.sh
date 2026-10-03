@@ -25,9 +25,21 @@ uv run --locked python - <<'PY'
 import json
 from pathlib import Path
 
-from robinauts.api import openapi_document
+from robinauts.controller.contract.domain import Config, StorageConfig, StorageKind
+from robinauts.controller.composition import compose
+from robinauts.web.app import create_app
 
+composed = compose(
+    Config(), storage=StorageConfig(StorageKind.IN_MEMORY), secret_for={}.get
+)
+app = create_app(
+    composed.controller,
+    credentials=composed.credentials,
+    sign_in=None,
+    secret_for={}.get,
+)
+document = app.openapi()
 snapshot = Path("openapi.json")
-snapshot.write_text(json.dumps(openapi_document(), indent=2, sort_keys=True) + "\n")
+snapshot.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 print(f"wrote {snapshot.resolve()}")
 PY
