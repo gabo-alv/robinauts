@@ -1,0 +1,1161 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright The Robinauts Authors
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { expect, test, vi } from "vitest";
+
+import { callsTo, json, refusal, stubFetch, type Call } from "../test/api";
+import { conversation, id, message, opened, page } from "../test/conversations";
+import { hashOf, InShell } from "../test/shell";
+import { event, streamHeaders, streamed } from "../test/stream";
+import { NOT_OFFERED, unoffered } from "./ModelPicker";
+import { PANEL_KEY, Workspace } from "./Workspace";
+
+const RUN = "11111111-2222-4333-8444-555555555555";
+
+/**
+ * One agent, two models and no conversations. A test that is about the history or a
+ * conversation answers those calls itself and falls through to these for
+ * the rest.
+ */
+function answering(
+  answer: (call: Call) => Response | undefined = () => undefined,
+) {
+  return stubFetch((call) => answer(call) ?? otherwise(call));
+}
+
+function otherwise(call: Call): Response {
+  if (call.url.startsWith("/robinauts/api/agents")) {
+    return json({
+      items: [
+        {
+          id: "helper",
+          title: "Helper",
+          engine: "langgraph",
+          model: "sonnet",
+          models: ["sonnet", "opus"],
+        },
+      ],
+    });
+  }
+  if (call.url.startsWith("/robinauts/api/models")) {
+    return json({
+      items: [
+        { id: "sonnet", title: "Sonnet" },
+        { id: "opus", title: "Opus" },
+      ],
+    });
+  }
+  if (call.url.startsWith("/robinauts/api/apps")) {
+    return json({ apps: [] });
+  }
+  return json(page([]));
+}
+
+/** Render, and let the agents and the history arrive. */
+async function shell(
+  answer?: (call: Call) => Response | undefined,
+  visible = true,
+) {
+  const fetch = answering(answer);
+  const drawn = render(<Robinauts visible={visible} />);
+  await waitFor(() => {
+    expect(screen.queryByText("Loading the conversations…")).toBeNull();
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return { ...drawn, fetch };
+}
+
+/** The application as the shell holds it. */
+function Robinauts({ visible = true }: Readonly<{ visible?: boolean }>) {
+  return (
+    <InShell visible={visible}>
+      <Workspace visible={visible} />
+    </InShell>
+  );
+}
+
+const panel = () => screen.getByRole("complementary", { name: "Panel" });
+
+/**
+ * Ask for the phone layout, where the panel is a drawer.
+ *
+ * jsdom's window is 1024 wide and its `matchMedia` answers accordingly, so
+ * without this every test is the wide one and the drawer is never the drawer.
+ * `src/test/setup.ts` takes the stub back after each test.
+ */
+function narrow() {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }));
+}
+
+test("the panel holds the brand, a new chat and the history", async () => {
+  await shell();
+  expect(screen.getByText("Robinauts")).toBeVisible();
+  expect(screen.getByRole("button", { name: "New chat" })).toBeVisible();
+  expect(screen.getByRole("navigation", { name: "History" })).toBeVisible();
+  expect(
+    screen.getByRole("list", { name: "Conversations" }),
+  ).toBeEmptyDOMElement();
+  // The account, sign-out and the theme are the shell's, on its rail.
+  expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  expect(screen.queryByRole("group", { name: "Theme" })).toBeNull();
+  // Projects are out of the POC; nothing pretends otherwise.
+  expect(screen.queryByRole("navigation", { name: "Projects" })).toBeNull();
+});
+
+test("collapsing the panel is remembered by this browser", async () => {
+  await shell();
+  fireEvent.click(screen.getByRole("button", { name: "Collapse the panel" }));
+  expect(panel()).toHaveAttribute("data-collapsed", "true");
+  expect(localStorage.getItem(`robinauts.${PANEL_KEY}`)).toBe("rail");
+  fireEvent.click(screen.getByRole("button", { name: "Expand the panel" }));
+  expect(panel()).toHaveAttribute("data-collapsed", "false");
+  expect(localStorage.getItem(`robinauts.${PANEL_KEY}`)).toBe("open");
+});
+
+test("a browser that left it as a rail opens it as one", async () => {
+  localStorage.setItem(`robinauts.${PANEL_KEY}`, "rail");
+  await shell();
+  expect(panel()).toHaveAttribute("data-collapsed", "true");
+  expect(
+    screen.getByRole("button", { name: "Expand the panel" }),
+  ).toBeVisible();
+});
+
+test("the agents are asked for once, however many new chats are started", async () => {
+  const { fetch } = await shell();
+  expect(
+    fetch.mock.calls.filter(([url]) => String(url) === "/robinauts/api/agents"),
+  ).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(
+    fetch.mock.calls.filter(([url]) => String(url) === "/robinauts/api/agents"),
+  ).toHaveLength(1);
+});
+
+/** Let the event loop run once, which is what a queued `hashchange` waits for. */
+const settled = () => new Promise((done) => setTimeout(done, 0));
+
+/** The routes a conversation being open needs answered. */
+function withConversation(call: Call): Response | undefined {
+  if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+    return json(opened(conversation(1, "Robins"), []));
+  }
+  if (call.url.startsWith("/robinauts/api/conversations?")) {
+    return json(page([conversation(1, "Robins")]));
+  }
+  return undefined;
+}
+
+test("the hash decides which of the two the main area is", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell(withConversation);
+
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Robins");
+  expect(screen.queryByText("New chat", { selector: "h1" })).toBeNull();
+  // The panel's current item follows the route.
+  expect(screen.getByRole("link", { name: "Robins" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
+test("an open conversation says which agent it is with", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell(withConversation);
+
+  // The fixture's conversation is with "helper", which the agents call Helper.
+  expect(screen.getByText("with Helper")).toBeInTheDocument();
+});
+
+test("a conversation the panel has not listed still has its title and agent", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell((call) => {
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(opened(conversation(1, "Robins"), []));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Robins",
+    );
+  });
+  expect(screen.getByText("with Helper")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Agent")).toBeNull();
+});
+
+test("an agent the deployment no longer offers is named by its id", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell((call) => {
+    if (call.url.startsWith("/robinauts/api/agents")) {
+      return json({
+        items: [{ id: "other", title: "Other", engine: "langgraph" }],
+      });
+    }
+    return withConversation(call);
+  });
+
+  expect(screen.getByText("with helper")).toBeInTheDocument();
+});
+
+test("the empty chat has the picker and no line about an agent", async () => {
+  location.hash = hashOf("");
+  await shell();
+
+  expect(document.querySelector("[data-agent]")).toBeNull();
+});
+
+test("the chat stands where the placeholder stood, on both routes", async () => {
+  // The empty chat: the box, and the agent picker above it. What used to be
+  // here was a sentence saying the box arrives with the chat.
+  const { unmount } = await shell();
+  expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible();
+  expect(screen.queryByText(/The message box arrives/)).toBeNull();
+  unmount();
+
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell((call) => {
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(
+        opened(conversation(1, "Robins"), [
+          message("m1", "user", "Why do robins sing?"),
+          message("m2", "assistant", "Because it is quiet."),
+        ]),
+      );
+    }
+    return withConversation(call);
+  });
+  await waitFor(() => {
+    expect(screen.getByText("Because it is quiet.")).toBeInTheDocument();
+  });
+  expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible();
+});
+
+test("a first message routes to the conversation it created", async () => {
+  const created = id(9);
+  await shell((call) => {
+    if (call.url === "/robinauts/api/turns") {
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/robinauts/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    if (call.url.startsWith("/robinauts/api/conversations?")) {
+      return json(page([conversation(9, "Robins")]));
+    }
+    return undefined;
+  });
+
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(location.hash).toBe(hashOf(`/c/${created}`));
+  // Who it is with is known before the panel has listed it.
+  expect(screen.getByText("with Helper")).toBeInTheDocument();
+  // The chat is not remounted by the route following it: the answer that is
+  // arriving would be thrown away.
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Robins",
+    );
+  });
+});
+
+test("an unknown hash is the empty chat, and the hash is left as it is", async () => {
+  // The sign-in page reads this one for itself; nothing here may rewrite it.
+  location.hash = "#/sign-in?error=not_allowed";
+  await shell();
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+    "New chat",
+  );
+  expect(location.hash).toBe("#/sign-in?error=not_allowed");
+});
+
+test("New chat goes to the empty chat's own hash", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell(withConversation);
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await settled();
+  });
+  expect(location.hash).toBe(hashOf(""));
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+    "New chat",
+  );
+});
+
+test("opening a conversation from the panel is a navigation", async () => {
+  await shell(withConversation);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("link", { name: "Robins" }));
+    await settled();
+  });
+  expect(location.hash).toBe(hashOf(`/c/${id(1)}`));
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Robins",
+    );
+  });
+});
+
+test("deleting the conversation that is open leaves the page on the empty chat", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  let gone = false;
+  await shell((call) => {
+    if (call.method === "DELETE") {
+      gone = true;
+      return json(null, 204);
+    }
+    if (gone) return json(page([]));
+    return withConversation(call);
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Robins" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Yes, delete/ }));
+    await settled();
+  });
+
+  expect(location.hash).toBe(hashOf(""));
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "New chat",
+    );
+  });
+  expect(screen.getByText("No conversations yet.")).toBeVisible();
+});
+
+test("the empty chat has a model picker beside the agent's, on its default", async () => {
+  location.hash = hashOf("");
+  await shell();
+  expect(screen.getByLabelText("Agent")).toHaveValue("helper");
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+});
+
+test("picking a model on the empty chat leaves the focus on the picker", async () => {
+  // A keyboard arrows through a closed <select> one change at a time; a
+  // picker remounted by each of them would drop the focus to <body>.
+  location.hash = hashOf("");
+  await shell();
+  const picker = screen.getByLabelText("Model");
+  picker.focus();
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toBe(picker);
+  expect(picker).toHaveFocus();
+  expect(picker).toHaveValue("opus");
+});
+
+test("the model picked on the empty chat is the one the first message names", async () => {
+  const created = id(9);
+  const { fetch } = await shell((call) => {
+    if (call.url === "/robinauts/api/turns") {
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/robinauts/api/conversations/${created}`) {
+      return json(opened({ ...conversation(9, "Robins"), model: "opus" }, []));
+    }
+    return undefined;
+  });
+
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(callsTo(fetch, "/robinauts/api/turns", "POST")[0]?.body).toEqual({
+    agent_id: "helper",
+    model_id: "opus",
+    text: "Why do robins sing?",
+  });
+  // The conversation it made shows the same model on its line.
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+test("an open conversation's line has its model, and a change is a PUT", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  let model = "sonnet";
+  const { fetch } = await shell((call) => {
+    if (
+      call.method === "PUT" &&
+      call.url === `/robinauts/api/conversations/${id(1)}/model`
+    ) {
+      model = (call.body as { model_id: string }).model_id;
+      return json({ ...conversation(1, "Robins"), model });
+    }
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(opened({ ...conversation(1, "Robins"), model }, []));
+    }
+    if (call.url.startsWith("/robinauts/api/conversations?")) {
+      return json(page([{ ...conversation(1, "Robins"), model }]));
+    }
+    return undefined;
+  });
+
+  const picker = await screen.findByLabelText("Model");
+  expect(picker).toHaveValue("sonnet");
+  const listings = callsTo(fetch, "/robinauts/api/conversations").length;
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(
+    callsTo(fetch, `/robinauts/api/conversations/${id(1)}/model`, "PUT").map(
+      (call) => call.body,
+    ),
+  ).toEqual([{ model_id: "opus" }]);
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  // A change dates the conversation, so the panel's list is asked for again.
+  await waitFor(() => {
+    expect(callsTo(fetch, "/robinauts/api/conversations")).toHaveLength(
+      listings + 1,
+    );
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a change that is refused is said, and the picker goes back", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  let answer = () =>
+    refusal(422, "UnknownModelError", "body.model_id: is not a model");
+  await shell((call) => {
+    if (call.method === "PUT") return answer();
+    return withConversation(call);
+  });
+
+  const picker = await screen.findByLabelText("Model");
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent(NOT_OFFERED);
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+
+  // Anything else is the backend's own sentence, as a rename's is.
+  answer = () =>
+    refusal(404, "NotFoundError", "there is nothing here of that id");
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "opus" },
+    });
+    await settled();
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "there is nothing here of that id",
+  );
+});
+
+test("a model no longer offered is shown, and a turn refused for it says why", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  const retired = { ...conversation(1, "Robins"), model: "retired" };
+  await shell((call) => {
+    if (call.url === `/robinauts/api/conversations/${id(1)}/turns`) {
+      return refusal(409, "ModelNotOfferedError", "the model is gone");
+    }
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(
+        opened(retired, [
+          message("m1", "user", "Why do robins sing?"),
+          message("m2", "assistant", "Because it is quiet."),
+        ]),
+      );
+    }
+    if (call.url.startsWith("/robinauts/api/conversations?")) {
+      return json(page([retired]));
+    }
+    return undefined;
+  });
+
+  const picker = await screen.findByLabelText("Model");
+  expect(picker).toHaveValue("retired");
+  expect(
+    screen.getByRole("option", { name: unoffered("retired") }),
+  ).toBeDisabled();
+
+  await waitFor(() => {
+    expect(screen.getByText("Because it is quiet.")).toBeInTheDocument();
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "And at night?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  // The chat's own sentence for it (`MODEL_GONE_NEW_CHAT` in
+  // `src/chat/runtime.tsx`), and what was written is back in the box to send
+  // once another is picked.
+  expect(screen.getByRole("status")).toHaveTextContent(
+    /model is no longer offered/,
+  );
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "And at night?",
+  );
+});
+
+test("a read answered before a model change cannot put the old model back", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  let model = "sonnet";
+  const before = { ...conversation(1, "Robins"), model: "sonnet" };
+  // The chat's read of the conversation is held until the change is saved,
+  // and then answered with what was true before it: the network's order,
+  // not the server's.
+  let answerRead: (response: Response) => void = () => undefined;
+  const read = new Promise<Response>((done) => {
+    answerRead = done;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>((input, init) => {
+      const url = String(input);
+      if (url === `/robinauts/api/conversations/${id(1)}`) return read;
+      if (init?.method === "PUT") {
+        model = (JSON.parse(String(init.body)) as { model_id: string })
+          .model_id;
+        return Promise.resolve(
+          json({ ...before, model, updated_at: "2026-09-03T10:00:00Z" }),
+        );
+      }
+      if (url.startsWith("/robinauts/api/conversations?")) {
+        return Promise.resolve(json(page([{ ...before, model }])));
+      }
+      return Promise.resolve(
+        otherwise({ url, method: "GET", body: undefined }),
+      );
+    }),
+  );
+  render(<Robinauts />);
+
+  const picker = await screen.findByLabelText("Model");
+  expect(picker).toHaveValue("sonnet");
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+
+  await act(async () => {
+    answerRead(json(opened(before, [])));
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+test("a model moved from another tab is the one shown, and picking the old one is sent", async () => {
+  // The chat read the conversation on "sonnet"; the panel's page, written
+  // later, has it on "opus". The later one is what the picker shows, so
+  // picking "sonnet" again is a change and is sent.
+  location.hash = hashOf(`/c/${id(1)}`);
+  const read = { ...conversation(1, "Robins"), model: "sonnet" };
+  const moved = {
+    ...read,
+    model: "opus",
+    updated_at: "2026-09-03T10:00:00Z",
+  };
+  const { fetch } = await shell((call) => {
+    if (call.method === "PUT") {
+      return json({ ...read, updated_at: "2026-09-04T10:00:00Z" });
+    }
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(opened(read, []));
+    }
+    if (call.url.startsWith("/robinauts/api/conversations?")) {
+      return json(page([moved]));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "sonnet" },
+    });
+    await settled();
+  });
+  expect(
+    callsTo(fetch, `/robinauts/api/conversations/${id(1)}/model`, "PUT").map(
+      (call) => call.body,
+    ),
+  ).toEqual([{ model_id: "sonnet" }]);
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+});
+
+test("answers written in the same millisecond are ordered by their microseconds", async () => {
+  // The chat's read and the panel's row fall in one millisecond; the row,
+  // on "opus", is the later by 800 microseconds, and is what the picker shows.
+  location.hash = hashOf(`/c/${id(1)}`);
+  const read = {
+    ...conversation(1, "Robins"),
+    model: "sonnet",
+    updated_at: "2026-09-03T10:00:00.000100Z",
+  };
+  const moved = {
+    ...read,
+    model: "opus",
+    updated_at: "2026-09-03T10:00:00.000900Z",
+  };
+  await shell((call) => {
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(opened(read, []));
+    }
+    if (call.url.startsWith("/robinauts/api/conversations?")) {
+      return json(page([moved]));
+    }
+    return undefined;
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+});
+
+test("without the list of models, the line still says which model it is on", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell((call) => {
+    if (call.url.startsWith("/robinauts/api/models")) {
+      return refusal(500, "InternalError", "something went wrong");
+    }
+    return withConversation(call);
+  });
+
+  await waitFor(() => {
+    expect(screen.getByText("sonnet")).toBeInTheDocument();
+  });
+  expect(screen.queryByLabelText("Model")).toBeNull();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    /models could not be loaded/,
+  );
+});
+
+test("a model changed on a conversation opened from the panel stays changed", async () => {
+  // On one conversation, open another from the panel, and change its model
+  // before the chat's read of it has landed: what the shell holds is still
+  // the conversation it came from. The panel's page, asked again, is no
+  // help either -- here it was read before the change was saved.
+  location.hash = hashOf(`/c/${id(2)}`);
+  const first = { ...conversation(1, "Robins"), model: "sonnet" };
+  const second = { ...conversation(2, "Wrens"), model: "sonnet" };
+  let answerRead: (response: Response) => void = () => undefined;
+  const read = new Promise<Response>((done) => {
+    answerRead = done;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>((input, init) => {
+      const url = String(input);
+      if (url === `/robinauts/api/conversations/${id(1)}`) return read;
+      if (url === `/robinauts/api/conversations/${id(2)}`) {
+        return Promise.resolve(json(opened(second, [])));
+      }
+      if (init?.method === "PUT") {
+        const model = (JSON.parse(String(init.body)) as { model_id: string })
+          .model_id;
+        return Promise.resolve(
+          json({ ...first, model, updated_at: "2026-09-03T10:00:00Z" }),
+        );
+      }
+      if (url.startsWith("/robinauts/api/conversations?")) {
+        return Promise.resolve(json(page([first, second])));
+      }
+      return Promise.resolve(
+        otherwise({ url, method: "GET", body: undefined }),
+      );
+    }),
+  );
+  render(<Robinauts />);
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Wrens",
+    );
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("link", { name: "Robins" }));
+    await settled();
+  });
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Robins",
+    );
+  });
+
+  const picker = screen.getByLabelText("Model");
+  expect(picker).toHaveValue("sonnet");
+  await act(async () => {
+    fireEvent.change(picker, { target: { value: "opus" } });
+    await settled();
+  });
+  // The change's answer is what the shell now holds about this one.
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+
+  // And the read answered before the change was saved does not undo it.
+  await act(async () => {
+    answerRead(json(opened(first, [])));
+    await settled();
+  });
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+test("without the list, a remembered model is still the one a first message names", async () => {
+  location.hash = hashOf("");
+  localStorage.setItem("robinauts.model", "retired");
+  const { fetch } = await shell((call) => {
+    if (call.url.startsWith("/robinauts/api/models")) {
+      return refusal(500, "InternalError", "something went wrong");
+    }
+    if (call.url === "/robinauts/api/turns") {
+      return refusal(422, "UnknownModelError", "body.model_id: is not a model");
+    }
+    return undefined;
+  });
+
+  const send = async () => {
+    const box = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      await settled();
+    });
+  };
+  await send();
+  expect(callsTo(fetch, "/robinauts/api/turns", "POST")[0]?.body).toMatchObject(
+    {
+      model_id: "retired",
+    },
+  );
+  // Refused for it: said, the message is back, and the model is forgotten,
+  // so the next one goes to the agent's default.
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBeNull();
+  await send();
+  expect(callsTo(fetch, "/robinauts/api/turns", "POST")[1]?.body).toMatchObject(
+    {
+      model_id: null,
+    },
+  );
+});
+
+test("a first message refused for the agent's default asks for the models again", async () => {
+  // The agent's default, "sonnet", has been removed since the list came:
+  // the refusal asks for the list again, which no longer has it, so the
+  // next message goes to a model still offered.
+  location.hash = hashOf("");
+  const created = id(9);
+  let lists = 0;
+  const { fetch } = await shell((call) => {
+    if (call.url.startsWith("/robinauts/api/models")) {
+      lists += 1;
+      return lists === 1
+        ? undefined
+        : json({ items: [{ id: "opus", title: "Opus" }] });
+    }
+    if (call.url === "/robinauts/api/turns") {
+      const asked = (call.body as { model_id: string }).model_id;
+      if (asked === "sonnet") {
+        return refusal(
+          422,
+          "UnknownModelError",
+          "body.model_id: is not a model",
+        );
+      }
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/robinauts/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return undefined;
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  await waitFor(() => {
+    expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(
+    callsTo(fetch, "/robinauts/api/turns", "POST").map(
+      (call) => (call.body as { model_id: string }).model_id,
+    ),
+  ).toEqual(["sonnet", "opus"]);
+});
+
+test("with the list in hand, a first message refused for its model forgets the pick", async () => {
+  // Picked from a list that has gone stale since: the next message goes to
+  // the agent's default, and is not refused for the same model again.
+  location.hash = hashOf("");
+  const created = id(9);
+  const { fetch } = await shell((call) => {
+    if (call.url === "/robinauts/api/turns") {
+      const asked = (call.body as { model_id: string }).model_id;
+      if (asked === "opus") {
+        return refusal(
+          422,
+          "UnknownModelError",
+          "body.model_id: is not a model",
+        );
+      }
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/robinauts/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return undefined;
+  });
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const send = async () => {
+    const box = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      await settled();
+    });
+  };
+  await send();
+  expect(screen.getByRole("status")).toHaveTextContent(/no longer offered/);
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBeNull();
+  expect(screen.getByLabelText("Model")).toHaveValue("sonnet");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(
+    callsTo(fetch, "/robinauts/api/turns", "POST").map(
+      (call) => (call.body as { model_id: string }).model_id,
+    ),
+  ).toEqual(["opus", "sonnet"]);
+  expect(location.hash).toBe(hashOf(`/c/${created}`));
+});
+
+test("a first message refused as not there keeps the text and the pick", async () => {
+  // The agent, and not the model: nothing to forget.
+  location.hash = hashOf("");
+  await shell((call) =>
+    call.url === "/robinauts/api/turns"
+      ? refusal(404, "NotFoundError", "there is nothing here of that id")
+      : undefined,
+  );
+  fireEvent.change(screen.getByLabelText("Model"), {
+    target: { value: "opus" },
+  });
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(
+    /agent it was for is no longer offered/,
+  );
+  expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue(
+    "Why do robins sing?",
+  );
+  expect(localStorage.getItem("robinauts.model")).toBe("opus");
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+});
+
+const sidePanel = () =>
+  screen.getByRole("complementary", { name: "Side panel" });
+
+/** The helper agent's one app, as `GET /robinauts/api/apps` lists it. */
+const TO_DO_APP = {
+  id: "todo/show_todos",
+  server: "todo",
+  tool: "show_todos",
+  title: "To-do list",
+  description: "The list.",
+};
+
+/** The helper agent has the to-do list app; the rest as `otherwise`. */
+function withApp(call: Call): Response | undefined {
+  return call.url === "/robinauts/api/apps?agent=helper"
+    ? json({ apps: [TO_DO_APP] })
+    : undefined;
+}
+
+test("the agent's apps are offered, and open as a sandboxed frame", async () => {
+  location.hash = hashOf(`/c/${id(1)}`);
+  await shell((call) => {
+    if (call.url === `/robinauts/api/conversations/${id(1)}`) {
+      return json(opened(conversation(1, "Robins"), []));
+    }
+    return withApp(call) ?? withConversation(call);
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Expand the side panel" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add a tab" }));
+  await waitFor(() => {
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["To-do list"]);
+  });
+  fireEvent.click(screen.getByRole("menuitem", { name: "To-do list" }));
+  const app = within(screen.getByRole("tabpanel", { name: "To-do list" }));
+  const frame = app.getByTitle("To-do list");
+  expect(frame).toHaveAttribute(
+    "src",
+    "/robinauts/api/apps/todo/show_todos/view?agent=helper",
+  );
+  expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+});
+
+test("on a small screen the side panel is a drawer, opened from the right", async () => {
+  narrow();
+  const { container } = await shell();
+  const aside = sidePanel();
+  expect(aside).toHaveAttribute("inert");
+  const open = screen.getByRole("button", { name: "Open the side panel" });
+  fireEvent.click(open);
+  expect(aside).toHaveAttribute("data-drawer", "open");
+  expect(aside).toHaveAttribute("role", "dialog");
+  // Drawn whole, whatever this browser left the rail as.
+  expect(screen.getByRole("button", { name: "Add a tab" })).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "Close the side panel" }),
+  ).toHaveFocus();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(aside).toHaveAttribute("data-drawer", "closed");
+  expect(open).toHaveFocus();
+
+  // The backdrop closes it too, and the focus comes back.
+  fireEvent.click(open);
+  const backdrop = container.querySelector("[data-backdrop]");
+  fireEvent.click(backdrop as Element);
+  expect(aside).toHaveAttribute("data-drawer", "closed");
+  expect(open).toHaveFocus();
+});
+
+test("Escape in the side panel's menu closes the menu, not the drawer", async () => {
+  narrow();
+  await shell(withApp);
+  const aside = sidePanel();
+  fireEvent.click(screen.getByRole("button", { name: "Open the side panel" }));
+  const add = screen.getByRole("button", { name: "Add a tab" });
+  await waitFor(() => {
+    expect(add).toBeEnabled();
+  });
+  fireEvent.click(add);
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(aside).toHaveAttribute("data-drawer", "open");
+});
+
+test("tabs opened on the empty chat go with the conversation it starts", async () => {
+  localStorage.setItem("robinauts.side", "open");
+  const created = id(9);
+  await shell((call) => {
+    if (call.url === "/robinauts/api/turns") {
+      return streamed(
+        [event("RUN_FINISHED", { threadId: created, runId: RUN }, 2)],
+        { headers: streamHeaders(RUN, created) },
+      );
+    }
+    if (call.url === `/robinauts/api/conversations/${created}`) {
+      return json(opened(conversation(9, "Robins"), []));
+    }
+    return withApp(call);
+  });
+  const add = screen.getByRole("button", { name: "Add a tab" });
+  await waitFor(() => {
+    expect(add).toBeEnabled();
+  });
+  fireEvent.click(add);
+  fireEvent.click(screen.getByRole("menuitem", { name: "To-do list" }));
+  const box = screen.getByRole("textbox", { name: "Message input" });
+  fireEvent.change(box, { target: { value: "Why do robins sing?" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await settled();
+  });
+  expect(location.hash).toBe(hashOf(`/c/${created}`));
+  expect(screen.getByRole("tab", { name: "To-do list" })).toBeInTheDocument();
+  // And a new chat starts with nothing open.
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  await act(async () => {
+    await settled();
+  });
+  expect(screen.queryByRole("tab")).toBeNull();
+});
+
+/**
+ * Say that this environment draws everything but `hidden`.
+ *
+ * jsdom has no layout engine and reports no boxes for anything, so without
+ * this the trap cannot tell what is on the screen -- and the drawer holds a
+ * control that belongs to the other layout: "Collapse the side panel" is
+ * hidden by `../side/side.css` below the breakpoint, `display: none`. A stop
+ * the browser will not focus is a stop the trap must skip, or Tab deadlocks
+ * on it. `vi.restoreAllMocks` in src/test/setup.ts puts this back.
+ */
+function drawsEverythingBut(hidden: Element) {
+  const box = [new DOMRect(0, 0, 100, 20)] as unknown as DOMRectList;
+  const none = [] as unknown as DOMRectList;
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (
+    this: Element,
+  ) {
+    return this === hidden ? none : box;
+  });
+}
+
+/** The side panel's drawer, open, on an agent with an app to add. */
+async function openSideDrawer() {
+  narrow();
+  await shell(withApp);
+  const outside = screen.getByRole("button", { name: "Open the side panel" });
+  fireEvent.click(outside);
+  const add = screen.getByRole("button", { name: "Add a tab" });
+  await waitFor(() => {
+    expect(add).toBeEnabled();
+  });
+  const collapse = screen.getByRole("button", {
+    name: "Collapse the side panel",
+  });
+  return { outside, add, collapse };
+}
+
+test("Tab goes round inside the open drawer, and never behind it", async () => {
+  const { outside, add, collapse } = await openSideDrawer();
+  drawsEverythingBut(collapse);
+  // The first stop is the close button, not the collapse button in front of
+  // it, which is the other layout's and is not drawn here.
+  const first = screen.getByRole("button", { name: "Close the side panel" });
+
+  add.focus();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(first).toHaveFocus();
+  expect(collapse).not.toHaveFocus();
+
+  fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+  expect(add).toHaveFocus();
+
+  // The focus escaped some other way: the next Tab brings it back in.
+  outside.focus();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(first).toHaveFocus();
+});
+
+test("a stop taken out of the tab order is not one", async () => {
+  const { add, collapse } = await openSideDrawer();
+  drawsEverythingBut(collapse);
+  // A tabindex of -1 takes an element out of the tab order whatever it is,
+  // so the first stop moves on to "Add a tab".
+  screen
+    .getByRole("button", { name: "Close the side panel" })
+    .setAttribute("tabindex", "-1");
+
+  add.focus();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(add).toHaveFocus();
+});
+
+test("a stop the page has made invisible is not one", async () => {
+  const { add, collapse } = await openSideDrawer();
+  drawsEverythingBut(collapse);
+  // `visibility: hidden` still has a box, so `getClientRects` says nothing
+  // about it and only the computed style does. Written inline, because
+  // vitest loads no stylesheet and jsdom computes this much for real.
+  screen.getByRole("button", {
+    name: "Close the side panel",
+  }).style.visibility = "hidden";
+
+  add.focus();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(add).toHaveFocus();
+});
+
+test("with no layout to read, every stop counts", async () => {
+  // jsdom as it is: no boxes for anything. Dropping every stop would be a
+  // trap that traps nothing, so the DOM is what is left to go on.
+  const { add, collapse } = await openSideDrawer();
+  add.focus();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(collapse).toHaveFocus();
+});
+
+test("hidden, it holds no long poll, and shown again it polls", async () => {
+  // The feed answers its first ask with a version; a later one is refused
+  // here, which the feed waits after, so that nothing spins.
+  const { fetch, rerender } = await shell(
+    (call) =>
+      call.url.startsWith("/robinauts/api/changes")
+        ? call.url.includes("after=")
+          ? refusal(503, "Unavailable", "not now")
+          : json({ version: 1 })
+        : undefined,
+    false,
+  );
+  const asks = () => callsTo(fetch, "/robinauts/api/changes").length;
+  // Hidden from the start: not one ask of the feed.
+  expect(asks()).toBe(0);
+
+  rerender(<Robinauts visible />);
+  await waitFor(() => {
+    expect(asks()).toBeGreaterThan(1);
+  });
+
+  rerender(<Robinauts visible={false} />);
+  const asked = asks();
+  await act(async () => {
+    await new Promise((done) => setTimeout(done, 1_500));
+  });
+  expect(asks()).toBe(asked);
+});

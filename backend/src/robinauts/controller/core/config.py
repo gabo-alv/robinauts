@@ -13,6 +13,7 @@ from robinauts.shared_domain.domain import (
     DEFAULT_WORKER,
     AgentConfig,
     Config,
+    ContainerConfig,
     ModelConfig,
     ProviderConfig,
     ProviderKind,
@@ -63,12 +64,39 @@ def _command(value: Any) -> tuple[str, ...]:
     return tuple(value)
 
 
+# A variable's name, as a container's environment takes it.
+VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _image(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip() or value.startswith("-") or " " in value:
+        raise ValueError(f"image is not the name of an image: {value!r}")
+    return value
+
+
+def _variables(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(
+        isinstance(name, str) and VARIABLE_NAME.fullmatch(name) for name in value
+    ):
+        raise ValueError(f"environment is not a list of variable names: {value!r}")
+    return tuple(value)
+
+
+def _flag(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"external is not true or false: {value!r}")
+    return value
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class _WorkerTable:
     """A ``[workers.<name>]`` table: what a worker is beside the agents that name it."""
 
     id: str
     command: tuple[str, ...] = ()
+    image: str = ""
+    environment: tuple[str, ...] = ()
+    external: bool = False
 
 
 _MAX_TASKS = "max_running_tasks_per_worker"
@@ -115,7 +143,14 @@ def parse_config(raw: Mapping[str, Any], tools: Collection[str] = ()) -> Config:
         worker=_worker,
         models=_model_ids,
     )
-    workers = build("workers", _WorkerTable, command=_command)
+    workers = build(
+        "workers",
+        _WorkerTable,
+        command=_command,
+        image=_image,
+        environment=_variables,
+        external=_flag,
+    )
 
     work = WorkConfig()
     given = dict(raw.get("work", {}))
@@ -159,8 +194,20 @@ def parse_config(raw: Mapping[str, Any], tools: Collection[str] = ()) -> Config:
             _worker(table.id)
         except ValueError as error:
             problems.append(f"workers.{table.id}: {error}")
-        if not table.command:
-            problems.append(f"workers.{table.id}: needs `command`, the one thing a table says")
+        if table.external and (table.command or table.image):
+            problems.append(
+                f"workers.{table.id}: `external` is a worker started elsewhere, without"
+                " `command` or `image`"
+            )
+        elif not table.external and not table.command and not table.image:
+            problems.append(
+                f"workers.{table.id}: needs `command`, the command that starts it, `image`,"
+                " the image of its container on the desktop, or `external = true`"
+            )
+        if table.environment and not table.image:
+            problems.append(
+                f"workers.{table.id}: `environment` is for a worker in a container, with `image`"
+            )
         if table.id not in named:
             problems.append(f"workers.{table.id}: no agent names this worker")
     for agent in agents.values():
@@ -180,9 +227,15 @@ def parse_config(raw: Mapping[str, Any], tools: Collection[str] = ()) -> Config:
         if agent.engine not in ENGINES and agent.worker not in workers:
             problems.append(
                 f"agents.{agent.id}: engine {agent.engine!r} is not one of {ENGINES}; an engine"
-                " this build does not have runs on a worker with a command of its own alone"
+                " this build does not have runs on a worker with a command or an image of its own"
             )
     if problems:
         raise ConfigError("\n".join(problems))
-    commands = {table.id: table.command for table in workers.values()}
-    return Config(providers, models, tool_servers, agents, work, commands)
+    commands = {table.id: table.command for table in workers.values() if table.command}
+    containers = {
+        table.id: ContainerConfig(table.image, table.environment)
+        for table in workers.values()
+        if table.image
+    }
+    externals = frozenset(table.id for table in workers.values() if table.external)
+    return Config(providers, models, tool_servers, agents, work, commands, containers, externals)

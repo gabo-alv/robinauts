@@ -133,6 +133,16 @@ class WorkConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ContainerConfig:
+    """How a worker runs in a container on the desktop: its ``[workers.<name>]`` table's
+    ``image``, and the ``environment`` it names, the variables of the desktop's environment
+    the container gets beside the keys of its agents."""
+
+    image: str
+    environment: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     providers: Mapping[str, ProviderConfig] = field(default_factory=dict)
     models: Mapping[str, ModelConfig] = field(default_factory=dict)
@@ -144,6 +154,15 @@ class Config:
     ``[workers.<name>]`` table names one. The others start as ``robinauts.cli.worker_process``.
     A command differs in nothing else: it is handed the same environment, the same secret and
     the same turns, say ``docker run -i`` of an image that runs an engine this build lacks."""
+    containers: Mapping[str, ContainerConfig] = field(default_factory=dict)
+    """By worker, the container it runs in on the desktop, for the workers whose
+    ``[workers.<name>]`` table names an ``image``. A server starts such a worker with its
+    ``command`` alone."""
+    externals: frozenset[str] = frozenset()
+    """The workers whose ``[workers.<name>]`` table says ``external = true``. Something else
+    starts them, such as a container of their own, with a token of ``robinauts/worker`` bound to
+    their name that the operator created. Neither a server nor the desktop's launcher starts
+    them, and the backend lets each in by that token."""
 
     def workers(self) -> tuple[str, ...]:
         """Every worker the agents name: the default first, which always runs, then the
@@ -162,7 +181,14 @@ class Config:
         for and runs turns of."""
         agents = {id_: a for id_, a in self.agents.items() if a.worker == worker}
         return Config(
-            self.providers, self.models, self.tool_servers, agents, self.work, self.commands
+            self.providers,
+            self.models,
+            self.tool_servers,
+            agents,
+            self.work,
+            self.commands,
+            self.containers,
+            self.externals,
         )
 
     def command_of(self, worker: str) -> tuple[str, ...] | None:
