@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright The Robinauts Authors
 #
-# A dependency change is a pull request of its own (DEPENDENCIES.md), and the
-# licence gate runs on it like on any other. The cooldown keeps us off a
+# Dependency changes go in pull requests of their own (DEPENDENCIES.md), and
+# the licence gate runs on them like on any other. The cooldown keeps us off a
 # release that is withdrawn or fixed in its first days -- a window in which
 # compromised packages are usually caught.
 

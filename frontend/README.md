@@ -193,9 +193,9 @@ Two of these are generated and thrown away; one is generated and committed.
 - Dependencies: [../docs/contributing/js-dependencies.md](../docs/contributing/js-dependencies.md).
   Few of them, each one vetted, exact versions, install scripts off, a licence
   allowlist the build enforces over the bundle and
-  `scripts/check-licences.mjs` enforces over everything installed, and one
-  dependency change per pull request — never a version published fewer than
-  ten days ago, first pin included.
+  `scripts/check-licences.mjs` enforces over everything installed, and
+  dependency changes in pull requests of their own — never a version published
+  fewer than ten days ago, first pin included.
 - The chat seam: [../docs/adr/0006-chat-ui-on-react-alone.md](../docs/adr/0006-chat-ui-on-react-alone.md).
   Nothing outside `src/chat/` imports anything under `src/chat/` but
   `src/chat/index.ts`; what the rest of the application needs from the chat

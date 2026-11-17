@@ -153,7 +153,7 @@ neorc's rules (`neorc/contributing/js-dependencies.md`):
   list of bundled packages that CI compares with the build
   ([open-source.md](open-source.md));
 - `npm audit` and `npm audit signatures`;
-- one dependency change per pull request; a 10-day Dependabot cooldown;
+- dependency changes in pull requests of their own; a 10-day Dependabot cooldown;
 - a bundle size budget.
 
 ## Details likely to change

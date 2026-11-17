@@ -130,7 +130,8 @@ licence again and writes down what they read.
   the neorc pin means packing again and updating the lock in the same change.
   `npm audit signatures` reads the tree with the two tarballs replaced by
   their registry dependencies (`frontend/scripts/registry-tree.mjs`).
-- One dependency change per pull request, never as a side effect of a feature.
+- Dependency changes go in a pull request of their own, never as a side
+  effect of a feature. One pull request may change several dependencies.
 - CI runs `npm audit --audit-level=low` for known advisories on everything
   installed, and `npm audit signatures --omit=dev` for registry signatures and
   provenance on what ships: the registry does not hold attestations for every

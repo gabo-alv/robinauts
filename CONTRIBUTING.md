@@ -15,8 +15,8 @@ Changes reach it through pull requests only, and it is never force-pushed.
 2. Open a pull request against `main`.
 3. Once the checks pass and the review is complete, a maintainer merges it.
 
-One concern per pull request. A change of dependency is a pull request of
-its own.
+One concern per pull request. Dependency changes go in a pull request of
+their own, and one pull request may change several dependencies.
 
 ## Repository layout
 
