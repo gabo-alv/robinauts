@@ -9,13 +9,14 @@ read them before touching `package.json`, `package-lock.json`, `.npmrc`,
 
 Do not:
 
-- add, remove or bump a package as part of another change. A dependency change
-  is its own pull request, vetted as the rules say, with the cooldown kept: no
-  version published fewer than 10 days ago. **That holds for a first pin as
-  much as for a bump** -- `npm view <pkg> version` is often a release of that
-  morning. Read `npm view <pkg> time --json`, pin the newest version at least
-  ten days old, and say in the pull request which dates you read. No check can
-  catch this for you: the publish dates are not in the lockfile.
+- add, remove or bump a package as part of another change. Dependency changes
+  go in a pull request of their own, vetted as the rules say, with the
+  cooldown kept: no version published fewer than 10 days ago. **That holds for
+  a first pin as much as for a bump** -- `npm view <pkg> version` is often a
+  release of that morning. Read `npm view <pkg> time --json`, pin the newest
+  version at least ten days old, and say in the pull request which dates you
+  read. No check can catch this for you: the publish dates are not in the
+  lockfile.
 - loosen the licence allowlist in `vite.config.ts`, the size budget, or the
   Content-Security-Policy the backend serves, to make a library fit. Choose
   another library, or write the code.

@@ -123,12 +123,9 @@ datasets are shipped. No third-party logos are shipped.
 
 ## Adopting or upgrading a dependency
 
-1. One dependency change per pull request, and the pull request says why
-   the dependency is needed and what was considered instead. A framework and
-   the provider clients it is reached through count as **one** change: they
-   are adopted or rejected together — a framework with no client reaches no
-   vendor — and the gate reads the whole tree either way, so splitting them
-   over two pull requests would mean reviewing half a tree twice.
+1. Dependency changes go in a pull request of their own. One pull request
+   may change several dependencies. A pull request that adopts a dependency
+   says why it is needed and what was considered instead.
 2. The licence of the package and of everything it brings is on the allowed
    list — or restricted, and then added to the table below in the same
    pull request. The licence is re-checked on every upgrade: a minor
