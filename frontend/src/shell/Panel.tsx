@@ -57,6 +57,10 @@ export interface PanelProps {
   collapsed: boolean;
   onCollapse: (collapsed: boolean) => void;
   onNewChat: () => void;
+  /** Open the search page. */
+  onSearch: () => void;
+  /** The search page is the one shown. */
+  searching?: boolean;
 }
 
 export function Panel({
@@ -69,6 +73,8 @@ export function Panel({
   collapsed,
   onCollapse,
   onNewChat,
+  onSearch,
+  searching = false,
 }: Readonly<PanelProps>) {
   // In the shell's drawer, on a small screen, the panel is drawn whole.
   const wide = useWide();
@@ -115,6 +121,16 @@ export function Panel({
             <NewProject onNewProject={onNewProject} />
           </div>
         )}
+        <button
+          type="button"
+          title="Search"
+          aria-label="Search"
+          aria-current={searching ? "page" : undefined}
+          onClick={onSearch}
+          className="panel-tool panel-search"
+        >
+          <span>Search</span>
+        </button>
         <HistoryList
           history={history}
           current={current}

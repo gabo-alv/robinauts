@@ -40,7 +40,7 @@ from robinauts.controller.contract.ports import Controller
 from robinauts.controller.core.projects import project_name
 from robinauts.controller.core.task_payloads import check_task_payload
 from robinauts.controller.core.titles import title_from_text
-from robinauts.controller.ports.store import Cursor, Store
+from robinauts.controller.ports.store import Cursor, SearchTerm, Store
 from robinauts.shared_domain.domain import (
     DEFAULT_PROJECT,
     Config,
@@ -120,11 +120,20 @@ class RobinautsController(Controller):
         return tuple(ModelListing(m.id, m.title or m.id) for m in self._config.models.values())
 
     async def list_sessions(
-        self, user: User, *, limit: int, cursor: str | None = None
+        self, user: User, *, limit: int, cursor: str | None = None, query: str | None = None
     ) -> SessionPage:
         before = None if cursor is None else _decode_cursor(cursor)
-        sessions = await self._store.sessions_of(user.id, limit, before)
-        following = _encode_cursor(sessions[-1]) if len(sessions) == limit else None
+        terms = [
+            SearchTerm(
+                word,
+                tuple(a.id for a in self._config.agents.values() if word in a.title.lower()),
+            )
+            for word in (query or "").lower().split()
+        ]
+        # One more than a page, to know whether there is a next one.
+        sessions = await self._store.sessions_of(user.id, limit + 1, before, terms)
+        following = _encode_cursor(sessions[limit - 1]) if len(sessions) > limit else None
+        sessions = sessions[:limit]
         running = await self._store.running_sessions(user.id, [s.id for s in sessions])
         return SessionPage(tuple(sessions), cursor=following, running=running)
 
