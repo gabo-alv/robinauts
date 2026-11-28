@@ -50,6 +50,8 @@ repository:
 
 or one at a time:
 
+    scripts/check-pins.sh       the neorc and oneberth pins: one neorc commit,
+                                each on its main branch, the same in every lock
     scripts/check-lint.sh       ruff and black, over backend/, scripts/ and demo/
     scripts/check-tests.sh      pytest, with the architecture contracts
     scripts/check-extra-workers.sh
@@ -92,7 +94,7 @@ pass their arguments on to the tool they wrap, so
 `main`; CI runs it over the commits of the pull request, since the first
 commits of this repository predate the sign-off rule. `check-wheel.sh` takes
 one optional directory to keep the wheel in, which CI's `wheel` job uses.
-`check-lint.sh`, `check-audit.sh`, `check-frontend.sh` and
+`check-pins.sh`, `check-lint.sh`, `check-audit.sh`, `check-frontend.sh` and
 `check-all.sh` take no arguments and say so rather than ignoring them —
 `check-audit.sh` reads pip-audit's JSON to make sure every pinned package was
 really looked at, and `check-frontend.sh` is the frontend's whole CI job in
@@ -334,6 +336,10 @@ the allowed list; the pull request says why the dependency is needed; and
 the lockfile is committed. `scripts/check-licences.sh` enforces the licence
 rules over the whole locked set, and a licence it cannot resolve fails as
 surely as a forbidden one.
+
+A neorc or oneberth pin moves in a dependency-update pull request of its
+own, as #222 did: the pin, every `uv.lock` and `frontend/package-lock.json`,
+regenerated together.
 
 npm has rules of its own, because its packages are compiled into a bundle
 that ships inside the wheel:

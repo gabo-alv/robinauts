@@ -35,7 +35,7 @@ jobs:
   # `extra-workers` and `mcp-servers` run.
   # GitHub counts a skipped job as passed, and all but `android` are required
   # checks, so a job skips only when every area it depends on is explicitly
-  # `false`. If this job
+  # `false`, or when `pins` fails. If this job
   # fails, its outputs are empty and the jobs run. A push to main has no outputs
   # either, so it runs them all.
   scope:
@@ -62,6 +62,24 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: scripts/changed-areas.sh "$BASE" "$HEAD" >>"$GITHUB_OUTPUT"
 
+  # neorc-from-source: says in seconds whether the neorc and oneberth pins hold,
+  # before the jobs that build from them start. Not gated by `scope`: the main
+  # branch of neorc or oneberth moves without any change here. When it fails,
+  # the other jobs that need it skip. `wheel` still runs and fails on the same
+  # check, so a bad pin stays red on a required check even before `pins` is
+  # made required.
+  pins:
+    name: the neorc and oneberth pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/check-pins.sh
+
   lint:
     name: ruff and black
     runs-on: ubuntu-latest
@@ -82,8 +100,8 @@ jobs:
 
   test:
     name: tests and architecture contracts
-    needs: [scope]
-    if: ${{ !cancelled() && (needs.scope.outputs.backend != 'false' || needs.scope.outputs.frontend != 'false' || needs.scope.outputs.contract != 'false' || needs.scope.outputs.repo != 'false') }}
+    needs: [scope, pins]
+    if: ${{ !cancelled() && (needs.scope.outputs.backend != 'false' || needs.scope.outputs.frontend != 'false' || needs.scope.outputs.contract != 'false' || needs.scope.outputs.repo != 'false') && needs.pins.result == 'success' }}
     runs-on: ubuntu-latest
     services:
       # The tests that need a database create and drop a schema of their own
@@ -203,9 +221,9 @@ jobs:
 
   desktop-docker:
     name: the desktop with Docker
-    needs: [scope]
+    needs: [scope, pins]
     # On the changes that run the tests: the image holds the backend and the interface.
-    if: ${{ !cancelled() && (needs.scope.outputs.backend != 'false' || needs.scope.outputs.frontend != 'false' || needs.scope.outputs.contract != 'false' || needs.scope.outputs.repo != 'false') }}
+    if: ${{ !cancelled() && (needs.scope.outputs.backend != 'false' || needs.scope.outputs.frontend != 'false' || needs.scope.outputs.contract != 'false' || needs.scope.outputs.repo != 'false') && needs.pins.result == 'success' }}
     runs-on: ubuntu-latest
     # Two image builds, then two starts of the desktop: about ten minutes.
     timeout-minutes: 30
@@ -255,9 +273,9 @@ jobs:
 
   extra-workers:
     name: the extra workers
-    needs: [scope]
+    needs: [scope, pins]
     # On a backend change too: an extra worker is composed from the backend.
-    if: ${{ !cancelled() && (needs.scope.outputs.extra_workers != 'false' || needs.scope.outputs.backend != 'false' || needs.scope.outputs.repo != 'false') }}
+    if: ${{ !cancelled() && (needs.scope.outputs.extra_workers != 'false' || needs.scope.outputs.backend != 'false' || needs.scope.outputs.repo != 'false') && needs.pins.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -329,8 +347,8 @@ jobs:
 
   frontend:
     name: lint, types, tests and the bundle
-    needs: [scope]
-    if: ${{ !cancelled() && (needs.scope.outputs.frontend != 'false' || needs.scope.outputs.contract != 'false' || needs.scope.outputs.repo != 'false') }}
+    needs: [scope, pins]
+    if: ${{ !cancelled() && (needs.scope.outputs.frontend != 'false' || needs.scope.outputs.contract != 'false' || needs.scope.outputs.repo != 'false') && needs.pins.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -350,6 +368,8 @@ jobs:
 
   wheel:
     name: the wheel, built and installed
+    needs: [pins]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

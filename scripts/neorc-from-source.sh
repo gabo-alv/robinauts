@@ -7,8 +7,8 @@
 # step, and docs/architecture/orchestration.md says how to take it out.
 #
 # It builds neorc and neorc-core, and oneberth, from the commits that
-# backend/pyproject.toml pins, into the directory it is given, and refuses a
-# commit outside the main branch of its repository. It prints one hashed
+# backend/pyproject.toml pins, into the directory it is given, once
+# scripts/check-pins.sh accepts those pins. It prints one hashed
 # requirement per wheel. neorc's interface reaches Robinauts' as a node package
 # (scripts/ui-packages-from-source.sh), so its Python wheel is not built.
 set -eu
@@ -19,18 +19,11 @@ if [ "$#" -ne 1 ]; then
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+"$root/scripts/check-pins.sh" >&2
 repository=https://github.com/the-guish/neorc
 revision=$(sed -n 's/^neorc = .*rev = "\([0-9a-f]*\)".*/\1/p' "$root/backend/pyproject.toml")
-if [ -z "$revision" ]; then
-    printf 'backend/pyproject.toml pins no commit of neorc\n' >&2
-    exit 1
-fi
 oneberth_repository=$(sed -n 's/^oneberth = .*git = "\([^"]*\)".*/\1/p' "$root/backend/pyproject.toml")
 oneberth_revision=$(sed -n 's/^oneberth = .*rev = "\([0-9a-f]*\)".*/\1/p' "$root/backend/pyproject.toml")
-if [ -z "$oneberth_repository" ] || [ -z "$oneberth_revision" ]; then
-    printf 'backend/pyproject.toml pins no commit of oneberth\n' >&2
-    exit 1
-fi
 
 rm -rf "$1"
 mkdir -p "$1"
@@ -44,10 +37,6 @@ trap 'rm -rf "$work"; exit 143' TERM
 # The whole history: the packages take their version from it.
 git clone --quiet "$repository" "$work/neorc"
 cd "$work/neorc"
-if ! git merge-base --is-ancestor "$revision" origin/main 2>/dev/null; then
-    printf 'neorc commit %s is not on the main branch of %s\n' "$revision" "$repository" >&2
-    exit 1
-fi
 git checkout --quiet --detach "$revision"
 
 for package in neorc-core neorc; do
@@ -56,11 +45,6 @@ done
 
 git clone --quiet "$oneberth_repository" "$work/oneberth"
 cd "$work/oneberth"
-if ! git merge-base --is-ancestor "$oneberth_revision" origin/main 2>/dev/null; then
-    printf 'oneberth commit %s is not on the main branch of %s\n' \
-        "$oneberth_revision" "$oneberth_repository" >&2
-    exit 1
-fi
 git checkout --quiet --detach "$oneberth_revision"
 uv build --quiet --wheel --out-dir "$out" python/oneberth >&2
 

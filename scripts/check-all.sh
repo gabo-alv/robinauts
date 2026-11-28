@@ -18,7 +18,9 @@ failed=""
 # `wheel` comes after `frontend`: it builds the bundle again, into the wheel,
 # and it reuses the node_modules the frontend's own gate has just installed
 # from the lock. `e2e` comes after both `tests` and `frontend`, as on CI.
-for check in lint tests extra-workers mcp-servers licences audit frontend e2e desktop-docker wheel \
+# `pins` comes first: it takes seconds, and a bad pin fails every check that
+# builds neorc.
+for check in pins lint tests extra-workers mcp-servers licences audit frontend e2e desktop-docker wheel \
     reuse dco; do
     printf '\n=== %s ===\n' "$check"
     if ! "$root/scripts/check-$check.sh"; then
